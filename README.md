@@ -15,6 +15,9 @@ explicit replay over retained capture, with synthetic subprocess examples.
 [The first live vertical slice](docs/live-slice.md) connects captured data to a
 reader projection and an injected browser page through the existing WS bridge.
 
+[Profile-owned injection and local routes](docs/profile-bridge.md) replace the
+first live slice’s temporary injector configuration with explicit profile policy.
+
 ## Scope
 
 - Traffic capture and explicit routing policies by host, transport and source application.
