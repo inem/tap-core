@@ -36,6 +36,8 @@ sys.path.insert(0, str(ROOT))
 from tap_core.runtime import MacOS, Profile
 
 MARKER = "tap-probe-bootstrap"
+PACK_ID = "tap.check.installed-page"
+BODY_MARK = "tap-fixture-origin-body"
 SENTINEL = "tap-pack-check-" + hashlib.sha256(b"installed-page").hexdigest()[:10]
 UI_JS = f"window.__tapPackCheck = {json.dumps(SENTINEL)};\n"
 DATA_SENTINEL = "retained-" + hashlib.sha256(b"data").hexdigest()[:10]
@@ -43,7 +45,7 @@ DATA_SENTINEL = "retained-" + hashlib.sha256(b"data").hexdigest()[:10]
 
 class Origin(BaseHTTPRequestHandler):
     HTML = ("<!doctype html><html><head><title>tap pack check</title></head>"
-            "<body><h1>fixture origin</h1></body></html>")
+            f"<body><h1>{BODY_MARK}</h1></body></html>")
 
     def do_GET(self):
         body = self.HTML.encode()
@@ -139,7 +141,8 @@ def scenario_failures(steps):
     need("pack_disable", (steps.get("pack_disable") or {}).get("enabled") is False, "pack disable did not clear enabled")
     need("pack_uninstall", "0.1.0" in ((steps.get("pack_uninstall") or {}).get("removed_versions") or []),
          "pack uninstall did not remove 0.1.0")
-    need("data_retained", steps.get("data_sentinel_retained") is True, "retained profile data sentinel was lost on uninstall")
+    need("data_retained", steps.get("data_sentinel_retained") is True,
+         "a sentinel in the pack's own state/data dirs was lost on uninstall")
     return failures
 
 
@@ -214,7 +217,10 @@ def main():
         token = (profile.root / "state/bridge-token").read_text().strip()
 
         granted_html = wait(lambda: (fetch(injected_origin + "/", profile.port, ca) or None), "granted-origin fetch")
-        steps["injection_granted_marker"] = MARKER in granted_html and "core/0.js" in granted_html
+        # Require the origin's real served body too, so a 502/empty response can
+        # never masquerade as "injected" (or, below, as "suppressed").
+        steps["injection_granted_marker"] = (BODY_MARK in granted_html and MARKER in granted_html
+                                             and "core/0.js" in granted_html)
         report["transport"]["http_body_injection"] = ("verified_live" if steps["injection_granted_marker"]
                                                        else "NOT injected")
 
@@ -226,9 +232,10 @@ def main():
         if steps["installed_resource_served"]:
             report["transport"]["reserved_route_resource_delivery"] = "verified_live"
 
-        # Granted-but-excluded origin must NOT be injected on the proxy bridge.
+        # Granted-but-excluded origin must serve its real body but NOT be injected
+        # on the proxy bridge. Requiring the body rejects a 502/empty false pass.
         excluded_html = fetch(excluded_origin + "/", profile.port, ca)
-        steps["exclusion_suppresses_injection"] = MARKER not in excluded_html
+        steps["exclusion_suppresses_injection"] = BODY_MARK in excluded_html and MARKER not in excluded_html
         if steps["exclusion_suppresses_injection"]:
             report["transport"]["exclusion_override_on_proxy_bridge"] = "verified_live"
 
@@ -240,12 +247,17 @@ def main():
 
         run(prefix + ["off"])
         steps["off"] = "ok"
-        # A retained-data sentinel to prove uninstall keeps profile data for real.
-        (profile.root / "data/pack-check-sentinel.txt").write_text(DATA_SENTINEL)
-        steps["pack_disable"] = json.loads(run(prefix + ["pack", "disable", "tap.check.installed-page"]).stdout)
-        steps["pack_uninstall"] = json.loads(run(prefix + ["pack", "uninstall", "tap.check.installed-page"]).stdout)
-        sentinel = profile.root / "data/pack-check-sentinel.txt"
-        steps["data_sentinel_retained"] = sentinel.is_file() and sentinel.read_text() == DATA_SENTINEL
+        # Sentinels in the pack's OWN state/data directories (not the general
+        # profile data dir), which uninstall claims to retain.
+        pack_dirs = {kind: profile.root / kind / "packs" / PACK_ID for kind in ("state", "data")}
+        for path in pack_dirs.values():
+            path.mkdir(parents=True, exist_ok=True)
+            (path / "sentinel.txt").write_text(DATA_SENTINEL)
+        steps["pack_disable"] = json.loads(run(prefix + ["pack", "disable", PACK_ID]).stdout)
+        steps["pack_uninstall"] = json.loads(run(prefix + ["pack", "uninstall", PACK_ID]).stdout)
+        steps["data_sentinel_retained"] = all(
+            (path / "sentinel.txt").is_file() and (path / "sentinel.txt").read_text() == DATA_SENTINEL
+            for path in pack_dirs.values())
     except Exception as error:
         report["error"] = str(error)
         log = root / "profile/logs/capture.log"
