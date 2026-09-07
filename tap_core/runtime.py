@@ -197,7 +197,8 @@ class MacOS:
         return set(owners) == {str(pid)}
 
     def write_plist(self, profile):
-        args = [profile.backend, "--listen-host", "127.0.0.1", "-p", str(profile.port),
+        from .routing import select_routing
+        args = [profile.backend, *select_routing(profile, self).backend_args(),
                 "--set", "confdir=" + str(profile.root / "certificates"),
                 "--set", "stream_large_bodies=4m", "-s", str(ADDON)]
         if profile.bridge is not None:
@@ -320,97 +321,25 @@ class MacOS:
     def set_bypass(self, service, domains):
         self.run(["/usr/bin/sudo", "-n", NS, "-setproxybypassdomains", service, *(domains or ["Empty"])])
 
-    def matches(self, actual, expected):
-        # Disabled endpoints are retained to avoid briefly enabling them while
-        # restoring a server address. This verifies routing, not every preference.
-        return actual["enabled"] == expected["enabled"] and (
-            not expected["enabled"] or (actual["server"], actual["port"]) == (expected["server"], expected["port"]))
-
-    def armed(self, profile):
-        expected = {"enabled": True, "server": "127.0.0.1", "port": profile.port}
-        return all(self.matches(self.proxy(service, secure), expected)
-                   for service in self.services() for secure in (False, True))
-
-    def bypasses_match(self, before):
-        if set(self.services()) != set(before):
-            return False
-        return all(self.bypass(service) == list(dict.fromkeys([*state["bypass"], "localhost", "127.0.0.1", "*.local"]))
-                   for service, state in before.items())
-
-    def arm(self, profile):
-        if profile.snapshot.exists():
-            before = json.loads(profile.snapshot.read_text())
-            if self.armed(profile) and self.bypasses_match(before):
-                return
-            raise TapError("Saved network state needs recovery; run off before enabling again")
-        before = self.network_state()
-        if any(state[kind]["enabled"] for state in before.values() for kind in ("http", "https")):
-            raise TapError("An existing system proxy is enabled; refusing to replace another installation")
-        atomic_json(profile.snapshot, before)  # persist before the first mutation
-        expected = {"enabled": True, "server": "127.0.0.1", "port": profile.port}
-        for service, state in before.items():
-            self.set_proxy(service, False, expected)
-            self.set_proxy(service, True, expected)
-            self.set_bypass(service, list(dict.fromkeys([*state["bypass"], "localhost", "127.0.0.1", "*.local"])))
-        if not self.armed(profile):
-            raise TapError("Could not verify both proxies on every network service")
-        if not self.bypasses_match(before):
-            raise TapError("Could not verify bypass domains on every service")
-
-    def disarm(self, profile):
-        if not profile.snapshot.exists():
-            # No ownership journal: never modify someone else's routing.
-            for service in self.services():
-                for secure in (False, True):
-                    state = self.proxy(service, secure)
-                    if state["enabled"] and state["server"] in ("127.0.0.1", "localhost") and state["port"] == profile.port:
-                        raise TapError("Profile proxy is enabled but its recovery snapshot is missing; refusing to stop")
-            return
-        before = json.loads(profile.snapshot.read_text())
-        errors = []
-        owned = {"enabled": True, "server": "127.0.0.1", "port": profile.port}
-        # Do not overwrite an unrelated proxy enabled after we took the snapshot.
-        for service in before:
-            for secure in (False, True):
-                current = self.proxy(service, secure)
-                if current["enabled"] and not self.matches(current, owned):
-                    raise TapError(f"Proxy changed outside this profile: {service}; recovery needs inspection")
-        for service, state in before.items():
-            for secure, kind in ((False, "http"), (True, "https")):
-                try:
-                    self.set_proxy(service, secure, state[kind])
-                except TapError as error:
-                    errors.append(str(error))
-            try:
-                self.set_bypass(service, state["bypass"])
-            except TapError as error:
-                errors.append(str(error))
-        for service, state in before.items():
-            if not all(self.matches(self.proxy(service, secure), state[kind]) for secure, kind in ((False, "http"), (True, "https"))):
-                errors.append(f"Proxy restoration not verified: {service}")
-            if self.bypass(service) != state["bypass"]:
-                errors.append(f"Bypass restoration not verified: {service}")
-        for service in self.services():
-            if service not in before and any(self.matches(self.proxy(service, secure), owned) for secure in (False, True)):
-                errors.append(f"New service points to this profile without a recovery snapshot: {service}")
-        if errors:
-            raise TapError("Network recovery incomplete; service kept running: " + "; ".join(errors))
-        profile.snapshot.unlink()
 
 
 class Lifecycle:
     def __init__(self, profile, os_adapter):
         self.profile, self.os = profile, os_adapter
 
+    @property
+    def routing(self):
+        # Selection follows the current profile, as it did before extraction.
+        from .routing import select_routing
+        return select_routing(self.profile, self.os)
+
     def recover(self, failure, cleanup=False):
-        if self.profile.routing == "system":
-            try:
-                self.os.disarm(self.profile)
-            except (TapError, OSError, ValueError) as error:
-                raise TapError(f"{failure}; rollback FAILED: {error}. Capture was not stopped.") from error
-            routing = "previous proxy routing restored"
-        else:
-            routing = "system proxy settings were not changed"
+        route = self.routing
+        try:
+            route.restore()
+        except (TapError, OSError, ValueError) as error:
+            raise TapError(f"{failure}; rollback FAILED: {error}. Capture was not stopped.") from error
+        routing = route.recovered_message
         if cleanup:
             try:
                 self.os.stop(self.profile)
@@ -420,6 +349,7 @@ class Lifecycle:
         raise TapError(f"{failure}; {routing}")
 
     def install(self):
+        self.routing  # Reject unsupported mode before any service/file mutation.
         self.os.backend_version(self.profile)
         if self.os.port_open(self.profile):
             raise TapError("Port is occupied; install will not replace its owner")
@@ -431,29 +361,25 @@ class Lifecycle:
         return "Installed profile service; use on to verify traffic"
 
     def on(self):
+        route = self.routing
         try:
             self.os.backend_version(self.profile)
             self.os.start(self.profile)
         except (TapError, OSError) as error:
             # A saved snapshot means routing may already be armed after a crash.
-            if self.profile.snapshot.exists() or isinstance(error, StartupError):
+            if route.recovery_pending() or isinstance(error, StartupError):
                 self.recover(f"Capture startup failed: {error}", cleanup=isinstance(error, StartupError))
             raise TapError(f"Capture startup failed: {error}; proxy settings were not changed") from error
         try:
-            if self.profile.routing == "system":
-                self.os.arm(self.profile)
-            if not self.os.flows(self.profile):
+            route.enable()
+            if not route.probe():
                 raise TapError("No successful HTTP response through the profile proxy")
         except (TapError, OSError) as error:
             self.recover(str(error))
-        if self.profile.routing == "explicit":
-            return f"ON — explicit proxy 127.0.0.1:{self.profile.port}; system settings unchanged"
-        return "ON — HTTP and HTTPS proxy settings verified on all enabled services; traffic probe passed"
+        return route.on_message()
 
     def off(self):
-        if self.profile.routing == "system":
-            self.os.disarm(self.profile)  # exception prevents stop
+        route = self.routing
+        route.restore()  # exception prevents stop
         self.os.stop(self.profile)
-        if self.profile.routing == "explicit":
-            return "OFF — profile service stopped; explicit clients must stop using its proxy endpoint"
-        return "OFF — previous proxy routing restored, profile service stopped"
+        return route.off_message

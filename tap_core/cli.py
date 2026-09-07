@@ -10,6 +10,7 @@ import sys
 import time
 
 from .runtime import Lifecycle, MacOS, Profile, TapError, profile_lock
+from .routing import select_routing
 
 
 def health(profile, adapter):
@@ -67,6 +68,7 @@ def bridge_status(profile, adapter):
 
 
 def status(profile, adapter):
+    route = select_routing(profile, adapter)
     errors = {}
     def observe(name, operation, unavailable=None):
         try:
@@ -79,8 +81,9 @@ def status(profile, adapter):
               "pid": observe("pid", lambda: adapter.service_pid(profile)),
               "port_owned": observe("port_owned", lambda: adapter.owns_port(profile)),
               "port_open": observe("port_open", lambda: adapter.port_open(profile)),
-              "network_recovery_pending": observe("network_recovery_pending", profile.snapshot.exists),
-              "system_proxy_verified": observe("system_proxy_verified", lambda: adapter.armed(profile)) if profile.routing == "system" else "not_used",
+              "network_recovery_pending": observe("network_recovery_pending", route.recovery_pending),
+              "system_proxy_verified": observe("system_proxy_verified", route.verified),
+              "routing_adapter": route.capabilities(),
               "capture": observe("capture", lambda: health(profile, adapter),
                                  {"available": None, "healthy": None, "current_process": None})}
     result['bridge'] = observe('bridge', lambda: bridge_status(profile, adapter),
@@ -100,12 +103,12 @@ def doctor(profile, adapter):
     result["traffic_probe"] = None
     if result["port_owned"] is True:
         try:
-            result["traffic_probe"] = adapter.flows(profile)
+            result["traffic_probe"] = select_routing(profile, adapter).probe()
         except TapError as error:
             result["inspection_errors"]["traffic_probe"] = str(error)
     result["healthy"] = bool("backend_error" not in result and not result["inspection_errors"] and result["port_owned"]
                          and result["capture"]["healthy"] and result["traffic_probe"] and result["bridge"]["healthy"]
-                         and (profile.routing == "explicit" or result["system_proxy_verified"]))
+                         and (result["system_proxy_verified"] == "not_used" or result["system_proxy_verified"] is True))
     return result
 
 
@@ -196,11 +199,7 @@ def main(argv=None):
             return 1 if args.command == "doctor" and not result["healthy"] else 0
         # Serialize system-routing commands across profiles as well as per-profile.
         with profile_lock(root):
-            if profile.routing == "system":
-                shared = Path.home() / "Library/Application Support/TAP Core/network-control"
-                with profile_lock(shared):
-                    output = mutate(args.command, profile, adapter)
-            else:
+            with select_routing(profile, adapter).mutation_lock():
                 output = mutate(args.command, profile, adapter)
         print(output)
         return 0
