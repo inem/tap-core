@@ -85,6 +85,9 @@ def status(profile, adapter):
                                  {"available": None, "healthy": None, "current_process": None})}
     result['bridge'] = observe('bridge', lambda: bridge_status(profile, adapter),
                                {'configured': profile.bridge is not None, 'healthy': None})
+    from .components import status as component_status
+    result['components'] = observe('components', lambda: component_status(profile, adapter),
+                                   {'configured': profile.components is not None, 'healthy': None})
     result["inspection_errors"] = errors
     return result
 
@@ -105,6 +108,7 @@ def doctor(profile, adapter):
             result["inspection_errors"]["traffic_probe"] = str(error)
     result["healthy"] = bool("backend_error" not in result and not result["inspection_errors"] and result["port_owned"]
                          and result["capture"]["healthy"] and result["traffic_probe"] and result["bridge"]["healthy"]
+                         and result['components']['healthy']
                          and (profile.routing == "explicit" or result["system_proxy_verified"]))
     return result
 
@@ -120,8 +124,13 @@ def parser():
     install.add_argument("--probe-url", default="http://example.com/")
     install.add_argument("--addon", type=Path, action="append", default=[], help="Additional trusted addon (optional)")
     install.add_argument("--bridge-config", type=Path, help="Explicit page bridge configuration JSON")
+    install.add_argument("--components-config", type=Path, help="Explicit managed Hub/reader/handler development bindings")
     for name in ("on", "off", "status", "doctor", "where", "uninstall"):
         commands.add_parser(name)
+    components = commands.add_parser('components', help='Configure explicit development component bindings')
+    component_actions = components.add_subparsers(dest='component_action', required=True)
+    configure_components = component_actions.add_parser('configure')
+    configure_components.add_argument('--config', type=Path, required=True, help='JSON binding, or null to disable')
     bridge = commands.add_parser('bridge', help='Configure or explain page injection and local routes')
     bridge_actions = bridge.add_subparsers(dest='bridge_action', required=True)
     configure = bridge_actions.add_parser('configure')
@@ -155,13 +164,29 @@ def main(argv=None):
             if args.bridge_config:
                 from .bridge import configuration, read_json
                 profile.bridge = configuration(read_json(args.bridge_config))
+            if args.components_config:
+                from .components import configuration
+                from .bridge import read_json
+                profile.components = configuration(read_json(args.components_config), profile)
         else:
             profile = Profile.load(root)
+        if args.command == 'components':
+            from .components import configuration, Job
+            from .bridge import read_json
+            with profile_lock(root):
+                if adapter.service_loaded(profile) or adapter.service_loaded(Job(profile)):
+                    raise TapError('Stop this profile with off before changing component configuration')
+                value = read_json(args.config)
+                profile.components = None if value is None else configuration(value, profile)
+                profile.save()
+            print(json.dumps({'configured': value is not None, 'applies': 'next on'}, indent=2))
+            return 0
         if args.command == 'bridge':
             from .bridge import configuration, read_json, decision
             if args.bridge_action == 'configure':
                 with profile_lock(root):
-                    if adapter.service_loaded(profile):
+                    from .components import Job
+                    if adapter.service_loaded(profile) or (profile.components is not None and adapter.service_loaded(Job(profile))):
                         raise TapError('Stop this profile with off before changing bridge configuration')
                     profile.bridge = configuration(read_json(args.config))
                     profile.save()
@@ -190,6 +215,11 @@ def main(argv=None):
                           "certificates": str(root / "certificates"), "log": str(root / "logs/capture.log"),
                           "launch_agent": str(profile.plist), "backend": profile.backend,
                           "checkout": str(Path(__file__).resolve().parent.parent)}
+                if profile.components is not None:
+                    from .components import Job
+                    result['component_launch_agent'] = str(Job(profile).plist)
+                    result['component_log'] = str(root / 'logs/components.log')
+                    result['handler_logs'] = str(root / 'logs/handlers')
             else:
                 result = doctor(profile, adapter) if args.command == "doctor" else status(profile, adapter)
             print(json.dumps(result, indent=2))

@@ -210,8 +210,8 @@ def token_file(root):
     return Path(root) / 'state/bridge-token'
 
 
-def read_token(root):
-    path = token_file(root)
+def read_token(root, name='bridge-token'):
+    path = Path(root) / 'state' / name
     if path.is_symlink() or not stat.S_ISREG(path.stat().st_mode) or path.stat().st_mode & 0o777 != 0o600:
         raise ValueError('Bridge token must be a private regular file (0600)')
     token = path.read_text().strip()
@@ -223,10 +223,14 @@ def read_token(root):
 class Bridge:
     def __init__(self, config=None, token=None, scripts=None):
         self.config, self.token, self.scripts = config, token, scripts
+        self.component_token = None
 
     def load(self, loader):
         root = Path(os.environ['TAP_CORE_PROFILE'])
-        self.config = configuration(read_json(root / 'profile.json')['bridge'])
+        profile = read_json(root / 'profile.json')
+        self.config = configuration(profile['bridge'])
+        if profile.get('components') is not None:
+            self.component_token = read_token(root, 'component-token')
         self.token = read_token(root)
         self.scripts = read_scripts(self.config) if self.config['enabled'] else []
         state = {'pid': os.getpid(), 'configuration': fingerprint(self.config), 'enabled': self.config['enabled']}
@@ -267,7 +271,7 @@ class Bridge:
             return
         # Only the reserved route interprets these as local Hub authority.
         # Ordinary site traffic retains its own headers unchanged.
-        for name in ('x-tap-probe-token', 'x-tap-probe-origin'):
+        for name in ('x-tap-probe-token', 'x-tap-probe-origin', 'x-tap-component-token'):
             request.headers.pop(name, None)
         flow.metadata['tap_core_bridge_handled'] = True
         pairs = parse_qsl(path.query, keep_blank_values=True)
@@ -296,6 +300,8 @@ class Bridge:
         request.headers['host'] = f"127.0.0.1:{self.config['hub_port']}"
         request.headers['x-tap-probe-token'] = self.token
         request.headers['x-tap-probe-origin'] = origin
+        if self.component_token:
+            request.headers['x-tap-component-token'] = self.component_token
 
     request = requestheaders
 

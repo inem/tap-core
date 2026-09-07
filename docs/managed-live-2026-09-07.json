@@ -1,0 +1,49 @@
+{
+  "scope": "managed development profile, synthetic loopback HTTP/WS; not clean-Mac or installed pack",
+  "python": "3.9.6",
+  "macOS": "15.6.1",
+  "bun": "1.3.11",
+  "node": "v24.19.0",
+  "backend": "Mitmproxy: 12.2.3 binary",
+  "playwright": "1.62.1",
+  "automatic_backlog": true,
+  "repeat_on_no_duplicate": true,
+  "direct_listener_forgery_denied": true,
+  "browser": {
+    "displayed": {
+      "record_id": "e6393bab-8b3b-4b8a-81a9-71466c3459be",
+      "value": "262b60263dd6301c72831437"
+    },
+    "browser": "152.0.7977.76",
+    "two_sessions": true,
+    "handler_origin_grant": true,
+    "other_tab_unchanged": true,
+    "excluded": true,
+    "foreign_token_requests": 0
+  },
+  "restart_resume": true,
+  "browser_after_restart": {
+    "displayed": {
+      "record_id": "c8aa20c9-8fe1-4eed-be32-3e838bf664b1",
+      "value": "b342ee1867b000614a2407ae"
+    },
+    "browser": "152.0.7977.76",
+    "two_sessions": true,
+    "handler_origin_grant": true,
+    "other_tab_unchanged": true,
+    "excluded": true,
+    "foreign_token_requests": 0
+  },
+  "controller_crash_recovered": true,
+  "hub_failure_observed": true,
+  "manual_recovery": true,
+  "hub_hang_observed_and_recovered": true,
+  "controller_restart_budget_exhausted": true,
+  "occupied_hub_preserved_and_proxy_cleaned": true,
+  "bad_dependency_cleaned": true,
+  "reader_worker_failure_bounded_no_checkpoint_advance": true,
+  "no_private_checkout": true,
+  "no_harness_reader_or_handler_controller": true,
+  "cleanup": true,
+  "system_settings_unchanged": true
+}

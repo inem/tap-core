@@ -123,9 +123,18 @@ class BridgeTests(unittest.TestCase):
         self.bridge.request(f)
         self.assertEqual(f.request.headers['x-tap-probe-token'], TOKEN)
 
+    def test_managed_route_replaces_forged_component_authority(self):
+        self.bridge.component_token = 'b' * 48
+        f = flow('/__tap/probe/ws?token=' + TOKEN, headers={
+            'upgrade': 'websocket', 'origin': 'https://example.test',
+            'x-tap-component-token': 'forged'})
+        self.bridge.requestheaders(f)
+        self.bridge.request(f)
+        self.assertEqual(f.request.headers['x-tap-component-token'], 'b' * 48)
+
     def test_ordinary_site_headers_survive_but_denied_reserved_authority_is_removed(self):
         headers = {'x-tap-probe-token': 'site-value', 'x-tap-probe-origin': 'site-origin',
-                   'authorization': 'site-auth', 'cookie': 'site-cookie'}
+                   'x-tap-component-token': 'site-component', 'authorization': 'site-auth', 'cookie': 'site-cookie'}
         for host in ('example.test', 'second.test', 'other.test'):
             with self.subTest(host=host):
                 ordinary = flow('/ordinary', host, dict(headers))
