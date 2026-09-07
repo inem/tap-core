@@ -1,55 +1,14 @@
 #!/bin/bash
-# Remove the TAP Core profile service and optional install root from instll/install.
-# Bare-Mac uninstall: no Homebrew/Xcode assumptions.
-#
-# Usage:
-#   curl -fsSL instll.sh/inem/tap-core/uninstall | sh
-#   TAP_PURGE=1 curl -fsSL instll.sh/inem/tap-core/uninstall | sh
-
+# A missing interpreter or ownership record is a recovery error, never permission
+# to remove a possibly running installation. Data is retained by default.
 set -euo pipefail
-
 ROOT="${TAP_ROOT:-$HOME/.tap-core}"
-BIN_DIR="${TAP_BIN_DIR:-$HOME/.local/bin}"
-WRAPPER="$BIN_DIR/tap"
-PROFILE="$ROOT/profile"
-CHECKOUT="$ROOT/checkout"
-MARK="$ROOT/install.json"
 PURGE="${TAP_PURGE:-0}"
-
-info() { echo "tap-core: $*"; }
-
-python_bin() {
-  if [ -f "$MARK" ]; then
-    # Prefer the interpreter recorded at install time.
-    local recorded
-    recorded="$(sed -n 's/.*"python": "\(.*\)".*/\1/p' "$MARK" | head -1)"
-    if [ -n "$recorded" ] && [ -x "$recorded" ]; then
-      echo "$recorded"
-      return
-    fi
-  fi
-  if [ -x "$ROOT/python/bin/python3" ]; then
-    echo "$ROOT/python/bin/python3"
-    return
-  fi
-  command -v python3 2>/dev/null || true
-}
-
-PY="$(python_bin)"
-if [ -n "$PY" ] && [ -f "$CHECKOUT/tap" ] && [ -d "$PROFILE" ]; then
-  "$PY" "$CHECKOUT/tap" --profile "$PROFILE" off >/dev/null 2>&1 || true
-  "$PY" "$CHECKOUT/tap" --profile "$PROFILE" uninstall >/dev/null 2>&1 || true
-  info "profile service removed"
-fi
-
-if [ -L "$WRAPPER" ] || [ -f "$WRAPPER" ]; then
-  rm -f "$WRAPPER"
-  info "removed $WRAPPER"
-fi
-
-if [ "$PURGE" = 1 ]; then
-  rm -rf "$ROOT"
-  info "purged $ROOT"
-else
-  info "kept $ROOT (set TAP_PURGE=1 to delete data/checkout/backend/python)"
-fi
+fail() { echo "tap-core: $*; retained installation" >&2; exit 1; }
+case "$ROOT" in /*) ;; *) fail "TAP_ROOT must be absolute" ;; esac
+[ -d "$ROOT" ] && [ ! -L "$ROOT" ] || fail "Missing or symlinked install root"
+[ -f "$ROOT/interpreter" ] && [ ! -L "$ROOT/interpreter" ] || fail "Missing interpreter ownership pointer; use this installation's verified Python to recover it"
+IFS= read -r PY < "$ROOT/interpreter" || fail "Cannot read interpreter pointer"
+[ -x "$PY" ] || fail "Recorded interpreter is unavailable"
+[ -f "$ROOT/checkout/instll/ownership.py" ] || fail "Installed uninstaller is missing"
+exec "$PY" "$ROOT/checkout/instll/ownership.py" remove "$ROOT" "$PURGE"

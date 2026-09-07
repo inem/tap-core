@@ -49,6 +49,7 @@ class Profile:
     addons: list
     version: int = 1
     bridge: dict = None
+    components: dict = None
 
     def __post_init__(self):
         self.root = self.root.expanduser().resolve()
@@ -69,6 +70,9 @@ class Profile:
             configuration(self.bridge)
             if self.bridge['hub_port'] == self.port:
                 raise TapError('Bridge Hub and proxy must use different ports')
+        if self.components is not None:
+            from .components import configuration
+            configuration(self.components, self)
 
     @property
     def label(self):
@@ -88,8 +92,11 @@ class Profile:
             configuration(self.bridge)
             if self.bridge['hub_port'] == self.port:
                 raise TapError('Bridge Hub and proxy must use different ports')
-            if self.bridge['enabled']:
-                read_scripts(self.bridge)
+        from .pack_store import PackStore
+        effective_bridge = PackStore(self.root).effective_bridge(self.bridge)
+        if effective_bridge is not None and effective_bridge['enabled']:
+            from .bridge import read_scripts
+            read_scripts(effective_bridge)
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.root.chmod(0o700)
         for directory in ("data", "state", "certificates", "logs"):
@@ -108,6 +115,9 @@ class Profile:
             else:
                 with os.fdopen(descriptor, 'w') as handle:
                     handle.write(secrets.token_hex(24) + '\n')
+        if self.components is not None:
+            from .components import prepare
+            prepare(self)
         data = asdict(self)
         del data["root"]
         atomic_json(self.root / "profile.json", data)
@@ -342,6 +352,8 @@ class Lifecycle:
         routing = route.recovered_message
         if cleanup:
             try:
+                from .components import stop
+                stop(self.profile, self.os)
                 self.os.stop(self.profile)
             except (TapError, OSError) as error:
                 raise TapError(f"{failure}; {routing}; startup cleanup FAILED: {error}") from error
@@ -356,6 +368,8 @@ class Lifecycle:
         self.profile.save()
         try:
             self.os.start(self.profile)
+            from .components import start
+            start(self.profile, self.os)
         except (TapError, OSError) as error:
             self.recover(f"Installation failed: {error}", cleanup=isinstance(error, StartupError))
         return "Installed profile service; use on to verify traffic"
@@ -365,6 +379,8 @@ class Lifecycle:
         try:
             self.os.backend_version(self.profile)
             self.os.start(self.profile)
+            from .components import start
+            start(self.profile, self.os)
         except (TapError, OSError) as error:
             # A saved snapshot means routing may already be armed after a crash.
             if route.recovery_pending() or isinstance(error, StartupError):
@@ -381,5 +397,7 @@ class Lifecycle:
     def off(self):
         route = self.routing
         route.restore()  # exception prevents stop
+        from .components import stop
+        stop(self.profile, self.os)
         self.os.stop(self.profile)
         return route.off_message

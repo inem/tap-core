@@ -94,6 +94,36 @@ class BridgeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.profile.save()
 
+    def test_token_failures_identify_the_file_without_exposing_contents(self):
+        self.profile.save()
+        for name in ('bridge-token', 'component-token'):
+            path = self.root / 'state' / name
+            path.unlink(missing_ok=True)
+            with self.subTest(name=name, failure='missing'), self.assertRaisesRegex(ValueError, 'Missing ' + name):
+                read_token(self.root, name)
+            for failure, content, mode in [('permissions', b'a' * 48, 0o644),
+                                           ('format', b'not-a-valid-secret', 0o600),
+                                           ('encoding', b'\xff' * 48, 0o600)]:
+                path.write_bytes(content)
+                path.chmod(mode)
+                with self.subTest(name=name, failure=failure), self.assertRaisesRegex(ValueError, name) as raised:
+                    read_token(self.root, name)
+                self.assertNotIn(content.decode('ascii', errors='replace'), str(raised.exception))
+            path.unlink()
+            path.symlink_to(self.root / 'missing-target')
+            with self.subTest(name=name, failure='symlink'), self.assertRaisesRegex(ValueError, name + ' must be a private regular file'):
+                read_token(self.root, name)
+            path.unlink()
+            path.mkdir(mode=0o700)
+            with self.subTest(name=name, failure='directory'), self.assertRaisesRegex(ValueError, name + ' must be a private regular file'):
+                read_token(self.root, name)
+            path.rmdir()
+            path.write_text('a' * 48)
+            path.chmod(0o600)
+            with self.subTest(name=name, failure='unreadable'), patch.object(Path, 'read_text', side_effect=PermissionError(13, 'Permission denied')):
+                with self.assertRaisesRegex(ValueError, 'Cannot read ' + name):
+                    read_token(self.root, name)
+
     def test_hub_cannot_route_back_into_profile_proxy(self):
         self.profile.bridge = config(hub_port=self.profile.port)
         with self.assertRaises(TapError):
@@ -123,9 +153,18 @@ class BridgeTests(unittest.TestCase):
         self.bridge.request(f)
         self.assertEqual(f.request.headers['x-tap-probe-token'], TOKEN)
 
+    def test_managed_route_replaces_forged_component_authority(self):
+        self.bridge.component_token = 'b' * 48
+        f = flow('/__tap/probe/ws?token=' + TOKEN, headers={
+            'upgrade': 'websocket', 'origin': 'https://example.test',
+            'x-tap-component-token': 'forged'})
+        self.bridge.requestheaders(f)
+        self.bridge.request(f)
+        self.assertEqual(f.request.headers['x-tap-component-token'], 'b' * 48)
+
     def test_ordinary_site_headers_survive_but_denied_reserved_authority_is_removed(self):
         headers = {'x-tap-probe-token': 'site-value', 'x-tap-probe-origin': 'site-origin',
-                   'authorization': 'site-auth', 'cookie': 'site-cookie'}
+                   'x-tap-component-token': 'site-component', 'authorization': 'site-auth', 'cookie': 'site-cookie'}
         for host in ('example.test', 'second.test', 'other.test'):
             with self.subTest(host=host):
                 ordinary = flow('/ordinary', host, dict(headers))
@@ -165,6 +204,24 @@ class BridgeTests(unittest.TestCase):
         self.bridge.requestheaders(f)
         self.assertEqual(f.response.content, b'window.fixture = true;')
         self.assertEqual(f.request.host, 'example.test')
+
+    def test_effective_script_plan_is_scoped_per_origin(self):
+        effective = config(allow_origins=['https://example.test', 'https://third.test'],
+                           exclude_origins=[], page_scripts=['/installed/one.js',
+                                                            '/installed/two.js'])
+        effective['page_script_origins'] = [['https://example.test'], ['https://third.test']]
+        bridge = TestBridge(effective, TOKEN, [b'one', b'two'])
+        first = flow(host='example.test', response=Response())
+        bridge.response(first)
+        self.assertIn('core/0.js', first.response.body)
+        self.assertNotIn('core/1.js', first.response.body)
+        second = flow(host='third.test', response=Response())
+        bridge.response(second)
+        self.assertNotIn('core/0.js', second.response.body)
+        self.assertIn('core/1.js', second.response.body)
+        denied_asset = flow('/__tap/probe/core/1.js?token=' + TOKEN, host='example.test')
+        bridge.requestheaders(denied_asset)
+        self.assertEqual(denied_asset.response.status_code, 404)
 
     def test_nonce_bootstrap_order_idempotence_and_cache(self):
         f = flow(response=Response('<body><script nonce="YWJjZA==">0</script></body>'))

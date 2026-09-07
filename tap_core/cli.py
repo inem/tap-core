@@ -43,9 +43,11 @@ def health(profile, adapter):
 
 
 def bridge_status(profile, adapter):
-    if profile.bridge is None:
-        return {"configured": False, "healthy": True}
     from .bridge import fingerprint
+    from .pack_store import PackStore
+    effective = PackStore(profile.root).effective_bridge(profile.bridge)
+    if effective is None:
+        return {"configured": False, "healthy": True}
     try:
         state = json.loads((profile.root / 'state/bridge.json').read_text())
         if state is None:
@@ -60,10 +62,10 @@ def bridge_status(profile, adapter):
             or not re.fullmatch('[0-9a-f]{64}', state['configuration'])):
         raise TapError('Invalid bridge startup record')
     healthy = (state is not None and state['pid'] == adapter.service_pid(profile)
-               and state['configuration'] == fingerprint(profile.bridge)
-               and state['enabled'] is profile.bridge['enabled'])
-    return {"configured": True, "healthy": healthy, "enabled": profile.bridge['enabled'],
-            "hub_port": profile.bridge['hub_port'], "applies": "startup snapshot",
+               and state['configuration'] == fingerprint(effective)
+               and state['enabled'] is effective['enabled'])
+    return {"configured": True, "healthy": healthy, "enabled": effective['enabled'],
+            "hub_port": effective['hub_port'], "applies": "startup snapshot",
             "hub_liveness": "not_checked"}
 
 
@@ -88,6 +90,9 @@ def status(profile, adapter):
                                  {"available": None, "healthy": None, "current_process": None})}
     result['bridge'] = observe('bridge', lambda: bridge_status(profile, adapter),
                                {'configured': profile.bridge is not None, 'healthy': None})
+    from .components import status as component_status
+    result['components'] = observe('components', lambda: component_status(profile, adapter),
+                                   {'configured': profile.components is not None, 'healthy': None})
     result["inspection_errors"] = errors
     return result
 
@@ -108,6 +113,7 @@ def doctor(profile, adapter):
             result["inspection_errors"]["traffic_probe"] = str(error)
     result["healthy"] = bool("backend_error" not in result and not result["inspection_errors"] and result["port_owned"]
                          and result["capture"]["healthy"] and result["traffic_probe"] and result["bridge"]["healthy"]
+                         and result['components']['healthy']
                          and (result["system_proxy_verified"] == "not_used" or result["system_proxy_verified"] is True))
     return result
 
@@ -123,11 +129,13 @@ def parser():
     install.add_argument("--probe-url", default="http://example.com/")
     install.add_argument("--addon", type=Path, action="append", default=[], help="Additional trusted addon (optional)")
     install.add_argument("--bridge-config", type=Path, help="Explicit page bridge configuration JSON")
+    install.add_argument("--components-config", type=Path, help="Explicit managed Hub/reader/handler development bindings")
     for name in ("on", "off", "status", "doctor", "where", "uninstall"):
         commands.add_parser(name)
-    routing = commands.add_parser("routing", help="Show or change profile routing mode")
-    routing.add_argument("mode", nargs="?", choices=["explicit", "system"],
-                         help="Set mode; omit to show the current value")
+    components = commands.add_parser('components', help='Configure explicit development component bindings')
+    component_actions = components.add_subparsers(dest='component_action', required=True)
+    configure_components = component_actions.add_parser('configure')
+    configure_components.add_argument('--config', type=Path, required=True, help='JSON binding, or null to disable')
     bridge = commands.add_parser('bridge', help='Configure or explain page injection and local routes')
     bridge_actions = bridge.add_subparsers(dest='bridge_action', required=True)
     configure = bridge_actions.add_parser('configure')
@@ -144,6 +152,25 @@ def parser():
         if action == "run":
             command.add_argument("--max-records", type=int, default=100)
             command.add_argument("--timeout", type=float, default=30)
+    pack = commands.add_parser("pack", help="Install and activate external pack artifacts")
+    pack_actions = pack.add_subparsers(dest="pack_action", required=True)
+    pack_actions.add_parser("list")
+    pack_install = pack_actions.add_parser("install")
+    pack_install.add_argument("artifact", type=Path)
+    pack_update = pack_actions.add_parser("update")
+    pack_update.add_argument("artifact", type=Path)
+    pack_enable = pack_actions.add_parser("enable")
+    pack_enable.add_argument("id")
+    pack_enable.add_argument("--version", required=True)
+    pack_enable.add_argument("--grant-origin", action="append", default=[])
+    pack_enable.add_argument("--grant-capability", action="append", default=[])
+    pack_enable.add_argument("--dependency", action="append", default=[])
+    pack_enable.add_argument("--config", type=Path)
+    for action in ("rollback", "disable", "uninstall"):
+        command = pack_actions.add_parser(action)
+        command.add_argument("id")
+        if action == "uninstall":
+            command.add_argument("--version")
     return result
 
 
@@ -161,24 +188,60 @@ def main(argv=None):
             if args.bridge_config:
                 from .bridge import configuration, read_json
                 profile.bridge = configuration(read_json(args.bridge_config))
+            if args.components_config:
+                from .components import configuration
+                from .bridge import read_json
+                profile.components = configuration(read_json(args.components_config), profile)
         else:
             profile = Profile.load(root)
-        if args.command == "routing":
-            if args.mode is None:
-                print(json.dumps({"routing": profile.routing}, indent=2))
-                return 0
+        if args.command == 'pack':
+            from .components import Job
+            from .pack_store import PackStore, _parse_dependency
+            store = PackStore(root)
+            if args.pack_action == 'list':
+                output = store.status()
+            else:
+                with profile_lock(root):
+                    if adapter.service_loaded(profile) or (profile.components is not None
+                                                           and adapter.service_loaded(Job(profile))):
+                        raise TapError('Stop this profile with off before changing packs')
+                    if args.pack_action == 'install':
+                        output = store.install(args.artifact)
+                    elif args.pack_action == 'update':
+                        output = store.update(args.artifact)
+                    elif args.pack_action == 'enable':
+                        from .bridge import read_json
+                        config = read_json(args.config) if args.config else None
+                        output = store.enable(args.id, args.version,
+                                              origins=args.grant_origin,
+                                              capabilities=args.grant_capability,
+                                              dependencies=_parse_dependency(args.dependency),
+                                              config=config)
+                    elif args.pack_action == 'rollback':
+                        output = store.rollback(args.id)
+                    elif args.pack_action == 'disable':
+                        output = store.disable(args.id)
+                    else:
+                        output = store.uninstall(args.id, args.version)
+            print(json.dumps(output, indent=2))
+            return 0
+        if args.command == 'components':
+            from .components import configuration, Job
+            from .bridge import read_json
             with profile_lock(root):
-                if adapter.service_loaded(profile):
-                    raise TapError("Stop this profile with off before changing routing")
-                profile.routing = args.mode
+                if adapter.service_loaded(profile) or adapter.service_loaded(Job(profile)):
+                    raise TapError('Stop this profile with off before changing component configuration')
+                value = read_json(args.config)
+                profile.components = None if value is None else configuration(value, profile)
                 profile.save()
-            print(json.dumps({"routing": profile.routing, "applies": "next on"}, indent=2))
+            print(json.dumps({'configured': value is not None, 'applies': 'next on'}, indent=2))
             return 0
         if args.command == 'bridge':
             from .bridge import configuration, read_json, decision
             if args.bridge_action == 'configure':
                 with profile_lock(root):
-                    if adapter.service_loaded(profile):
+                    from .components import Job
+                    if adapter.service_loaded(profile) or (profile.components is not None and adapter.service_loaded(Job(profile))):
                         raise TapError('Stop this profile with off before changing bridge configuration')
                     profile.bridge = configuration(read_json(args.config))
                     profile.save()
@@ -186,7 +249,9 @@ def main(argv=None):
             else:
                 if profile.bridge is None:
                     raise TapError('No bridge configured in this profile')
-                output = decision(configuration(profile.bridge), args.origin)
+                from .pack_store import PackStore
+                effective = PackStore(root).effective_bridge(configuration(profile.bridge))
+                output = decision(effective, args.origin)
             print(json.dumps(output, indent=2))
             return 0
         if args.command == "reader":
@@ -205,8 +270,16 @@ def main(argv=None):
                 result = {"profile": str(root), "config": str(root / "profile.json"),
                           "data": str(root / "data"), "state": str(root / "state"),
                           "certificates": str(root / "certificates"), "log": str(root / "logs/capture.log"),
+                          "packs": str(root / "packs"),
+                          "resources": str(root / "resources"),
+                          "pack_registry": str(root / "state/pack-registry.json"),
                           "launch_agent": str(profile.plist), "backend": profile.backend,
                           "checkout": str(Path(__file__).resolve().parent.parent)}
+                if profile.components is not None:
+                    from .components import Job
+                    result['component_launch_agent'] = str(Job(profile).plist)
+                    result['component_log'] = str(root / 'logs/components.log')
+                    result['handler_logs'] = str(root / 'logs/handlers')
             else:
                 result = doctor(profile, adapter) if args.command == "doctor" else status(profile, adapter)
             print(json.dumps(result, indent=2))
