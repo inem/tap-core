@@ -26,6 +26,12 @@ We will port and verify existing mechanisms incrementally. A general workflow en
 
 Issues contain the scope, acceptance criteria and dependencies for each slice. Follow the release tracking issue and milestones. A slice is complete when its user-visible behavior is demonstrated, not only when its files have been moved.
 
+The [initial extraction proposal](docs/extraction-start.md) records observed
+couplings, proposed distribution boundaries and a reproducible characterization
+harness for the trusted legacy source. The [release tracker](https://github.com/inem/tap-core/issues/1)
+links the implementation work. The legacy directory structure is not the target
+architecture by default.
+
 Read [TECHNOLOGY.md](TECHNOLOGY.md) for release requirements, working stack choices
 and unresolved packaging decisions before starting an implementation task.
 
