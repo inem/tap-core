@@ -129,7 +129,7 @@ Unit tests cover credentials/origins, unsupported authorities, policy precedence
 valid nonce syntax, foreign base URLs and unavailable diagnostic observations,
 streaming, nonce/order, duplicate injection, private token persistence, bounded
 script loading, compatibility and startup diagnostics. The combined stack passes
-178 unit tests, synthetic reader CLI replay and pack fixtures. Live evidence uses
+179 unit tests, synthetic reader CLI replay and pack fixtures. Live evidence uses
 loopback HTTP with synthetic data on macOS 15.6.1 arm64. HTTPS trust, the broader
 CSP/browser matrix, third-party WS capture, app routing, package lifecycle and clean-Mac installation
 remain unverified by this change. No production capture, Hub journal, browser
