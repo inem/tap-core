@@ -37,7 +37,7 @@ def save(path, value):
     with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=path.parent, delete=False) as handle:
         temporary = Path(handle.name)
         try:
-            json.dump(value, handle, ensure_ascii=False)
+            json.dump(value, handle, ensure_ascii=False, allow_nan=False)
             handle.write('\n')
             handle.flush()
             os.replace(temporary, path)
@@ -47,6 +47,10 @@ def save(path, value):
 
 def definition(path):
     value = json.loads(Path(path).read_text(encoding='utf-8'))
+    return validate_definition(value)
+
+
+def validate_definition(value):
     if (not isinstance(value, dict) or set(value) != {'version', 'revision', 'command', 'config'}
             or type(value['version']) is not int or value['version'] != 1
             or not isinstance(value['revision'], str) or not value['revision']
@@ -55,11 +59,17 @@ def definition(path):
             or not all(isinstance(arg, str) and arg and '\0' not in arg for arg in value['command'])
             or not Path(value['command'][0]).is_absolute()):
         raise ReaderError('Invalid reader definition; expected version, revision, absolute command argv and config')
+    try:
+        # Reject NaN/Infinity recursively, including exponent overflow decoded
+        # as infinity, before fingerprinting or passing config to another runtime.
+        json.dumps(value, allow_nan=False)
+    except (TypeError, ValueError, RecursionError) as error:
+        raise ReaderError('Reader definition must contain finite JSON values') from error
     return value
 
 
 def fingerprint(value):
-    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()).hexdigest()
 
 
 class Reader:
@@ -118,6 +128,7 @@ class Reader:
                 'output': str(self.output), 'logs': str(self.logs), 'progress': state}
 
     def replay(self, spec):
+        validate_definition(spec)
         self.prepare()
         with profile_lock(self.state):
             previous = self.load()
@@ -126,6 +137,7 @@ class Reader:
         return self.status()
 
     def run(self, spec, max_records=100, timeout=30):
+        validate_definition(spec)
         if type(max_records) is not int or max_records < 1 or not 0 < timeout <= 300:
             raise ReaderError('Run requires positive max_records and timeout <= 300 seconds')
         self.prepare()
@@ -141,8 +153,9 @@ class Reader:
                 with closing(Journal(self.profile.root / 'data').scan(after=state['cursor'])) as entries:
                     for entry in entries:
                         delivery_id = hashlib.sha256(entry.cursor.encode()).hexdigest()
-                        self.store(state, phase='running', inflight=delivery_id, error=None)
-                        self.execute(spec, entry.record, delivery_id, timeout, lock)
+                        invocation_id = fingerprint([self.name, state['generation'], delivery_id])
+                        self.store(state, phase='running', inflight=invocation_id, error=None)
+                        self.execute(spec, entry.record, delivery_id, invocation_id, state['generation'], timeout, lock)
                         self.store(state, cursor=entry.cursor, processed=state['processed'] + 1,
                                    inflight=None, phase='ready', error=None)
                         completed += 1
@@ -157,11 +170,13 @@ class Reader:
                 raise
         return {'reader': self.name, 'completed_this_run': completed, 'progress': state}
 
-    def execute(self, spec, record, delivery_id, timeout, lock):
-        context = {'reader_id': self.name, 'config': spec['config'], 'state_dir': str(self.work),
+    def execute(self, spec, record, delivery_id, invocation_id, generation, timeout, lock):
+        context = {'reader_id': self.name, 'reader_generation': generation,
+                   'config': spec['config'], 'state_dir': str(self.work),
                    'output_dir': str(self.output), 'log_dir': str(self.logs)}
-        environment = {**os.environ, 'TAP_PACK_CONTEXT': json.dumps(context),
-                       'TAP_READER_DELIVERY_ID': delivery_id, 'TAP_READER_LOCK_FD': str(lock.fileno())}
+        environment = {**os.environ, 'TAP_PACK_CONTEXT': json.dumps(context, allow_nan=False),
+                       'TAP_READER_DELIVERY_ID': delivery_id, 'TAP_READER_INVOCATION_ID': invocation_id,
+                       'TAP_READER_LOCK_FD': str(lock.fileno())}
         output = {'stdout': bytearray(), 'stderr': bytearray()}
         process = None
         try:

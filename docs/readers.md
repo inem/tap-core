@@ -18,6 +18,8 @@ python3 tools/check_readers.py
 That command creates a temporary synthetic profile, writes A → B → A through the
 real Writer, invokes two real reader CLI processes with different batch sizes,
 resumes and replays one, and verifies that the other checkpoint stays unchanged.
+Replay changes its projection behavior, and retrying a processed prefix verifies
+that a receipt prevents the latest result from rolling backward.
 The profile and all fixture results are removed on completion.
 
 For your own existing profile, create an explicit definition file:
@@ -37,6 +39,9 @@ of the reader behavior. Bump it when changing code or dependencies: the runner
 cannot detect arbitrary edits to imported files. Version, revision, argv and
 config together bind an existing checkpoint. A changed definition requires a
 new reader name or explicit replay; it never silently inherits old progress.
+Config must contain JSON values with finite numbers at every nesting level.
+`NaN`, `Infinity`, `-Infinity` and exponents that overflow to infinity are rejected
+before progress is created or changed, including through Python `run`/`replay`.
 
 ```sh
 ./tap --profile "$PWD/.tap-dev" reader run slow --definition reader.json --max-records 1
@@ -64,23 +69,59 @@ Stdout itself is not an acknowledgement. This preserves the existing
 process boundary. It has startup cost; long-lived workers and throughput tuning
 remain follow-ups, not implied guarantees.
 
-The child receives `TAP_PACK_CONTEXT` with `reader_id`, `config`, `state_dir`,
-`output_dir`, and `log_dir`, allowing the existing fixture reader to run. These
+The child receives `TAP_PACK_CONTEXT` with `reader_id`, `reader_generation`,
+`config`, `state_dir`, `output_dir`, and `log_dir`, allowing the existing fixture
+reader to run. These
 are invocation context fields, not a claim of installed pack API support, grants
 or sandboxing. The host owns `state/readers/<name>/checkpoint.json`; child state
 is separate under `state/readers/<name>/work`, output under `data/readers/<name>`
 and logs under `logs/readers/<name>`. Owned directories are mode 0700; checkpoints
 and captured logs are replaced through private temporary files.
 
-`TAP_READER_DELIVERY_ID` is a stable hash of the journal cursor. It remains stable
-across retry and explicit replay in the same profile. It is a delivery identity,
-not a hash of the body: A → B → A contains three different deliveries. The
-SQLite fixture commits a receipt and its projection in the same transaction.
-It therefore demonstrates idempotent retry; the original append-only pack
-fixture also runs, but may append duplicates after uncertain completion.
+`TAP_READER_DELIVERY_ID` identifies a captured journal entry and remains stable
+across retry and explicit replay in the same profile. It is not a body hash:
+A → B → A contains three different delivery IDs. `reader_generation` is a
+positive integer that increments on explicit replay. The opaque
+`TAP_READER_INVOCATION_ID` combines reader name, generation and delivery ID: it is
+stable across retries in a generation and changes on replay, even when the
+definition is unchanged. IDs are local to a profile; do not treat them as global
+external-action keys without your own namespace and reconciliation policy.
 
-The runner persists an in-flight ID before invoking the child and advances the
-cursor only after successful completion and checkpoint replacement. Failure to
+Use invocation IDs for projection receipts that must permit recomputation on
+replay. The SQLite fixture commits a generation-scoped receipt and projection
+update in one transaction. A new generation updates the existing row for each
+retained delivery using the current reader behavior. Repeated invocations in
+that generation skip both the projection and latest-result update, so retrying
+an older processed prefix cannot roll latest backward. During a partial replay,
+output can contain both old and recomputed rows; rows no longer retained are not
+removed. Atomic publication of a complete rebuilt projection remains reader
+policy. The original append-only pack fixture also runs but may append duplicate
+results after uncertain completion.
+
+Readers deduplicating external effects across replays may instead keep using the
+delivery ID (with their own action scope). An explicit projection replay is not
+authorization to repeat an external action. Choose the receipt identity to match
+the operation; exactly-once external effects are not supplied by these IDs.
+
+### Compatibility with the first reader fixture
+
+Existing version-1 checkpoints and cursor-based delivery IDs remain compatible;
+generation context and invocation IDs are additive. The persisted `inflight`
+field now records the invocation ID. A checkpoint saved by the earlier runner
+may still contain a delivery ID there until its next invocation; the host resumes
+from its acknowledged cursor and generation in either case.
+
+Existing readers must adopt generation-scoped receipts to recompute on replay.
+The old SQLite fixture used delivery rows as unscoped receipts and cannot safely
+infer their generation. The updated fixture fails clearly when it finds that
+schema. Use a new reader name to build a fresh projection, or deliberately move
+aside its derived `projection.sqlite3` and explicitly replay before running.
+Keep any old database/WAL companions together when archiving the stopped reader.
+The runner never deletes or migrates reader-owned state automatically. For a
+non-fixture reader, follow that reader's migration and external-effect policy.
+
+The runner persists an in-flight invocation ID before invoking the child and
+advances the cursor only after successful completion and checkpoint replacement. Failure to
 save that replacement preserves the old cursor even in the error handler.
 Processing stops at the failed record; a later explicit `run` retries it. A
 crash after output but before checkpoint can repeat input. Readers with external
@@ -138,11 +179,13 @@ python3 tools/check_pack_fixtures.py --bun /absolute/path/to/bun
 
 The fixtures cover separate progress, restart, new-reader history, child failure
 before/after effects, checkpoint failure, timeout, output overflow, controller
-crash, locks, rotation/gaps, replay, malformed input, torn tails and A → B → A.
+crash, locks, rotation/gaps, changed-behavior replay, receipt migration failure,
+partial-replay retries, finite config validation, malformed input, torn tails
+and A → B → A.
 They use real subprocesses and temporary data. No live network, certificates,
 launchd or production TAP state is involved. CI remains deferred (#24).
 
-Local verification on 2026-09-07 passed all 141 tests (18 reader tests), both
+Local verification on 2026-09-07 passed all 147 tests (24 reader tests), both
 pack fixtures and the [synthetic CLI check](readers-fixture-2026-09-07.json).
 
 Installed packs, automatic background scheduling, protocol version negotiation,

@@ -86,9 +86,22 @@ class ReaderTests(unittest.TestCase):
             self.reader.run(spec)
         self.assertEqual(self.outputs(self.reader), ['A'])
         self.assertIsNone(self.reader.load()['cursor'])
+        invocation = self.reader.load()['inflight']
         self.reader.run(spec)
         self.assertEqual(self.outputs(self.reader), ['A'])
         self.assertEqual(self.reader.load()['processed'], 1)
+        with sqlite3.connect(self.reader.output / 'projection.sqlite3') as db:
+            self.assertEqual(db.execute('SELECT id,generation FROM receipts').fetchall(), [(invocation, 1)])
+        self.reader.replay(spec)
+        with self.assertRaisesRegex(ReaderError, 'code 4'):
+            self.reader.run(spec)
+        replay_invocation = self.reader.load()['inflight']
+        self.assertNotEqual(replay_invocation, invocation)
+        self.reader.run(spec)
+        self.assertEqual(self.outputs(self.reader), ['A'])
+        with sqlite3.connect(self.reader.output / 'projection.sqlite3') as db:
+            self.assertEqual(db.execute('SELECT id,generation FROM receipts ORDER BY generation').fetchall(),
+                             [(invocation, 1), (replay_invocation, 2)])
 
     def test_checkpoint_failure_after_effect_never_advances_in_error_handler(self):
         self.write('A')
@@ -212,16 +225,56 @@ class ReaderTests(unittest.TestCase):
         self.assertEqual(self.outputs(self.reader), ['A', 'B', 'A'])
 
     def test_changed_definition_requires_deliberate_new_generation(self):
-        self.write('A')
+        self.write('A', 'B', 'C')
         self.reader.run(self.spec)
+        with sqlite3.connect(self.reader.output / 'projection.sqlite3') as db:
+            delivery_ids = db.execute('SELECT id FROM deliveries ORDER BY rowid').fetchall()
+            original_invocations = {row[0] for row in db.execute('SELECT id FROM receipts')}
         previous = self.reader.checkpoint.read_bytes()
-        changed = dict(self.spec, revision='fixture-2')
+        changed = dict(self.spec, revision='fixture-2', config={'value_prefix': 'new:'})
         with self.assertRaisesRegex(ReaderError, 'definition changed'):
             self.reader.run(changed)
         self.assertEqual(self.reader.checkpoint.read_bytes(), previous)
         self.reader.replay(changed)
         self.reader.run(changed)
         self.assertEqual(self.reader.load()['generation'], 2)
+        self.assertEqual(self.outputs(self.reader), ['new:A', 'new:B', 'new:C'])
+        with sqlite3.connect(self.reader.output / 'projection.sqlite3') as db:
+            self.assertEqual(db.execute('SELECT id FROM deliveries ORDER BY rowid').fetchall(), delivery_ids)
+            replay_invocations = {row[0] for row in db.execute('SELECT id FROM receipts WHERE generation=2')}
+            self.assertEqual(len(replay_invocations), 3)
+            self.assertTrue(original_invocations.isdisjoint(replay_invocations))
+            self.assertEqual(json.loads(db.execute('SELECT body FROM latest').fetchone()[0])['value'], 'new:C')
+
+    def test_partial_replay_retry_does_not_roll_latest_back(self):
+        self.write('A', 'B', 'C')
+        self.reader.run(self.spec)
+        changed = dict(self.spec, revision='fixture-2', config={'value_prefix': 'new:'})
+        self.reader.replay(changed)
+        replay_start = self.reader.checkpoint.read_bytes()
+        self.reader.run(changed, max_records=2)
+        # Model recovery with an older saved checkpoint and already committed
+        # output. Retrying the prefix must not rewrite latest from B back to A.
+        self.reader.checkpoint.write_bytes(replay_start)
+        self.reader.run(changed, max_records=1)
+        with sqlite3.connect(self.reader.output / 'projection.sqlite3') as db:
+            self.assertEqual(json.loads(db.execute('SELECT body FROM latest').fetchone()[0])['value'], 'new:B')
+            self.assertEqual(db.execute('SELECT count(*) FROM receipts WHERE generation=2').fetchone()[0], 2)
+        self.reader.run(changed)
+        self.assertEqual(self.outputs(self.reader), ['new:A', 'new:B', 'new:C'])
+
+    def test_legacy_projection_requires_explicit_migration(self):
+        self.write('A')
+        self.reader.prepare()
+        with sqlite3.connect(self.reader.output / 'projection.sqlite3') as db:
+            db.execute('CREATE TABLE deliveries (id TEXT PRIMARY KEY, body TEXT NOT NULL)')
+            db.execute('INSERT INTO deliveries VALUES(?,?)', ('legacy', '{"value":"old"}'))
+        with self.assertRaisesRegex(ReaderError, 'code 1'):
+            self.reader.run(self.spec)
+        self.assertIn('Legacy fixture projection has unscoped receipts',
+                      (self.reader.logs / 'last-stderr.log').read_text())
+        self.assertIsNone(self.reader.load()['cursor'])
+        self.assertEqual(self.outputs(self.reader), ['old'])
 
     def test_same_reader_is_locked_but_other_reader_can_run(self):
         self.write('A')
@@ -232,6 +285,17 @@ class ReaderTests(unittest.TestCase):
             other = Reader(self.profile, 'other')
             other.run(self.spec)
             self.assertEqual(self.outputs(other), ['A'])
+
+    def test_crash_during_schema_creation_rolls_back_and_retries(self):
+        self.write('A')
+        spec = dict(self.spec, config={'fixture_mode': 'fail_schema_once'})
+        with self.assertRaisesRegex(ReaderError, 'code 5'):
+            self.reader.run(spec)
+        self.assertIsNone(self.reader.load()['cursor'])
+        with sqlite3.connect(self.reader.output / 'projection.sqlite3') as db:
+            self.assertEqual(db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall(), [])
+        self.reader.run(spec)
+        self.assertEqual(self.outputs(self.reader), ['A'])
 
     def test_definition_validation_and_bad_checkpoint_do_not_reset_progress(self):
         path = self.root / 'reader.json'
@@ -254,6 +318,44 @@ class ReaderTests(unittest.TestCase):
             self.reader.run(dict(self.spec, command=['/missing/fixture/reader']))
         self.assertEqual(self.reader.load()['phase'], 'failed')
         self.assertIsNone(self.reader.load()['cursor'])
+
+    def test_definition_rejects_nested_nonfinite_json_numbers(self):
+        path = self.root / 'reader.json'
+        for token in ('NaN', 'Infinity', '-Infinity', '1e999', '-1e999'):
+            with self.subTest(token=token):
+                source = json.dumps(dict(self.spec, config={'nested': [{'value': 'NUMBER'}]}))
+                path.write_text(source.replace('"NUMBER"', token))
+                with self.assertRaisesRegex(ReaderError, 'finite JSON'):
+                    definition(path)
+        self.assertFalse(self.reader.state.exists())
+
+    def test_programmatic_nonfinite_definition_cannot_create_or_reset_progress(self):
+        self.write('A')
+        for number in (float('nan'), float('inf'), float('-inf')):
+            invalid = dict(self.spec, config={'nested': [{'value': number}]})
+            with self.subTest(number=number), self.assertRaisesRegex(ReaderError, 'finite JSON'):
+                self.reader.run(invalid)
+            self.assertFalse(self.reader.state.exists())
+        self.reader.run(self.spec)
+        previous = self.reader.checkpoint.read_bytes()
+        for number in (float('nan'), float('inf'), float('-inf')):
+            invalid = dict(self.spec, config={'nested': [{'value': number}]})
+            for action in (self.reader.run, self.reader.replay):
+                with self.subTest(number=number, action=action.__name__), self.assertRaisesRegex(ReaderError, 'finite JSON'):
+                    action(invalid)
+                self.assertEqual(self.reader.checkpoint.read_bytes(), previous)
+
+    def test_finite_nested_config_reaches_child_as_json(self):
+        self.write('A')
+        output = self.root / 'received-context.json'
+        config = {'nested': [{'small': 1e-200, 'large': 1e200, 'integer': 42}], 'empty': None}
+        spec = dict(self.spec, config=config,
+                    command=[sys.executable, '-c',
+                             'import os, pathlib; pathlib.Path(' + repr(str(output)) + ').write_text(os.environ["TAP_PACK_CONTEXT"])'])
+        path = self.root / 'reader.json'
+        path.write_text(json.dumps(spec))
+        self.reader.run(definition(path))
+        self.assertEqual(json.loads(output.read_text())['config'], config)
 
     def test_existing_pack_reader_runs_without_changing_pack_interface(self):
         self.write('A')
