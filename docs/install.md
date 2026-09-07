@@ -82,7 +82,7 @@ open "$HOME/.tap-core/profile/certificates/mitmproxy-ca-cert.pem"
 
 Point a dedicated client at the proxy for default explicit routing. This installer does not establish CA trust. System routing is opt-in and is not a supported clean-Mac claim yet.
 
-The in-place routing command is reviewed separately in #47. This installer does not add a second configuration command; existing `install` never rewrites a saved profile.
+The in-place routing command from merged #47 is `tap routing set explicit|system`. It preserves the profile and restores the previous network state before leaving system mode. This installer adds no second configuration command; existing `install` never rewrites a saved profile.
 
 ## Failure and ownership contract
 
