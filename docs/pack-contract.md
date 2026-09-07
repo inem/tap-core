@@ -106,9 +106,11 @@ loopback, authenticate connections, check origins and remove site credentials
 before local forwarding. A manifest match is not proof of those protections.
 
 Likewise, `fixtures/packs/records.jsonl` uses today's capture examples (`url`,
-`status`, `body`, streaming metadata). It does not version or freeze the capture
-record format. The reader deliberately ignores other origins and missing bodies;
-record delivery, retention and progress contracts remain #8/#9.
+`status`, `body`, streaming metadata). Those original examples remain unversioned compatibility fixtures.
+[capture record v1](capture-records.md) is defined separately from pack API 1.
+The reader accepts unversioned/v1 inputs, rejects future versions, and ignores
+other origins and missing bodies. A host must validate records before delivery;
+reader scheduling and acknowledgement remain #9 work.
 
 ## Reproduce fixture evidence
 

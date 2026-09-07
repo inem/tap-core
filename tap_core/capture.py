@@ -9,6 +9,7 @@ from pathlib import Path
 import queue
 import threading
 import time
+import uuid
 
 MAX_BYTES = 128 * 1024 * 1024
 KEEP_ROLLS = 3
@@ -270,14 +271,24 @@ class Capture:
             size = 0
         if keep and not size:
             size = len(response.raw_content or b"")
-        record = {"ts": time.time(), "method": flow.request.method, "url": flow.request.url,
-                  "status": response.status_code, "ctype": ctype, "size": size,
-                  "body_kept": keep, "streamed": streamed,
+        reason = "media_type" if not wants_body(ctype) else "streamed" if streamed else "retained"
+        body = response.get_text(strict=False) if keep else None
+        if keep and body is None:
+            keep, reason = False, "unavailable"
+        record = {"record_version": 1, "record_id": str(uuid.uuid4()),
+                  "ts": time.time(), "method": flow.request.method, "url": flow.request.url,
+                  "status": response.status_code, "ctype": ctype, "size": max(0, size),
+                  "body_kept": keep, "body_reason": reason, "streamed": streamed,
+                  "req_body_kept": False, "req_body_reason": "response_not_retained",
                   "ua": flow.request.headers.get("user-agent", "")}
         if keep:
-            request_kept = not bool(flow.request.stream)
-            record.update(body=response.get_text(strict=False), req_body_kept=request_kept,
-                          req_body=(flow.request.get_text(strict=False) or "") if request_kept else "")
+            request_streamed = bool(flow.request.stream)
+            request_body = None if request_streamed else flow.request.get_text(strict=False)
+            request_kept = request_body is not None
+            request_reason = "streamed" if request_streamed else "retained" if request_kept else "unavailable"
+            record.update(body=body, req_body_kept=request_kept, req_body_reason=request_reason)
+            if request_kept:
+                record["req_body"] = request_body
         self.writer.submit(record)
 
     def done(self):

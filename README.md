@@ -6,6 +6,9 @@ TAP Core is being extracted from an existing working TAP installation. A first
 [development-checkout runtime](docs/runtime.md) provides isolated macOS profiles
 with the existing `install`, `on`, `off`, `status`, `doctor` and `where` command
 surface. This is not yet a packaged clean-Mac release.
+[Capture record v1 and journal positions](docs/capture-records.md) define the
+current storage input for independent readers, including legacy compatibility
+and explicit errors when retention removes a saved position.
 
 ## Scope
 

@@ -1,9 +1,10 @@
 # Capture writer recovery
 
 This is a bounded implementation slice for #8, built on the profile runtime in
-#20. It does not finish #8 or define the reader/replay contract in #9. The record
-fields, `data/stream.jsonl` path, numeric archive names and existing health keys
-are unchanged. No consumer offset is read or written.
+#20. It does not finish #8 or define the reader/replay contract in #9. This writer-recovery change preserved record fields; the subsequent
+[record v1 and journal scan](capture-records.md) adds versioning and verifiable
+positions. The `data/stream.jsonl` path, numeric archives and health keys remain
+unchanged. No consumer offset is read or written.
 
 ## Completed records and unfinished tails
 
@@ -68,8 +69,8 @@ as queue drops.
 
 The existing defaults remain a 128 MiB rotation threshold and three retained
 archives. A single record is never split and may exceed a smaller configured
-threshold. This is not a strict total-disk quota. Rotation still provides no
-consumer cursor, gap notification or replay guarantee. Filesystem crash and
+threshold. This is not a strict total-disk quota. Rotation itself owns no consumer progress. The separate journal scanner now
+reports an unavailable saved segment explicitly; see [record v1](capture-records.md). Filesystem crash and
 power-loss behavior has not been validated.
 
 ## Queue, health and shutdown
@@ -115,5 +116,6 @@ pass, including streaming-body handling and preservation of consumer offsets.
 
 These are storage fault fixtures. They neither switch routing nor run a live
 mitmproxy, and they do not simulate kernel failure or establish power-loss
-durability. Record versioning, an independent reader contract, configurable
-product-level retention, and end-to-end loss/replay reporting remain open.
+durability. Record v1 and the bounded journal scanner are documented separately.
+Independent reader scheduling, configurable product-level retention and
+end-to-end loss/replay reporting remain open.
