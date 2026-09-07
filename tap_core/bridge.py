@@ -6,7 +6,6 @@ This file also loads directly as a mitmproxy addon, so imports are stdlib only.
 import hashlib
 import hmac
 import html
-from html.parser import HTMLParser
 import json
 import os
 from pathlib import Path
@@ -19,28 +18,118 @@ MARKER = 'tap-probe-bootstrap'
 SCRIPT_LIMIT = 256 * 1024
 
 
-class DocumentScripts(HTMLParser):
-    """Recognize nonce/marker attributes using stdlib HTML tokenization.
+class HTMLScanError(ValueError):
+    """Markup cannot be safely scanned for this limited injection operation."""
 
-    Supports attribute spacing, quoting and entities. HTML5 tree semantics,
-    including text-only contexts such as textarea/title, remain unsupported.
+
+class DocumentScripts:
+    """Scan complete HTML for nonce/marker attributes and a body insertion point.
+
+    This forward-only tokenizer skips comments and text-only elements, retains
+    only two attributes per tag, and caps their encoded values at 4096 characters.
+    It does not build an HTML5 tree. Ambiguous/truncated markup skips injection.
     """
-    def __init__(self):
-        super().__init__(convert_charrefs=True)
-        self.nonce = ''
-        self.has_bootstrap = False
+    SPACE = re.compile(r'[ \t\n\f\r]*')
+    COMMENT_END = re.compile(r'--!?>')
+    DOCTYPE = re.compile(r'<!doctype(?=[ \t\n\f\r>])', re.I | re.ASCII)
+    TAG = re.compile(r'<(/?)([A-Za-z][^ \t\n\f\r/>]*)')
+    ATTRIBUTE = re.compile(r'''([^ \t\n\f\r"'<>/=]+)(?:[ \t\n\f\r]*=[ \t\n\f\r]*(?:"([^"]*)"|'([^']*)'|([^ \t\n\f\r>"'<]+)))?''')
+    ENTITY = re.compile(r'&#(?:[xX][0-9a-fA-F]+|[0-9]+);?|&[A-Za-z][A-Za-z0-9]+;')
+    RAW = {'script', 'style', 'textarea', 'title', 'xmp', 'iframe', 'noembed', 'noframes', 'noscript'}
 
-    def handle_starttag(self, tag, attrs):
-        # First duplicate wins, matching HTML attribute parsing in browsers.
+    @classmethod
+    def attribute_value(cls, raw):
+        if raw is None:
+            return None
+        if len(raw) > 4096:
+            raise HTMLScanError('Attribute exceeds scanner limit')
+        def decode(match):
+            value = html.unescape(match.group())
+            # Preserve invalid/control references instead of silently dropping
+            # them and accidentally making an invalid nonce or marker valid.
+            return value if re.fullmatch(r'[A-Za-z0-9_+/=-]+', value) else match.group()
+        return cls.ENTITY.sub(decode, raw)
+
+    @classmethod
+    def tag_end(cls, body, position):
         values = {}
-        for name, value in attrs:
-            values.setdefault(name, value)
-        if values.get('id') == MARKER:
-            self.has_bootstrap = True
-        nonce = values.get('nonce')
-        if (tag == 'script' and not self.nonce and isinstance(nonce, str)
-                and re.fullmatch(r'[A-Za-z0-9_+/-]{1,256}={0,2}', nonce)):
-            self.nonce = nonce
+        while position < len(body):
+            position = cls.SPACE.match(body, position).end()
+            if body.startswith('>', position):
+                return position + 1, values
+            if body.startswith('/>', position):
+                return position + 2, values
+            attribute = cls.ATTRIBUTE.match(body, position)
+            if attribute is None:
+                raise HTMLScanError('Incomplete or unsupported tag')
+            name = attribute[1].lower()
+            if name in ('nonce', 'id') and name not in values:
+                raw = next((value for value in attribute.groups()[1:] if value is not None), None)
+                values[name] = cls.attribute_value(raw)
+            position = attribute.end()
+        raise HTMLScanError('Unclosed tag')
+
+    def __init__(self, body):
+        self.nonce, self.has_bootstrap, self.body_end = '', False, None
+        position = 0
+        while position < len(body):
+            start = body.find('<', position)
+            if start < 0:
+                break
+            if body.startswith('<!--', start):
+                if body.startswith(('<!-->', '<!--->'), start):
+                    raise HTMLScanError('Ambiguous comment opener')
+                end = self.COMMENT_END.search(body, start + 4)
+                if end is None:
+                    raise HTMLScanError('Unclosed comment')
+                position = end.end()
+                continue
+            if self.DOCTYPE.match(body, start):
+                # Quoted identifiers may contain >; other declarations are
+                # outside this scanner's scope and leave the response intact.
+                position = start + 9
+                while position < len(body) and body[position] != '>':
+                    if body[position] in ('"', "'"):
+                        end = body.find(body[position], position + 1)
+                        if end < 0:
+                            raise HTMLScanError('Unclosed doctype identifier')
+                        position = end + 1
+                    elif body[position] in '<[':
+                        raise HTMLScanError('Unsupported declaration')
+                    else:
+                        position += 1
+                if position == len(body):
+                    raise HTMLScanError('Unclosed doctype')
+                position += 1
+                continue
+            if body.startswith(('<!', '<?'), start):
+                raise HTMLScanError('Unsupported declaration')
+            tag = self.TAG.match(body, start)
+            if tag is None:
+                position = start + 1
+                continue
+            closing, name = tag[1], tag[2].lower()
+            position, values = self.tag_end(body, tag.end())
+            if closing:
+                if name == 'body' and self.body_end is None:
+                    self.body_end = start
+                continue
+            if values.get('id') == MARKER:
+                self.has_bootstrap = True
+            nonce = values.get('nonce')
+            if name == 'script' and not self.nonce and isinstance(nonce, str) and re.fullmatch(r'[A-Za-z0-9_+/-]{1,256}={0,2}', nonce):
+                self.nonce = nonce
+            if name == 'plaintext':
+                raise HTMLScanError('Plaintext has no script insertion point')
+            if name in self.RAW:
+                end = re.compile(r'</' + name + r'(?=[ \t\n\f\r/>])', re.I | re.ASCII).search(body, position)
+                if end is None:
+                    raise HTMLScanError('Unclosed text-only element')
+                if name == 'script' and body.find('<!--', position, end.start()) >= 0:
+                    # Legacy escaped/double-escaped script states need HTML5
+                    # parsing; do not mistake their apparent end tags for markup.
+                    raise HTMLScanError('Unsupported script comment state')
+                position, _ = self.tag_end(body, end.end())
 
 
 def unique_object(pairs):
@@ -223,12 +312,9 @@ class Bridge:
         if body is None:
             print('[tap bridge] HTML unavailable; injection skipped', flush=True)
             return
-        parsed = DocumentScripts()
         try:
-            parsed.feed(body)
-            parsed.close()
-        except (AssertionError, NotImplementedError):
-            # Invalid marked declarations fail differently across Python versions.
+            parsed = DocumentScripts(body)
+        except HTMLScanError:
             print('[tap bridge] HTML parsing failed; injection skipped', flush=True)
             return
         if parsed.has_bootstrap:
@@ -240,8 +326,7 @@ class Bridge:
                    f'src="{asset_root}runtime.js?token={self.token}"></script>']
         scripts += [f'<script{nonce_attr} src="{asset_root}core/{index}.js?token={self.token}"></script>'
                     for index in range(len(self.scripts))]
-        closing = re.search(r'</body\s*>', body, re.I)
-        position = closing.start() if closing else len(body)
+        position = parsed.body_end if parsed.body_end is not None else len(body)
         response.set_text(body[:position] + ''.join(scripts) + body[position:])
         for name in ('etag', 'last-modified'):
             response.headers.pop(name, None)

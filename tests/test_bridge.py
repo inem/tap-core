@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import runpy
 from types import SimpleNamespace
 import tempfile
 import time
@@ -165,7 +166,8 @@ class BridgeTests(unittest.TestCase):
     def test_valid_nonce_attribute_forms_and_fake_script_text(self):
         for attr, value in (('nonce = "YWJjZA=="', 'YWJjZA=='), ("nonce = 'YWJjZA=='", 'YWJjZA=='),
                             ('nonce=YWJjZA', 'YWJjZA'), ('NONCE = YWJjZA', 'YWJjZA'),
-                            ('nonce="YWJjZA&#61;&#61;"', 'YWJjZA==')):
+                            ('nonce="YWJjZA&#61;&#61;"', 'YWJjZA=='), ('nonce=YWJjZA==', 'YWJjZA=='),
+                            ('nonce="&#x41;&plus;&sol;&lowbar;&equals;"', 'A+/_=')):
             with self.subTest(attr=attr):
                 f = flow(response=Response('<body><!-- <script nonce="wrong"> -->'
                                            '<script ' + attr + '>0</script></body>'))
@@ -173,15 +175,77 @@ class BridgeTests(unittest.TestCase):
                 self.assertIn('id="tap-probe-bootstrap" nonce="' + value + '"', f.response.body)
                 self.assertNotIn('nonce="wrong" data-tap-token', f.response.body)
 
-    def test_malformed_declaration_skips_injection_and_preserves_response(self):
-        body = '<body><![notvalid[example]]><script nonce="correct"></script></body>'
+    def test_addon_import_and_injection_without_html_parser(self):
+        import builtins
+        original = builtins.__import__
+        def without_parser(name, *args, **kwargs):
+            if name == 'html.parser':
+                raise ModuleNotFoundError("No module named 'html.parser'")
+            return original(name, *args, **kwargs)
+        with patch('builtins.__import__', without_parser):
+            addon = runpy.run_path(str(Path(__file__).resolve().parents[1] / 'tap_core/bridge.py'))
+            bridge = addon['Bridge'](config(), TOKEN, [])
+            f = flow(response=Response('<body><script nonce = "YWJjZA=="></script></body>'))
+            bridge.response(f)
+        self.assertIn('id="tap-probe-bootstrap" nonce="YWJjZA=="', f.response.body)
+
+    def test_text_only_content_and_comments_do_not_supply_nonce_marker_or_body_end(self):
+        fake = '<script id="tap-probe-bootstrap" nonce="wrong"></scriptx></body>'
+        for tag in ('script', 'style', 'textarea', 'title', 'xmp', 'iframe', 'noembed', 'noframes', 'noscript'):
+            with self.subTest(tag=tag):
+                body = ('<body><' + tag + '>' + fake + '</' + tag.upper() + ' \n>'
+                        '<!-- ' + fake + ' --><script nonce="correct"></script></body>')
+                f = flow(response=Response(body))
+                self.bridge.response(f)
+                insertion = '<script id="tap-probe-bootstrap" nonce="correct"'
+                self.assertIn(insertion, f.response.body)
+                self.assertTrue(f.response.body.startswith(body[:-7]))
+                self.assertTrue(f.response.body.endswith('</body>'))
+
+    def test_first_duplicate_attribute_wins_even_when_empty_or_valueless(self):
+        for first in ('nonce', 'nonce=""', 'nonce="wrong!"'):
+            with self.subTest(first=first):
+                f = flow(response=Response('<body><script ' + first + ' NONCE="wrong"></script>'
+                                           '<script nonce="correct"></script></body>'))
+                self.bridge.response(f)
+                self.assertIn('id="tap-probe-bootstrap" nonce="correct"', f.response.body)
+        f = flow(response=Response('<body><script nonce=correct NONCE=wrong id=other id=tap-probe-bootstrap></script></body>'))
+        self.bridge.response(f)
+        self.assertIn('id="tap-probe-bootstrap" nonce="correct"', f.response.body)
+        body = '<body><script id=tap-probe-bootstrap id=other></script></body>'
         f = flow(response=Response(body))
-        headers = dict(f.response.headers)
-        with patch('builtins.print') as diagnostic:
-            self.bridge.response(f)
+        self.bridge.response(f)
         self.assertEqual(f.response.body, body)
-        self.assertEqual(f.response.headers, headers)
-        diagnostic.assert_called_once_with('[tap bridge] HTML parsing failed; injection skipped', flush=True)
+
+    def test_invalid_numeric_entities_cannot_become_valid_nonce_or_marker(self):
+        f = flow(response=Response('<body><script nonce="wrong&#1;" id="tap-probe-bootstrap&#1;"></script>'
+                                   '<script nonce="correct"></script></body>'))
+        self.bridge.response(f)
+        self.assertIn('id="tap-probe-bootstrap" nonce="correct"', f.response.body)
+
+    def test_script_self_closing_syntax_still_skips_its_text(self):
+        body = '<body><script /><script id=tap-probe-bootstrap nonce=wrong></script><script nonce=correct></script></body>'
+        f = flow(response=Response(body))
+        self.bridge.response(f)
+        self.assertIn('id="tap-probe-bootstrap" nonce="correct"', f.response.body)
+
+    def test_malformed_declaration_skips_injection_and_preserves_response(self):
+        for body in ('<body><![notvalid[example]]><script nonce="correct"></script></body>',
+                     '<body><script nonce="unfinished>', '<body><!-- unfinished',
+                     '<body><textarea>unfinished', '<body><plaintext>text',
+                     '<body><!--><script nonce=correct></script><!-- later --></body>',
+                     '<body><!---><script nonce=correct></script><!-- later --></body>',
+                     '<body><script><!--<script></script><script nonce=wrong></script>--></script>'
+                     '<script nonce=correct></script></body>',
+                     '<body><script nonce="' + 'A' * 4097 + '"></script></body>'):
+            with self.subTest(body=body[:70]):
+                f = flow(response=Response(body))
+                headers = dict(f.response.headers)
+                with patch('builtins.print') as diagnostic:
+                    self.bridge.response(f)
+                self.assertEqual(f.response.body, body)
+                self.assertEqual(f.response.headers, headers)
+                diagnostic.assert_called_once_with('[tap bridge] HTML parsing failed; injection skipped', flush=True)
         valid = flow(response=Response())
         self.bridge.response(valid)
         self.assertIn('id="tap-probe-bootstrap"', valid.response.body)
