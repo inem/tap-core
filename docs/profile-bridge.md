@@ -67,8 +67,13 @@ concrete subset of #6, not its host/TLS/app policy completion.
 
 For allowed top-level HTML, the addon inserts the existing runtime bootstrap
 followed by configured scripts served from memory under `/__tap/probe/core/`.
-It parses actual script attributes (including whitespace, unquoted values and
-HTML entities) to retain an existing nonce. Token-bearing bootstrap and script
+It scans script attributes (including whitespace, unquoted values and
+HTML entities) to retain an existing nonce. This is a bounded tag/attribute
+tokenizer, not a browser HTML5 tree builder. Comments and raw-text contexts do
+not supply nonce/marker attributes. Encoded nonce/id values are capped at 4096
+characters; unsupported declarations, ambiguous script comments and incomplete
+markup skip injection and leave the response intact.
+Token-bearing bootstrap and script
 URLs are absolute URLs from the intercepted request origin, independent of the
 document base URL. It leaves CSP intact and prevents another
 bootstrap when the marker is present, and invalidates response validators/cache.
@@ -97,8 +102,9 @@ files are snapshot inputs for each startup, not immutable installed artifacts.
 Status/doctor check that `state/bridge.json` belongs to the current service PID
 and matches the configured bridge fingerprint/enabled flag. A missing record is
 known absence (`healthy: false`); read failures and malformed records produce
-`healthy: null` plus `inspection_errors.bridge`, and doctor remains unhealthy. This verifies addon
-startup, not live Hub availability; `hub_liveness` is explicitly `not_checked`.
+`healthy: null` plus `inspection_errors.bridge`, and doctor remains unhealthy.
+This verifies addon startup, not live Hub availability; `hub_liveness` is explicitly
+`not_checked`.
 Hook/runtime errors remain in the profile capture log. End-to-end diagnostics,
 per-pack error isolation and failed Hub supervision remain #11/#13/#14.
 
@@ -106,7 +112,10 @@ The [live report](profile-bridge-live-2026-09-07.json) records the same
 capture → reader output → WS → page chain as #29, now using this profile addon.
 It additionally verifies two allowed origins, a user exclusion that conflicts
 with allow, reload without a duplicate bootstrap, live reconfiguration rejection,
-and off/configure/on disabling injection. The second tab remains unchanged.
+and off/configure/on disabling injection. Spaced quoted and unquoted nonce
+attributes work under an unchanged CSP. A foreign-origin base URL does not
+redirect bootstrap/assets; zero token-bearing requests leave the allowed origins.
+The second tab remains unchanged.
 The old `site-probe.py` and a generated Python wrapper are no longer needed.
 
 Run `tools/check_live_slice.py` with the explicit backend/Bun/Node/Playwright/Chrome
@@ -118,11 +127,17 @@ optional development dependencies, not mandatory core runtimes.
 Unit tests cover credentials/origins, unsupported authorities, policy precedence,
 valid nonce syntax, foreign base URLs and unavailable diagnostic observations,
 streaming, nonce/order, duplicate injection, private token persistence, bounded
-script loading, compatibility and startup diagnostics. Live evidence uses
-loopback HTTP with synthetic data on macOS 15.6.1 arm64. HTTPS trust/CSP behavior,
-third-party WS capture, app routing, package lifecycle and clean-Mac installation
+script loading, compatibility and startup diagnostics. The combined stack passes
+177 unit tests, synthetic reader CLI replay and pack fixtures. Live evidence uses
+loopback HTTP with synthetic data on macOS 15.6.1 arm64. HTTPS trust, the broader
+CSP/browser matrix, third-party WS capture, app routing, package lifecycle and clean-Mac installation
 remain unverified by this change. No production capture, Hub journal, browser
 profile or system proxy setting is used or changed.
+
+The inspected standalone mitmdump 12.2.3 omits `html.parser`, even though the
+development Python provides it. The tokenizer avoids that dependency. Loading
+the addon in the actual backend is part of live verification; passing tests in
+the development interpreter alone does not establish backend compatibility.
 
 ## Source provenance
 

@@ -19,7 +19,10 @@
     "user_exclusion_overrides_allow": true,
     "live_reconfigure_rejected": true,
     "off_configure_on_disables": true,
-    "legacy_injector_or_generated_addon_needed": false
+    "legacy_injector_or_generated_addon_needed": false,
+    "spaced_and_unquoted_nonce_with_csp": true,
+    "foreign_base_asset_origin_preserved": true,
+    "foreign_origin_token_requests": 0
   },
   "capture_reader_projection_page_match": true,
   "controller_received_page_result": true,

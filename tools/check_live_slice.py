@@ -247,6 +247,18 @@ def main():
                            'transport': {'http_body': 'verified_live', 'own_page_hub_ws': 'verified_live',
                                          'https_ca_trust': 'not_tested', 'sse': 'not_tested',
                                          'third_party_ws_capture': 'not_tested', 'chatgpt_conduit': 'not_tested'}})
+        except Exception:
+            # Temporary state is removed below even on failure. Preserve bounded
+            # fixture diagnostics, with its ephemeral authority token redacted.
+            for label, path in [('proxy', root / 'profile/logs/capture.log'),
+                                ('hub', root / 'hub.log'), ('browser', root / 'browser.log'),
+                                ('disabled-browser', root / 'disabled-browser.log')]:
+                if path.exists():
+                    detail = path.read_text(errors='replace')[-12000:]
+                    if 'config' in locals():
+                        detail = detail.replace(config['token'], '[fixture token]')
+                    print(label + ':\n' + detail, file=sys.stderr)
+            raise
         finally:
             cleanup_errors = []
             for child in reversed(children):
