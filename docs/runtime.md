@@ -1,6 +1,6 @@
 # First profile-scoped runtime
 
-Preparatory implementation for #4; #4 remains open. This is a runnable source
+The checkout lifecycle slice of #4 is complete. This is a runnable source
 checkout, not the clean-machine package required by #7/#15.
 
 ## Run the explicit development profile
@@ -64,7 +64,8 @@ CLI coordination is implemented in Python using the working choice in
 plist serialization/argument quoting and command locks using one standard
 library. This is a port of the characterized lifecycle, not a foreground runner.
 `MacOS` contains OS calls; `Lifecycle` contains sequencing and error handling;
-`Profile` contains paths/configuration. These are internal modules, not proposed
+`Profile` contains paths/configuration. [Routing adapters](proxy-routing.md) own
+proxy enable/restore, verification and the shared network lock. These are internal modules, not proposed
 package boundaries or a new public plugin protocol.
 
 The earlier legacy fixture remains available in `tools/characterize_legacy_cli.py`.
@@ -150,7 +151,7 @@ python3 -m unittest discover -s tests -v
 python3 tools/check_runtime.py --backend /absolute/path/to/mitmdump
 ```
 
-The controlled tests cover real arm/disarm methods through substituted OS
+The controlled tests cover real routing enable/restore methods through substituted OS
 operations, lifecycle ordering, partial failures, crash recovery, foreign
 listeners, profile/argument isolation, capture streaming, retention and visible
 write failures. The opt-in live check creates two temporary user LaunchAgents,

@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "mode": "local",
+  "evidence": "blocked_startup",
+  "platform": {
+    "macos": "15.6.1",
+    "arch": "arm64",
+    "python": "3.9.6"
+  },
+  "source_sha256": {
+    "tools/check_local_capture.py": "ab272ef6cc515047287a72a4f9d8e40a1ad97fc1789fca2e17d4d6513a687c51",
+    "fixtures/local-capture/addon.py": "0353a8ca246787d9f86fb813631ea50c203223fe293a90205a9e7a9909fd8a61",
+    "fixtures/local-capture/client.py": "fc2623568cc967a17a6e2e7db83cda8925ad3599fed6a4258d32d266eaf61be1"
+  },
+  "not_tested": [
+    "HTTPS/CA/injection",
+    "UDP/IPv6",
+    "application bundle/helper identity",
+    "PID reuse",
+    "unknown audit token",
+    "existing-connection rule changes",
+    "simultaneous Local Capture profiles",
+    "clean-Mac install/update/remove"
+  ],
+  "backend_version": [
+    "Mitmproxy: 12.2.3 binary",
+    "Python:    3.14.4",
+    "OpenSSL:   OpenSSL 3.5.5 27 Jan 2026",
+    "Platform:  macOS-15.6.1-arm64-arm-64bit-Mach-O"
+  ],
+  "extension_before": {
+    "inspection_exit": 0,
+    "mitmproxy_entries": [
+      "*\tS8XHQB96PW\torg.mitmproxy.macos-redirector.network-extension (2.0/1)\tnetwork-extension\t[activated waiting for user]"
+    ],
+    "inspection_failed": false
+  },
+  "cases": [
+    {
+      "case": "direct_baseline",
+      "passed": true
+    }
+  ],
+  "blocker": "network_extension_awaiting_user_approval",
+  "addon_observations": [],
+  "backend_exit": 0,
+  "after_stop_direct": true,
+  "own_processes_stopped": true,
+  "extension_after": {
+    "inspection_exit": 0,
+    "mitmproxy_entries": [
+      "*\tS8XHQB96PW\torg.mitmproxy.macos-redirector.network-extension (2.0/1)\tnetwork-extension\t[activated waiting for user]"
+    ],
+    "inspection_failed": false
+  },
+  "effective_proxy_settings_unchanged": true,
+  "temporary_profile_removed": true
+}
