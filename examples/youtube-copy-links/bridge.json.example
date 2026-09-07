@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "enabled": true,
+  "hub_port": 19002,
+  "allow_origins": [
+    "https://www.youtube.com",
+    "https://youtube.com"
+  ],
+  "exclude_origins": [],
+  "page_scripts": [
+    "/ABS/PATH/TO/tap-core/examples/youtube-copy-links/youtube-ui.js",
+    "/ABS/PATH/TO/tap-core/examples/youtube-copy-links/copy-links.js"
+  ]
+}
