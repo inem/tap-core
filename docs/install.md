@@ -1,6 +1,12 @@
 # One-line install (#7)
 
-First delivery slice for a clean Mac. Not a signed release artifact (#15).
+First delivery slice for a **bare** Mac (arm64 or Intel). Not a signed release
+artifact (#15).
+
+## Prerequisites on the machine
+
+Only macOS base tools: `curl`, `tar`, `bash`.  
+**Not required:** Homebrew, Xcode, CLT, system Python, git, mise.
 
 ## Install
 
@@ -19,10 +25,14 @@ TAP_REF=issue-7-installer curl -fsSL \
 
 What it does:
 
-1. Downloads pinned mitmproxy **12.2.3** for the machine architecture into `~/.tap-core/backend`.
-2. Fetches this repository at `TAP_REF` (default `main`) into `~/.tap-core/checkout`.
-3. Writes `~/.local/bin/tap` → profile-scoped CLI wrapper.
-4. Runs `install` + `on` for an **explicit** profile on port `18999` (no system proxy mutation, no keychain trust).
+1. Picks architecture (`arm64` / `x86_64`).
+2. Downloads portable CPython into `~/.tap-core/python` for this CPU
+   (override with `TAP_PYTHON` if you already have one). Avoids Xcode CLT stubs.
+3. Downloads pinned mitmproxy **12.2.3** for that CPU into `~/.tap-core/backend`.
+4. Fetches this repository at `TAP_REF` into `~/.tap-core/checkout`.
+5. Writes `~/.local/bin/tap`.
+6. Runs `install` + `on` for an **explicit** profile on port `18999`
+   (no system proxy mutation, no keychain trust).
 
 ## Uninstall
 
@@ -42,7 +52,10 @@ TAP_PURGE=1 curl -fsSL instll.sh/inem/tap-core/uninstall | sh   # also delete ~/
 | `TAP_SKIP_START` | `0` | `1` = place files only |
 | `TAP_BIN_DIR` | `~/.local/bin` | Where the `tap` wrapper is written |
 | `TAP_BACKEND_VERSION` | `12.2.3` | Required mitmproxy version |
-| `TAP_BACKEND` | (unset) | Absolute mitmdump to reuse instead of downloading into `TAP_ROOT` |
+| `TAP_BACKEND` | (unset) | Absolute mitmdump to reuse |
+| `TAP_PYTHON` | (unset) | Absolute `python3` to reuse |
+| `TAP_PYTHON_VERSION` | `3.12.14` | Portable CPython version when downloading |
+| `TAP_PYTHON_BUILD` | `20260901` | python-build-standalone release tag |
 
 ## After install
 

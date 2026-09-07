@@ -1,8 +1,10 @@
 #!/bin/bash
 # Remove the TAP Core profile service and optional install root from instll/install.
+# Bare-Mac uninstall: no Homebrew/Xcode assumptions.
+#
 # Usage:
 #   curl -fsSL instll.sh/inem/tap-core/uninstall | sh
-#   TAP_PURGE=1 curl -fsSL instll.sh/inem/tap-core/uninstall | sh   # also delete TAP_ROOT
+#   TAP_PURGE=1 curl -fsSL instll.sh/inem/tap-core/uninstall | sh
 
 set -euo pipefail
 
@@ -11,13 +13,32 @@ BIN_DIR="${TAP_BIN_DIR:-$HOME/.local/bin}"
 WRAPPER="$BIN_DIR/tap"
 PROFILE="$ROOT/profile"
 CHECKOUT="$ROOT/checkout"
+MARK="$ROOT/install.json"
 PURGE="${TAP_PURGE:-0}"
 
 info() { echo "tap-core: $*"; }
 
-if [ -f "$CHECKOUT/tap" ] && [ -d "$PROFILE" ]; then
-  python3 "$CHECKOUT/tap" --profile "$PROFILE" off >/dev/null 2>&1 || true
-  python3 "$CHECKOUT/tap" --profile "$PROFILE" uninstall >/dev/null 2>&1 || true
+python_bin() {
+  if [ -f "$MARK" ]; then
+    # Prefer the interpreter recorded at install time.
+    local recorded
+    recorded="$(sed -n 's/.*"python": "\(.*\)".*/\1/p' "$MARK" | head -1)"
+    if [ -n "$recorded" ] && [ -x "$recorded" ]; then
+      echo "$recorded"
+      return
+    fi
+  fi
+  if [ -x "$ROOT/python/bin/python3" ]; then
+    echo "$ROOT/python/bin/python3"
+    return
+  fi
+  command -v python3 2>/dev/null || true
+}
+
+PY="$(python_bin)"
+if [ -n "$PY" ] && [ -f "$CHECKOUT/tap" ] && [ -d "$PROFILE" ]; then
+  "$PY" "$CHECKOUT/tap" --profile "$PROFILE" off >/dev/null 2>&1 || true
+  "$PY" "$CHECKOUT/tap" --profile "$PROFILE" uninstall >/dev/null 2>&1 || true
   info "profile service removed"
 fi
 
@@ -30,5 +51,5 @@ if [ "$PURGE" = 1 ]; then
   rm -rf "$ROOT"
   info "purged $ROOT"
 else
-  info "kept $ROOT (set TAP_PURGE=1 to delete data/checkout/backend)"
+  info "kept $ROOT (set TAP_PURGE=1 to delete data/checkout/backend/python)"
 fi

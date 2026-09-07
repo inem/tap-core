@@ -47,8 +47,9 @@ curl -fsSL instll.sh/inem/tap-core | sh
 ```
 
 It places a pinned mitmproxy backend, a checkout, and an explicit profile under
-`~/.tap-core`. It does not yet satisfy signed delivery, CA trust automation or
-clean-Mac acceptance in #7/#15.
+`~/.tap-core` on bare arm64 or Intel Macs (downloads portable Python when the
+system one is missing/stub). It does not yet satisfy signed delivery, CA trust
+automation or clean-Mac acceptance in #7/#15.
 [Capture record v1 and journal positions](docs/capture-records.md) define the
 current storage input for independent readers, including legacy compatibility
 and explicit errors when retention removes a saved position.
