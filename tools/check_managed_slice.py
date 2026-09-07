@@ -40,6 +40,7 @@ def main():
     adapter = MacOS()
     before = adapter.network_state()
     report = {'scope':'managed development profile, synthetic loopback HTTP/WS; not clean-Mac or installed pack',
+              'source_commit':run(['git','-C',ROOT,'rev-parse','HEAD']).strip(),
               'python':platform.python_version(), 'macOS':platform.mac_ver()[0],
               'bun':run([args.bun,'--version']).strip(), 'node':run([args.node,'--version']).strip(),
               'backend':run([args.backend,'--version']).splitlines()[0],
@@ -151,6 +152,17 @@ def main():
                         value=json.loads(run(prefix+['status']))['components']
                         return value.get('phase')=='failed' and 'budget exhausted' in (value.get('error') or '')
                     wait(exhausted,'controller restart budget exhausted',seconds=20)
+            # Observe the loaded job remain without a PID beyond two throttle
+            # intervals; a failure message alone does not prove retries stopped.
+            wait(lambda: adapter.service_pid(Job(profile)) is None,'controller parked after exhausted budget')
+            starts=(profile_root/'state/component-starts.json').read_bytes()
+            deadline=time.monotonic()+7
+            while time.monotonic()<deadline:
+                assert adapter.service_loaded(Job(profile))
+                assert adapter.service_pid(Job(profile)) is None
+                assert (profile_root/'state/component-starts.json').read_bytes()==starts
+                time.sleep(0.5)
+            report['controller_budget_no_restart_observation_seconds']=7
             run(prefix+['off'])
             report['controller_restart_budget_exhausted']=True
             # A foreign listener must survive failed on; the proxy must unwind.
