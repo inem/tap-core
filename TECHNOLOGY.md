@@ -74,6 +74,30 @@ explicitly. Core must not discover it accidentally through an author's mise or
 neighboring checkout. Pack dependency installation and clean-Mac runtime delivery
 remain acceptance work; this decision does not claim those installers exist.
 
+## Routing decision for the first release (2026-09-07)
+
+The first release uses the existing explicit HTTP(S) proxy backend: either clients
+configure its endpoint themselves (`routing: explicit`) or TAP manages supported
+macOS system proxy settings with snapshot/recovery (`routing: system`). This is a
+release scope decision, not evidence that clean-Mac packaging or all TLS policy
+checks have passed. Applications ignoring proxy settings are outside this path.
+
+Local Capture is the first candidate for a second routing adapter, not a release
+prerequisite. Its experimental startup reached the macOS Network Extension user
+approval boundary. It is not advertised as supported process routing. Native
+selection/attribution, restart/helpers, unknown-source handling, coexistence and
+shared-extension lifetime must be accepted in #6 before it becomes available;
+installation/permissions/update/removal acceptance belongs to #7.
+
+Both adapters feed the same capture/mutation/injection pipeline. The common
+boundary must not pretend their capabilities are identical: proxy does not
+provide per-process enforcement, User-Agent is not process identity, and a
+requested application constraint must fail explicitly if unsupported. Missing
+native capability never silently broadens capture to all system proxy traffic.
+Start with one routing choice per profile; combined modes require their own
+acceptance. No custom native helper is justified without a demonstrated gap in
+the existing backend. See [#3's evidence and handoff](docs/local-capture-acceptance.md).
+
 ## Dependency and packaging decisions still open
 
 - Exact supported versions and distribution of mitmproxy/Python/Bun. The
