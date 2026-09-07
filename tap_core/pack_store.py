@@ -1,8 +1,9 @@
 """Immutable pack artifacts and profile-local activation state.
 
-The first installed binding is deliberately narrow: ordered classic browser
-scripts on the existing profile bridge. Other manifest roles remain valid but
-cannot be enabled until their host bindings are implemented.
+Installed host bindings: page/browser-scripts-v1, reader/python-jsonl-v1 and
+handler/python-jsonl-v1. Other manifest roles remain valid but cannot be enabled
+until their host bindings exist. No second pack store — projections feed the
+existing bridge composition and managed components surfaces.
 """
 
 import argparse
@@ -23,6 +24,7 @@ from .packs import (ID, VERSION, PackError, check_activation, load_manifest,
 REGISTRY_VERSION = 1
 MAX_ARCHIVE_FILES = 257  # pack.json plus the manifest's 256 files
 MAX_ARCHIVE_BYTES = 32 * 1024 * 1024
+HOST_ROLES = frozenset({"page", "reader", "handler"})
 
 
 def _private_directory(path):
@@ -307,7 +309,34 @@ class PackStore:
         from .bridge import configuration
         return configuration(base)
 
-    def _effective_bridge(self, registry, base):
+    def _profile_components(self):
+        try:
+            profile = json.loads((self.root / "profile.json").read_text(encoding="utf-8"),
+                                 object_pairs_hook=no_duplicate_keys)
+            return profile.get("components")
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise PackError(f"profile configuration: {error}") from error
+
+    def _require_host_entrypoints(self, manifest):
+        roles = set(manifest["entrypoints"])
+        unsupported = roles - HOST_ROLES
+        require(not unsupported,
+                "installed host has no binding for: " + ", ".join(sorted(unsupported)))
+        require(bool(roles), "pack has no entrypoints")
+        page = manifest["entrypoints"].get("page")
+        if page is not None:
+            require(page.get("interface") == "browser-scripts-v1"
+                    and set(page) == {"interface", "uses"},
+                    "page entrypoint requires browser-scripts-v1 uses binding")
+        for role in ("reader", "handler"):
+            entry = manifest["entrypoints"].get(role)
+            if entry is None:
+                continue
+            require(entry.get("interface") == "python-jsonl-v1"
+                    and type(entry.get("file")) is str and entry["file"] in manifest["files"],
+                    f"{role} entrypoint requires python-jsonl-v1 file binding")
+
+    def _enabled_packs(self, registry):
         enabled = []
         for pack_id in sorted(registry["packs"]):
             record = registry["packs"][pack_id]
@@ -318,26 +347,42 @@ class PackStore:
             check_activation(manifest, grants["origins"], grants["capabilities"],
                              grants["dependencies"])
             resolve_config(manifest, record["config"])
-            page = manifest["entrypoints"].get("page")
-            require(set(manifest["entrypoints"]) == {"page"} and page is not None
-                    and page["interface"] == "browser-scripts-v1",
-                    "enabled pack has no installed host binding")
-            enabled.append((pack_id, root, manifest, page, record))
-        if not enabled:
+            self._require_host_entrypoints(manifest)
+            enabled.append((pack_id, root, manifest, record))
+        return enabled
+
+    def _effective_bridge(self, registry, base):
+        enabled = self._enabled_packs(registry)
+        page_packs = []
+        origin_packs = []
+        for pack_id, root, manifest, record in enabled:
+            roles = set(manifest["entrypoints"])
+            if "page" in roles:
+                page_packs.append((pack_id, root, manifest, manifest["entrypoints"]["page"], record))
+            if roles & {"page", "handler"}:
+                origin_packs.append((pack_id, manifest))
+        if not page_packs and not origin_packs:
             return base
         require(base is not None and base.get("enabled") is True,
-                "enabled page packs require an enabled profile bridge")
+                "enabled page/handler packs require an enabled profile bridge")
 
         result = json.loads(json.dumps(base))
         base_origins = list(result["allow_origins"])
         script_origins = [list(base_origins) for _ in result["page_scripts"]]
-        declarations = {}
-        use_orders = []
-        for pack_id, root, manifest, page, record in enabled:
-            origins = manifest["access"]["origins"]
-            for origin in origins:
+        for _pack_id, manifest in origin_packs:
+            for origin in manifest["access"]["origins"]:
                 if origin not in result["allow_origins"]:
                     result["allow_origins"].append(origin)
+        if not page_packs:
+            from .bridge import configuration
+            configuration(result, script_origins)
+            result["page_script_origins"] = script_origins
+            return result
+
+        declarations = {}
+        use_orders = []
+        for pack_id, root, manifest, page, record in page_packs:
+            origins = manifest["access"]["origins"]
             use_orders.append({"pack": pack_id, "origins": tuple(origins),
                                "resources": tuple(use["id"] for use in page["uses"])})
             resources = {(resource["id"], resource["version"]): resource
@@ -379,6 +424,53 @@ class PackStore:
         result["page_script_origins"] = script_origins
         return result
 
+    def _effective_components(self, registry, base):
+        """Project enabled pack reader/handler entrypoints onto managed components."""
+        projected_readers = {}
+        projected_handlers = {}
+        for pack_id, root, manifest, record in self._enabled_packs(registry):
+            config = resolve_config(manifest, record["config"])
+            reader = manifest["entrypoints"].get("reader")
+            if reader is not None:
+                path = (root / reader["file"]).resolve()
+                require(path.is_file() and not path.is_symlink() and path.parent == root.resolve(),
+                        f"reader file missing or unsafe: {pack_id}")
+                projected_readers[pack_id] = {
+                    "version": 1,
+                    "revision": f"{pack_id}@{manifest['version']}",
+                    "command": [None, str(path)],  # python filled after base check
+                    "config": config,
+                }
+            handler = manifest["entrypoints"].get("handler")
+            if handler is not None:
+                path = (root / handler["file"]).resolve()
+                require(path.is_file() and not path.is_symlink() and path.parent == root.resolve(),
+                        f"handler file missing or unsafe: {pack_id}")
+                projected_handlers[pack_id] = {
+                    "command": [None, str(path)],
+                    "config": config,
+                    "origins": list(manifest["access"]["origins"]),
+                }
+        if not projected_readers and not projected_handlers:
+            return base
+        require(base is not None and type(base) is dict
+                and type(base.get("python")) is str and Path(base["python"]).is_absolute()
+                and type(base.get("bun")) is str and Path(base["bun"]).is_absolute(),
+                "enabled pack readers/handlers require profile components with absolute python/bun")
+        result = json.loads(json.dumps(base))
+        python = result["python"]
+        for name, spec in projected_readers.items():
+            require(name not in result["readers"],
+                    f"pack reader conflicts with configured reader name: {name}")
+            spec["command"][0] = python
+            result["readers"][name] = spec
+        for name, spec in projected_handlers.items():
+            require(name not in result["handlers"],
+                    f"pack handler conflicts with configured handler name: {name}")
+            spec["command"][0] = python
+            result["handlers"][name] = spec
+        return result
+
     def enable(self, pack_id, version=None, *, origins=(), capabilities=(), dependencies=None,
                config=None):
         registry = self.load()
@@ -388,11 +480,7 @@ class PackStore:
         require(type(version) is str, "enable requires an installed --version")
         root, manifest = self.verify(registry, pack_id, version)
         check_activation(manifest, origins, capabilities, dependencies or {})
-        unsupported = set(manifest["entrypoints"]) - {"page"}
-        page = manifest["entrypoints"].get("page")
-        require(not unsupported and page is not None
-                and page["interface"] == "browser-scripts-v1",
-                "installed host currently binds only page/browser-scripts-v1 packs")
+        self._require_host_entrypoints(manifest)
         overrides = resolve_config(manifest, config)
         candidate = json.loads(json.dumps(registry))
         candidate_record = self._record(candidate, pack_id)
@@ -405,6 +493,7 @@ class PackStore:
                                         "dependencies": dict(dependencies or {})},
                                 config=overrides)
         self._effective_bridge(candidate, self._profile_bridge())
+        self._effective_components(candidate, self._profile_components())
         self.save(candidate)
         return {"id": pack_id, "version": version, "enabled": True,
                 "code": str(root), "applies": "next profile on"}
@@ -430,11 +519,13 @@ class PackStore:
         grants = record["grants"]
         check_activation(manifest, grants["origins"], grants["capabilities"], grants["dependencies"])
         resolve_config(manifest, record["config"])
+        self._require_host_entrypoints(manifest)
         candidate = json.loads(json.dumps(registry))
         candidate_record = self._record(candidate, pack_id)
         candidate_record["history"].pop()
         candidate_record["selected"] = version
         self._effective_bridge(candidate, self._profile_bridge())
+        self._effective_components(candidate, self._profile_components())
         self.save(candidate)
         return {"id": pack_id, "version": version, "enabled": True,
                 "code": str(root), "applies": "next profile on"}
@@ -475,6 +566,9 @@ class PackStore:
 
     def effective_bridge(self, base):
         return self._effective_bridge(self.load(), base)
+
+    def effective_components(self, base):
+        return self._effective_components(self.load(), base)
 
 
 def _parse_dependency(values):

@@ -1,0 +1,80 @@
+{
+  "manifest_version": 1,
+  "id": "fixture.installed-linked",
+  "version": "0.1.0",
+  "requires": {
+    "pack_api": 1,
+    "dependencies": []
+  },
+  "files": [
+    "ui.js",
+    "feature.js",
+    "reader.py",
+    "handler.py"
+  ],
+  "resources": [
+    {
+      "contract": "tap.page-resource/v1",
+      "id": "fixture.ui",
+      "version": "1.0.0",
+      "kind": "browser-classic-script",
+      "file": "ui.js",
+      "sha256": "84c9ae9fe2827af82293ef9ce121f24382716ce38429d934d3062bc7c61300ea",
+      "license": "MIT",
+      "source_revision": "fixture-v1"
+    },
+    {
+      "contract": "tap.page-resource/v1",
+      "id": "fixture.linked-feature",
+      "version": "0.1.0",
+      "kind": "browser-classic-script",
+      "file": "feature.js",
+      "sha256": "ea658f432e8eac2fec52f14eaa792adda26e630533c82443b503f493aa45695a",
+      "license": "MIT",
+      "source_revision": "fixture-v1"
+    }
+  ],
+  "entrypoints": {
+    "page": {
+      "interface": "browser-scripts-v1",
+      "uses": [
+        {
+          "id": "fixture.ui",
+          "version": "1.0.0"
+        },
+        {
+          "id": "fixture.linked-feature",
+          "version": "0.1.0"
+        }
+      ]
+    },
+    "reader": {
+      "file": "reader.py",
+      "interface": "python-jsonl-v1"
+    },
+    "handler": {
+      "file": "handler.py",
+      "interface": "python-jsonl-v1"
+    }
+  },
+  "config": {
+    "prefix": {
+      "type": "string",
+      "default": "linked"
+    },
+    "reply-prefix": {
+      "type": "string",
+      "default": "linked:"
+    }
+  },
+  "access": {
+    "origins": [
+      "https://fixture.example"
+    ],
+    "capabilities": [
+      "page.inject",
+      "capture.read",
+      "bridge.handle"
+    ]
+  }
+}

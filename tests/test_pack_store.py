@@ -318,6 +318,67 @@ class PackStoreTests(unittest.TestCase):
         installed = self.store.effective_bridge(bridge())["page_scripts"]
         self.assertTrue(all(str(self.profile / "resources/page") in path for path in installed))
 
+    def test_linked_pack_projects_reader_handler_and_hub_origins(self):
+        import sys
+        linked = Path(__file__).resolve().parent.parent / "fixtures/packs/installed-linked"
+        components = {
+            "version": 1,
+            "python": sys.executable,
+            "bun": "/usr/bin/true",
+            "readers": {},
+            "handlers": {},
+        }
+        (self.profile / "profile.json").write_text(json.dumps({
+            "bridge": bridge(), "components": components}) + "\n")
+        artifact = self.artifact(linked, "linked.tap-pack")
+        self.store.install(artifact)
+        with self.assertRaisesRegex(PackError, "no binding for: mutator"):
+            # page-bridge still rejected (mutator + browser-module-v1)
+            bridge_pack = Path(__file__).resolve().parent.parent / "fixtures/packs/page-bridge"
+            bad = self.artifact(bridge_pack, "bad.tap-pack")
+            self.store.install(bad)
+            self.store.enable("example.page-bridge", "0.1.0",
+                              origins=["https://fixture.example"],
+                              capabilities=["response.mutate", "page.inject", "bridge.handle"])
+        self.store.enable("fixture.installed-linked", "0.1.0",
+                          origins=["https://fixture.example"],
+                          capabilities=["page.inject", "capture.read", "bridge.handle"])
+        effective_bridge = self.store.effective_bridge(bridge())
+        self.assertIn("https://fixture.example", effective_bridge["allow_origins"])
+        self.assertTrue(any("fixture.ui" in path for path in effective_bridge["page_scripts"]))
+        effective = self.store.effective_components(components)
+        reader = effective["readers"]["fixture.installed-linked"]
+        handler = effective["handlers"]["fixture.installed-linked"]
+        self.assertEqual(reader["command"][0], sys.executable)
+        self.assertTrue(reader["command"][1].endswith("/reader.py"))
+        self.assertEqual(handler["origins"], ["https://fixture.example"])
+        self.assertTrue(handler["command"][1].endswith("/handler.py"))
+        # Missing handler grant origin stays out of handler binding when excluded from access —
+        # user exclusion on bridge still applies via effective allow list.
+        excluded = dict(bridge(), exclude_origins=["https://fixture.example"])
+        from tap_core.bridge import decision
+        self.assertFalse(decision(dict(effective_bridge, exclude_origins=["https://fixture.example"]),
+                                  "https://fixture.example")["allowed"])
+
+    def test_reader_only_pack_enable_without_page_scripts(self):
+        import sys
+        reader_src = Path(__file__).resolve().parent.parent / "fixtures/packs/reader"
+        components = {
+            "version": 1, "python": sys.executable, "bun": "/usr/bin/true",
+            "readers": {}, "handlers": {},
+        }
+        (self.profile / "profile.json").write_text(json.dumps({
+            "bridge": bridge(), "components": components}) + "\n")
+        artifact = self.artifact(reader_src, "reader.tap-pack")
+        self.store.install(artifact)
+        self.store.enable("example.reader", "0.1.0",
+                          origins=["https://fixture.example"],
+                          capabilities=["capture.read"])
+        self.assertEqual(self.store.effective_bridge(bridge()), bridge())
+        projected = self.store.effective_components(components)
+        self.assertIn("example.reader", projected["readers"])
+        self.assertEqual(projected["handlers"], {})
+
 
 if __name__ == "__main__":
     unittest.main()

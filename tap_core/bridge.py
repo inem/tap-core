@@ -323,51 +323,18 @@ def effective_configuration(root, base):
                 or type(manifest.get('files')) is not list or len(manifest['files']) > 256
                 or not all(type(name) is str for name in manifest['files'])
                 or len(manifest['files']) != len(set(manifest['files']))
-                or type(manifest.get('entrypoints')) is not dict
-                or set(manifest['entrypoints']) != {'page'}):
+                or type(manifest.get('entrypoints')) is not dict):
             raise ValueError(f'Enabled pack manifest is incompatible: {pack_id}@{version}')
-        page = manifest['entrypoints']['page']
+        roles = set(manifest['entrypoints'])
+        if not roles or not roles <= {'page', 'reader', 'handler'}:
+            raise ValueError(f'Enabled pack has unsupported host roles: {pack_id}@{version}')
         access = manifest.get('access')
-        resources = manifest.get('resources')
-        if (type(page) is not dict or set(page) != {'interface', 'uses'}
-                or page.get('interface') != 'browser-scripts-v1'
-                or type(page.get('uses')) is not list or not page['uses']
-                or type(resources) is not list or not resources
-                or type(access) is not dict or set(access) != {'origins', 'capabilities'}
+        if (type(access) is not dict or set(access) != {'origins', 'capabilities'}
                 or type(access['origins']) is not list or type(access['capabilities']) is not list
                 or not all(type(value) is str for value in access['origins'] + access['capabilities'])
                 or not access['origins'] or len(access['origins']) != len(set(access['origins']))
-                or len(access['capabilities']) != len(set(access['capabilities']))
-                or 'page.inject' not in access['capabilities']):
-            raise ValueError(f'Enabled pack has no installed page binding: {pack_id}@{version}')
-        resource_index = {}
-        for resource in resources:
-            if (type(resource) is not dict
-                    or set(resource) != {'contract', 'id', 'version', 'kind', 'file', 'sha256',
-                                         'license', 'source_revision'}
-                    or resource.get('contract') != RESOURCE_CONTRACT
-                    or type(resource.get('id')) is not str
-                    or not RESOURCE_ID.fullmatch(resource['id'])
-                    or type(resource.get('version')) is not str
-                    or not RESOURCE_VERSION.fullmatch(resource['version'])
-                    or resource.get('kind') != 'browser-classic-script'
-                    or type(resource.get('file')) is not str
-                    or type(resource.get('sha256')) is not str
-                    or not RESOURCE_DIGEST.fullmatch(resource['sha256'])
-                    or not all(type(resource.get(name)) is str and resource[name].strip()
-                               for name in ('license', 'source_revision'))
-                    or (resource['id'], resource['version']) in resource_index):
-                raise ValueError(f'Enabled pack page providers are malformed: {pack_id}@{version}')
-            resource_index[(resource['id'], resource['version'])] = resource
-        use_ids = set()
-        for use in page['uses']:
-            if (type(use) is not dict or set(use) != {'id', 'version'}
-                    or type(use['id']) is not str or not RESOURCE_ID.fullmatch(use['id'])
-                    or use['id'] in use_ids or type(use['version']) is not str
-                    or not RESOURCE_VERSION.fullmatch(use['version'])
-                    or (use['id'], use['version']) not in resource_index):
-                raise ValueError(f'Enabled pack page declarations are malformed: {pack_id}@{version}')
-            use_ids.add(use['id'])
+                or len(access['capabilities']) != len(set(access['capabilities']))):
+            raise ValueError(f'Enabled pack access is malformed: {pack_id}@{version}')
         requested_origins = access['origins']
         requested_capabilities = access['capabilities']
         if (not set(requested_origins) <= set(grants.get('origins', []))
@@ -399,14 +366,53 @@ def effective_configuration(root, base):
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
             if metadata['hashes'].get(name) != digest:
                 raise ValueError(f'Enabled pack integrity check failed: {pack_id}@{version}')
+        if roles & {'page', 'handler'}:
+            for origin in requested_origins:
+                exact_origin(origin)
+                if origin not in result['allow_origins']:
+                    result['allow_origins'].append(origin)
+        if 'page' not in roles:
+            continue
+        page = manifest['entrypoints']['page']
+        resources = manifest.get('resources')
+        if (type(page) is not dict or set(page) != {'interface', 'uses'}
+                or page.get('interface') != 'browser-scripts-v1'
+                or type(page.get('uses')) is not list or not page['uses']
+                or type(resources) is not list or not resources
+                or 'page.inject' not in requested_capabilities):
+            raise ValueError(f'Enabled pack has no installed page binding: {pack_id}@{version}')
+        resource_index = {}
+        for resource in resources:
+            if (type(resource) is not dict
+                    or set(resource) != {'contract', 'id', 'version', 'kind', 'file', 'sha256',
+                                         'license', 'source_revision'}
+                    or resource.get('contract') != RESOURCE_CONTRACT
+                    or type(resource.get('id')) is not str
+                    or not RESOURCE_ID.fullmatch(resource['id'])
+                    or type(resource.get('version')) is not str
+                    or not RESOURCE_VERSION.fullmatch(resource['version'])
+                    or resource.get('kind') != 'browser-classic-script'
+                    or type(resource.get('file')) is not str
+                    or type(resource.get('sha256')) is not str
+                    or not RESOURCE_DIGEST.fullmatch(resource['sha256'])
+                    or not all(type(resource.get(name)) is str and resource[name].strip()
+                               for name in ('license', 'source_revision'))
+                    or (resource['id'], resource['version']) in resource_index):
+                raise ValueError(f'Enabled pack page providers are malformed: {pack_id}@{version}')
+            resource_index[(resource['id'], resource['version'])] = resource
+        use_ids = set()
+        for use in page['uses']:
+            if (type(use) is not dict or set(use) != {'id', 'version'}
+                    or type(use['id']) is not str or not RESOURCE_ID.fullmatch(use['id'])
+                    or use['id'] in use_ids or type(use['version']) is not str
+                    or not RESOURCE_VERSION.fullmatch(use['version'])
+                    or (use['id'], use['version']) not in resource_index):
+                raise ValueError(f'Enabled pack page declarations are malformed: {pack_id}@{version}')
+            use_ids.add(use['id'])
         for resource in resources:
             if (resource['file'] not in expected
                     or metadata['hashes'].get(resource['file']) != resource['sha256']):
                 raise ValueError(f'Enabled pack page script is undeclared: {pack_id}@{version}')
-        for origin in requested_origins:
-            exact_origin(origin)
-            if origin not in result['allow_origins']:
-                result['allow_origins'].append(origin)
         use_orders.append({'pack': pack_id, 'origins': tuple(requested_origins),
                            'resources': tuple(use['id'] for use in page['uses'])})
         for use in page['uses']:
@@ -436,10 +442,11 @@ def effective_configuration(root, base):
             current['origins'].update(requested_origins)
     if not any_enabled:
         return base
-    for resource_id, origins in order_page_resources(declarations, use_orders):
-        declaration = declarations[resource_id]
-        result['page_scripts'].append(declaration['path'])
-        script_origins.append(origins)
+    if declarations:
+        for resource_id, origins in order_page_resources(declarations, use_orders):
+            declaration = declarations[resource_id]
+            result['page_scripts'].append(declaration['path'])
+            script_origins.append(origins)
     configuration(result, script_origins)
     result['page_script_origins'] = script_origins
     return result

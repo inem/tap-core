@@ -58,8 +58,11 @@ def main():
             return 0  # launchd SuccessfulExit:false stops retrying.
         atomic_json(starts_path, {'starts': recent + [time.time()]})
         report('starting')
-        command = [profile.components['python'], '-B', str(ROOT / 'guardian.py'), str(os.getpid()),
-                   profile.components['bun'], str(ROOT / 'hub.mjs'), str(profile.root)]
+        from tap_core.pack_store import PackStore
+        store = PackStore(profile.root)
+        components = store.effective_components(profile.components)
+        command = [components['python'], '-B', str(ROOT / 'guardian.py'), str(os.getpid()),
+                   components['bun'], str(ROOT / 'hub.mjs'), str(profile.root)]
         hub = subprocess.Popen(command, start_new_session=True)
         try:
             deadline, hub_pid = time.monotonic() + 10, None
@@ -73,7 +76,7 @@ def main():
                     stopping.wait(0.1)
             if hub_pid is None:
                 raise RuntimeError('Hub exited before readiness')
-            for name, spec in profile.components['readers'].items():
+            for name, spec in components['readers'].items():
                 rows[name] = {'healthy': False, 'phase': 'starting', 'error': None}
                 thread = threading.Thread(target=reader_loop, args=(name, spec), daemon=True)
                 threads.append(thread)
