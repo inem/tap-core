@@ -1,0 +1,48 @@
+# CI for the controlled, hermetic test set (issue #24). Synthetic fixtures and
+# temporary directories only. This workflow deliberately does NOT run system
+# proxy routing, trust-store changes, or the user's launchd services — the live
+# macOS path (tools/check_runtime.py) stays opt-in and out of CI. See docs/ci.md.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  python-checks:
+    name: Python checks (no Bun)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'          # coordinator minimum_version (runtime-dependencies.json)
+      - name: No Bun on PATH (Python checks must not need it)
+        run: |
+          if command -v bun >/dev/null 2>&1; then
+            echo "Bun is present on this runner; the no-Bun job cannot prove independence."; exit 1
+          fi
+      - name: Unit tests (page fixture auto-skips without Bun)
+        run: python3 -m unittest discover -s tests -v
+      - name: Pack fixtures — Python roles only
+        run: python3 tools/check_pack_fixtures.py
+
+  page-fixture:
+    name: Page fixture (Bun 1.3.11)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11            # baseline observed in TECHNOLOGY.md
+      - name: Pack fixtures — with Bun page check
+        run: python3 tools/check_pack_fixtures.py --bun "$(command -v bun)"
+      - name: Page unittest (requires Bun)
+        run: python3 -m unittest tests.test_packs -v
