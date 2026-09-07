@@ -65,12 +65,23 @@ TAP_PURGE=1 curl -fsSL instll.sh/inem/tap-core/uninstall | sh   # also delete ~/
 
 ## After install
 
+The installer itself runs `uname -m` and `tap doctor` at the end (with
+`PATH` including `~/.local/bin` for that process).
+
+For later shells:
+
 ```sh
 export PATH="$HOME/.local/bin:$PATH"
 tap doctor
-open "$HOME/.tap-core/profile/certificates/mitmproxy-ca-cert.pem"   # trust CA manually
-# Point a browser user-data-dir at http://127.0.0.1:18999
 ```
+
+Trust the CA manually:
+
+```sh
+open "$HOME/.tap-core/profile/certificates/mitmproxy-ca-cert.pem"
+```
+
+Point a browser user-data-dir at `http://127.0.0.1:18999`.
 
 ## Still open for #7 / #15
 

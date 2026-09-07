@@ -191,7 +191,6 @@ start_profile() {
     --routing "$ROUTING" \
     --probe-url "$PROBE_URL"
   "$PYTHON" "$CHECKOUT/tap" --profile "$PROFILE" on
-  "$PYTHON" "$CHECKOUT/tap" --profile "$PROFILE" doctor || true
 }
 
 ensure_python
@@ -218,19 +217,22 @@ TAP Core installed.
   proxy:    http://127.0.0.1:$PORT
   backend:  $BACKEND
 
-PATH (if needed):
+For next shells:
   export PATH="$BIN_DIR:\$PATH"
 
-CA for HTTPS clients (trust manually; installer does not mutate keychain):
+CA (manual trust; installer does not mutate keychain):
   open "$PROFILE/certificates/mitmproxy-ca-cert.pem"
-
-Point a browser/profile at the proxy. System routing was not changed.
 
 Uninstall:
   curl -fsSL instll.sh/inem/tap-core/uninstall | sh
-  # or: $WRAPPER off; $WRAPPER uninstall
-
-Bare Mac note: no Homebrew/Xcode required; Python and mitmproxy are fetched for this CPU.
-This is the first delivery slice for #7 — not a signed release artifact (#15).
 
 EOF
+
+export PATH="$BIN_DIR:$PATH"
+echo "—— live check ——"
+uname -m
+if [ "$SKIP_START" = 1 ]; then
+  info "skip tap doctor (TAP_SKIP_START=1)"
+else
+  tap doctor
+fi
