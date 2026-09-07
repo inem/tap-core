@@ -159,7 +159,9 @@ an execution sandbox or a total disk/memory quota.
 `failed`, `gap`), counters, generation and in-flight ID. This is historical
 state, not an assertion that a PID is alive. A stale `running` phase after crash
 is intentionally visible. Missing state is unconfigured; malformed/unreadable
-state is an error and is never reset automatically. This is a bounded addition,
+state is an error and is never reset automatically. Checkpoint timestamps must
+be finite JSON numbers; NaN, Infinity and exponent overflow fail before status
+serialization or run/replay can change progress. This is a bounded addition,
 not completion of all diagnostics in #13.
 
 A missing journal anchor stops with `gap`. Only explicit replay/new identity may

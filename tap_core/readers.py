@@ -6,6 +6,7 @@ This is not the installed pack host or an external-action exactly-once engine.
 from contextlib import closing
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -106,7 +107,8 @@ class Reader:
                 or (value['inflight'] is not None and not isinstance(value['inflight'], str))
                 or value['phase'] not in ('ready', 'running', 'idle', 'failed', 'gap')
                 or (value['error'] is not None and not isinstance(value['error'], str))
-                or type(value['updated_at']) not in (int, float)):
+                or type(value['updated_at']) not in (int, float)
+                or (type(value['updated_at']) is float and not math.isfinite(value['updated_at']))):
             raise ReaderError('Invalid reader checkpoint; progress was not reset')
         return value
 
