@@ -5,16 +5,19 @@
 #
 # Usage (after main):
 #   curl -fsSL instll.sh/inem/tap-core | sh
-# Branch test:
+# Branch test (after instll.sh @ref is deployed):
+#   curl -fsSL instll.sh/inem/tap-core@issue-7-installer | sh
+# Fallback:
 #   TAP_REF=issue-7-installer curl -fsSL \
-#     https://raw.githubusercontent.com/inem/tap-core/refs/heads/issue-7-installer/instll/install | sh
+#     https://raw.githubusercontent.com/inem/tap-core/issue-7-installer/instll/install | sh
 #
 # Does not mutate the system proxy or keychain. Does not touch a legacy ~/.tap install.
 
 set -euo pipefail
 
 REPO="${TAP_REPO:-inem/tap-core}"
-REF="${TAP_REF:-main}"
+# Default matches this branch so @issue-7-installer installs the same tree.
+REF="${TAP_REF:-issue-7-installer}"
 ROOT="${TAP_ROOT:-$HOME/.tap-core}"
 BIN_DIR="${TAP_BIN_DIR:-$HOME/.local/bin}"
 PORT="${TAP_PORT:-18999}"

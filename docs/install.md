@@ -16,11 +16,17 @@ After this lands on `main`:
 curl -fsSL instll.sh/inem/tap-core | sh
 ```
 
-While testing a branch:
+While testing a branch (needs instll.sh `@ref` support deployed):
+
+```sh
+curl -fsSL instll.sh/inem/tap-core@issue-7-installer | sh
+```
+
+Fallback without `@ref`:
 
 ```sh
 TAP_REF=issue-7-installer curl -fsSL \
-  https://raw.githubusercontent.com/inem/tap-core/refs/heads/issue-7-installer/instll/install | sh
+  https://raw.githubusercontent.com/inem/tap-core/issue-7-installer/instll/install | sh
 ```
 
 What it does:
