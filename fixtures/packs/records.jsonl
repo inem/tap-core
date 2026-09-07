@@ -1,0 +1,3 @@
+{"url":"https://fixture.example/data","status":200,"body":"{\"fixture\":\"tap-core\"}","body_kept":true}
+{"url":"https://unrelated.example/data","status":200,"body":"{\"ignored\":true}"}
+{"url":"https://fixture.example/events","status":200,"streamed":true,"body_kept":false}

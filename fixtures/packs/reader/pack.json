@@ -1,0 +1,10 @@
+{
+  "manifest_version": 1,
+  "id": "example.reader",
+  "version": "0.1.0",
+  "requires": {"pack_api": 1, "dependencies": []},
+  "files": ["reader.py"],
+  "entrypoints": {"reader": {"file": "reader.py", "interface": "python-jsonl-v1"}},
+  "config": {"prefix": {"type": "string", "default": "seen"}},
+  "access": {"origins": ["https://fixture.example"], "capabilities": ["capture.read"]}
+}
