@@ -110,7 +110,7 @@ character, exact preservation of complete records, short reads and writes,
 partial/zero-progress writes, failed rollback, ambiguous completion before an
 exception, close errors, rotation rename/pruning failures, restart recovery,
 timestamp collisions and clock reversal, health publication failure, queue
-overflow and shutdown with a blocked writer. The existing 24 runtime tests also
+overflow and shutdown with a blocked writer. The existing runtime tests also
 pass, including streaming-body handling and preservation of consumer offsets.
 
 These are storage fault fixtures. They neither switch routing nor run a live
