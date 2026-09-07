@@ -6,33 +6,43 @@
 # Usage (after main):
 #   curl -fsSL instll.sh/inem/tap-core | sh
 # Branch test (after instll.sh @ref is deployed):
-#   curl -fsSL instll.sh/inem/tap-core@issue-7-installer | sh
+#   curl -fsSL instll.sh/inem/tap-core@issue-49-installer-managed-runtime \
+#     | TAP_REF=issue-49-installer-managed-runtime bash
 # Fallback:
 #   curl -fsSL \
-#     https://raw.githubusercontent.com/inem/tap-core/issue-7-installer/instll/install | TAP_REF=issue-7-installer bash
+#     https://raw.githubusercontent.com/inem/tap-core/issue-49-installer-managed-runtime/instll/install \
+#     | TAP_REF=issue-49-installer-managed-runtime bash
 #
-# Explicit by default; system routing is opt-in. Never changes keychain trust.
+# System routing by default (legacy TAP behavior). Explicit is opt-in:
+#   curl -fsSL instll.sh/inem/tap-core | TAP_ROUTING=explicit bash
+# Never changes keychain trust by itself; finish-setup owns CA trust.
+# Delivers portable Python, mitmproxy and Bun, then wires managed Hub/readers
+# from the installed checkout (issue #49).
 
 set -euo pipefail
 
 REPO="${TAP_REPO:-inem/tap-core}"
-# Default delivery channel. Override with an exact commit for reproducibility.
+# Release channel. Branch one-liners must pass TAP_REF explicitly (or use @ref + TAP_REF=...).
 REF="${TAP_REF:-main}"
 ROOT="${TAP_ROOT:-$HOME/.tap-core}"
 BIN_DIR="${TAP_BIN_DIR:-$HOME/.local/bin}"
 PORT="${TAP_PORT:-18999}"
-ROUTING="${TAP_ROUTING:-explicit}"
+HUB_PORT="${TAP_HUB_PORT:-$((PORT + 1))}"
+ROUTING="${TAP_ROUTING:-system}"
 PROBE_URL="${TAP_PROBE_URL:-http://example.com/}"
 BACKEND_VERSION="${TAP_BACKEND_VERSION:-12.2.3}"
+BUN_VERSION="${TAP_BUN_VERSION:-1.3.11}"
 PYTHON_BUILD="${TAP_PYTHON_BUILD:-20260901}"
 PYTHON_VERSION="${TAP_PYTHON_VERSION:-3.12.14}"
 SKIP_START="${TAP_SKIP_START:-0}"
 FORCE_BACKEND="${TAP_BACKEND:-}"
 FORCE_PYTHON="${TAP_PYTHON:-}"
+FORCE_BUN="${TAP_BUN:-}"
 
 CHECKOUT="$ROOT/checkout"
 BACKEND_DIR="$ROOT/backend"
 PYTHON_DIR="$ROOT/python"
+BUN_DIR="$ROOT/bun"
 PROFILE="$ROOT/profile"
 WRAPPER="$BIN_DIR/tap"
 MARK="$ROOT/install.json"
@@ -48,10 +58,12 @@ case "$arch" in
   arm64)
     mitm_arch=arm64
     cpython_arch=aarch64
+    bun_asset=darwin-aarch64
     ;;
   x86_64)
     mitm_arch=x86_64
     cpython_arch=x86_64
+    bun_asset=darwin-x64
     ;;
   *)
     fail "unsupported architecture: $arch (need arm64 or x86_64)"
@@ -60,6 +72,7 @@ esac
 
 need curl
 need tar
+need ditto
 
 # Refuse before downloads or writes to an existing installation / command.
 case "$ROOT" in /*) ;; *) fail "TAP_ROOT must be absolute" ;; esac
@@ -68,10 +81,13 @@ case "$BIN_DIR" in /*) ;; *) fail "TAP_BIN_DIR must be absolute" ;; esac
 [ ! -e "$WRAPPER" ] && [ ! -L "$WRAPPER" ] || fail "Command already exists: $WRAPPER; choose another TAP_BIN_DIR"
 case "$ROUTING" in explicit|system) ;; *) fail "TAP_ROUTING must be explicit or system" ;; esac
 case "$SKIP_START" in 0|1) ;; *) fail "TAP_SKIP_START must be 0 or 1" ;; esac
+case "$HUB_PORT" in ''|*[!0-9]*) fail "TAP_HUB_PORT must be an integer" ;; esac
+[ "$HUB_PORT" -ge 1024 ] && [ "$HUB_PORT" -le 65535 ] || fail "TAP_HUB_PORT out of range"
+[ "$HUB_PORT" -ne "$PORT" ] || fail "TAP_HUB_PORT must differ from TAP_PORT"
 umask 077
 # mkdir is exclusive: two installers cannot both take ownership of the root.
 mkdir "$ROOT" || fail "Cannot reserve fresh install root"
-mkdir -p "$BIN_DIR" "$BACKEND_DIR" "$PYTHON_DIR"
+mkdir -p "$BIN_DIR" "$BACKEND_DIR" "$PYTHON_DIR" "$BUN_DIR"
 trap 'code=$?; if [ "$code" != 0 ]; then echo "tap-core: installation incomplete; retained $ROOT for inspection/recovery" >&2; fi' EXIT
 
 python_ok() {
@@ -112,6 +128,44 @@ ensure_python() {
   PYTHON="$PYTHON_DIR/bin/python3"
   python_ok "$PYTHON" || fail "portable CPython failed to run"
   info "python installed at $PYTHON"
+}
+
+ensure_bun() {
+  local current url tmp zip
+  if [ -n "$FORCE_BUN" ]; then
+    [ -x "$FORCE_BUN" ] || fail "TAP_BUN is not executable: $FORCE_BUN"
+    current="$("$FORCE_BUN" --version 2>/dev/null | tr -d '\r' | head -1)"
+    [ "$current" = "$BUN_VERSION" ] || fail "TAP_BUN version $current, need $BUN_VERSION"
+    BUN="$FORCE_BUN"
+    info "bun $BUN_VERSION ok ($BUN)"
+    return
+  fi
+
+  BUN="$BUN_DIR/bin/bun"
+  if [ -x "$BUN" ]; then
+    current="$("$BUN" --version 2>/dev/null | tr -d '\r' | head -1)"
+    if [ "$current" = "$BUN_VERSION" ]; then
+      info "bun $BUN_VERSION ok ($BUN)"
+      return
+    fi
+    info "replacing bun $current with $BUN_VERSION"
+  fi
+
+  url="https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-${bun_asset}.zip"
+  tmp="$(mktemp -d "$ROOT/bun-download.XXXXXX")"
+  zip="$tmp/bun.zip"
+  info "downloading Bun $BUN_VERSION ($bun_asset)"
+  curl -fsSL "$url" -o "$zip"
+  ditto -x -k "$zip" "$tmp/extract"
+  [ -x "$tmp/extract/bun-${bun_asset}/bun" ] || fail "Bun binary missing from $url"
+  rm -rf "$BUN_DIR/bin"
+  mkdir -p "$BUN_DIR/bin"
+  mv "$tmp/extract/bun-${bun_asset}/bun" "$BUN"
+  chmod 700 "$BUN"
+  rm -rf "$tmp"
+  current="$("$BUN" --version 2>/dev/null | tr -d '\r' | head -1)"
+  [ "$current" = "$BUN_VERSION" ] || fail "bun version check failed: $current"
+  info "bun installed at $BUN"
 }
 
 ensure_backend() {
@@ -168,24 +222,63 @@ ensure_checkout() {
   info "checkout at $CHECKOUT"
 }
 
+write_managed() {
+  info "writing managed bridge/components under $ROOT/managed"
+  "$PYTHON" "$CHECKOUT/instll/write_managed.py" \
+    "$ROOT" "$CHECKOUT" "$PYTHON" "$BUN" "$HUB_PORT" "$PROFILE"
+}
+
 write_mark() {
   "$PYTHON" "$CHECKOUT/instll/ownership.py" record \
     "$ROOT" "$WRAPPER" "$PYTHON" "$BACKEND" "$REPO" "$RESOLVED_REF" "$arch" "$PORT" "$ROUTING" "$SKIP_START"
 }
 
+print_finish_hint() {
+  cat <<EOF
+
+────────────────────────────────────────────────────────────
+  Almost done — one command left (Mac password once):
+
+    bash "$CHECKOUT/instll/finish-setup"
+
+  That will: allow system proxy control → trust this CA → tap on.
+  Safe to re-run. Stop with Ctrl-C anytime; nothing is deleted on failure.
+
+  Prefer no system proxy / no sudoers?
+
+    curl -fsSL … | TAP_ROUTING=explicit bash
+    (new TAP_ROOT) or later: tap routing set explicit && tap on
+────────────────────────────────────────────────────────────
+
+EOF
+}
+
 start_profile() {
-  info "installing profile $PROFILE (port $PORT, routing $ROUTING)"
+  info "installing profile $PROFILE (port $PORT, hub $HUB_PORT, routing $ROUTING)"
   "$PYTHON" "$CHECKOUT/tap" --profile "$PROFILE" install \
     --backend "$BACKEND" \
     --port "$PORT" \
     --routing "$ROUTING" \
-    --probe-url "$PROBE_URL"
+    --probe-url "$PROBE_URL" \
+    --bridge-config "$ROOT/managed/bridge.json" \
+    --components-config "$ROOT/managed/components.json"
+  if [ "$ROUTING" = system ]; then
+    # curl|sh cannot collect a Mac password on the script pipe. Hand the user one
+    # guided command that does sudoers + CA trust + on with a single sudo ticket.
+    info "profile installed; system proxy/CA need an interactive finish step"
+    STARTED=0
+    return
+  fi
   "$PYTHON" "$CHECKOUT/tap" --profile "$PROFILE" on
+  STARTED=1
 }
 
+STARTED=0
 ensure_python
+ensure_bun
 ensure_backend
 ensure_checkout
+write_managed
 write_mark
 
 if [ "$SKIP_START" = 1 ]; then
@@ -201,27 +294,38 @@ TAP Core installed.
   arch:     $arch
   root:     $ROOT
   python:   $PYTHON
+  bun:      $BUN
   command:  $WRAPPER
   profile:  $PROFILE
   proxy:    http://127.0.0.1:$PORT
+  hub:      http://127.0.0.1:$HUB_PORT
   backend:  $BACKEND
+  routing:  $ROUTING
 
 For next shells:
   export PATH="$BIN_DIR:\$PATH"
 
-CA (manual trust; installer does not mutate keychain):
-  open "$PROFILE/certificates/mitmproxy-ca-cert.pem"
+CA (HTTPS):
+  trusted by finish-setup; or open "$PROFILE/certificates/mitmproxy-ca-cert.pem"
 
 Uninstall:
-  "$PYTHON" "$CHECKOUT/instll/ownership.py" remove "$ROOT" 0
+  bash "$CHECKOUT/instll/uninstall"
 
 EOF
+
+if [ "$ROUTING" = system ] && [ "$STARTED" != 1 ] && [ "$SKIP_START" != 1 ]; then
+  print_finish_hint
+fi
 
 export PATH="$BIN_DIR:$PATH"
 echo "—— live check ——"
 uname -m
 if [ "$SKIP_START" = 1 ]; then
-  info "skip tap doctor (TAP_SKIP_START=1)"
+  info "skip tap doctor / hub smoke (TAP_SKIP_START=1)"
+elif [ "$STARTED" != 1 ]; then
+  info "next: bash \"$CHECKOUT/instll/finish-setup\""
 else
   tap doctor
+  info "Hub HTTP/WS smoke"
+  "$BUN" "$CHECKOUT/instll/smoke_hub.mjs" "$PROFILE"
 fi

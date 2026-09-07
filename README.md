@@ -46,10 +46,10 @@ A first [one-line installer](docs/install.md) exists for #7:
 curl -fsSL instll.sh/inem/tap-core | bash
 ```
 
-It places a pinned mitmproxy backend, a checkout, and an explicit profile under
-`~/.tap-core` with arm64/Intel download paths and its own portable Python
-(unless explicitly supplied). It does not yet satisfy signed delivery, CA trust
-automation or clean-Mac acceptance in #7/#15.
+It places pinned Python, Bun **1.3.11**, mitmproxy **12.2.3**, a checkout, and an
+explicit managed profile (Hub + example reader/handlers) under `~/.tap-core` with
+arm64/Intel download paths. It does not yet satisfy signed delivery, CA trust
+automation, in-place update or clean-Mac acceptance in #7/#15.
 [Capture record v1 and journal positions](docs/capture-records.md) define the
 current storage input for independent readers, including legacy compatibility
 and explicit errors when retention removes a saved position.

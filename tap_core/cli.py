@@ -106,6 +106,18 @@ def doctor(profile, adapter):
         result["backend_error"] = str(error)
     result["ca_file_present"] = (profile.root / "certificates/mitmproxy-ca-cert.pem").is_file()
     result["ca_trust"] = "not_verified; HTTPS clients must trust this profile CA explicitly"
+    if profile.routing == "system":
+        listed = adapter.run(["/usr/bin/sudo", "-n", "-l"], check=False).stdout
+        ready = "TAP_CORE_PROXY" in listed or "networksetup -setwebproxy" in listed
+        result["sudoers"] = {
+            "ready": ready,
+            "fix": None if ready else
+            'bash "$HOME/.tap-core/checkout/instll/finish-setup"',
+        }
+        if not ready:
+            result["inspection_errors"]["sudoers"] = (
+                "system routing needs finish-setup (sudoers + CA trust); "
+                "run the finish-setup from this installation's checkout")
     result["traffic_probe"] = None
     if result["port_owned"] is True:
         try:

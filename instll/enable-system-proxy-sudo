@@ -1,0 +1,68 @@
+#!/bin/bash
+# One-time sudoers drop-in so system routing can call networksetup via sudo -n.
+# Owned per install root: unique drop-in path + uppercase Cmnd_Alias. Refuses to
+# overwrite a foreign, symlinked, or admin-edited file. Prefer finish-setup.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="${TAP_ROOT:-$(cd "$HERE/../.." && pwd)}"
+SNIPPET="${1:-$HERE/sudoers.snippet}"
+USER_NAME="${TAP_SUDOERS_USER:-$(id -un)}"
+MARK="$ROOT/install.json"
+
+fail() { echo "tap-core: $*" >&2; exit 1; }
+[ -f "$SNIPPET" ] || fail "missing sudoers snippet: $SNIPPET"
+[ -f "$MARK" ] || fail "missing ownership record: $MARK"
+case "$USER_NAME" in ''|*[!A-Za-z0-9._-]*) fail "refusing sudoers user name: $USER_NAME" ;; esac
+case "$ROOT" in /*) ;; *) fail "TAP_ROOT must be absolute" ;; esac
+
+"$ROOT/interpreter" >/dev/null 2>&1 || true
+PY="$(head -1 "$ROOT/interpreter")"
+[ -x "$PY" ] || fail "recorded interpreter unavailable: $PY"
+
+# File tag may be lowercase; Cmnd_Alias names must be uppercase (visudo).
+tag="$(printf '%s' "$ROOT" | shasum -a 256 | awk '{print substr($1,1,12)}')"
+tag_alias="$(printf '%s' "$tag" | tr 'a-z' 'A-Z')"
+ALIAS="TAP_CORE_PROXY_${tag_alias}"
+TARGET="${TAP_SUDOERS_PATH:-/etc/sudoers.d/tap-core-${tag}}"
+tmp="$(mktemp)"
+trap 'rm -f "$tmp"' EXIT
+
+# Render unique alias + tagged ownership comment so uninstall can match exactly.
+{
+  echo "# tap-core-owned root=$ROOT tag=$tag"
+  sed -e "s/__TAP_USER__/${USER_NAME}/g" -e "s/TAP_CORE_PROXY/${ALIAS}/g" "$SNIPPET" \
+    | grep -v '^#'
+} > "$tmp"
+visudo -c -f "$tmp" >/dev/null || fail "generated sudoers snippet failed visudo -c"
+new_hash="$(shasum -a 256 "$tmp" | awk '{print $1}')"
+recorded="$("$PY" -c 'import json,sys; g=(json.load(open(sys.argv[1])).get("grants") or {}).get("sudoers") or {}; print(g.get("sha256") or "")' "$MARK")"
+
+if [ -L "$TARGET" ]; then
+  fail "refusing to follow sudoers symlink: $TARGET"
+fi
+
+if [ -e "$TARGET" ]; then
+  current_hash="$(sudo shasum -a 256 "$TARGET" | awk '{print $1}')"
+  owned="$(sudo grep -c "tap-core-owned root=$ROOT tag=$tag" "$TARGET" 2>/dev/null || true)"
+  if [ "$owned" -ge 1 ] && [ "$current_hash" = "$new_hash" ]; then
+    echo "tap-core: sudoers already owned by this install ($TARGET)"
+  elif [ "$owned" -ge 1 ] && [ -n "$recorded" ] && [ "$current_hash" = "$recorded" ]; then
+    echo "tap-core: updating owned sudoers drop-in $TARGET"
+    sudo install -m 440 "$tmp" "$TARGET"
+  else
+    fail "refusing to overwrite foreign or edited sudoers file: $TARGET (inspect and remove manually if stale)"
+  fi
+else
+  echo "tap-core: installing $TARGET for user $USER_NAME (password once)"
+  sudo install -m 440 "$tmp" "$TARGET"
+fi
+sudo visudo -c -f "$TARGET" >/dev/null || fail "installed drop-in failed visudo -c; inspect $TARGET"
+
+"$PY" "$HERE/ownership.py" grant-sudoers "$ROOT" "$TARGET" "$new_hash" "$ALIAS"
+
+if sudo -n -l 2>/dev/null | grep -Eq "$ALIAS|networksetup -setwebproxy"; then
+  echo "tap-core: sudoers ready ($TARGET)"
+else
+  echo "tap-core: drop-in written; open a new shell if sudo -n is still denied"
+fi

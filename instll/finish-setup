@@ -1,0 +1,108 @@
+#!/bin/bash
+# One interactive finish step after the one-line installer (system routing).
+# Bound to the installation that contains this script (not a hardcoded ~/.tap-core).
+# Asks for the Mac password once, then: sudoers → trust this CA → tap on.
+# Safe to re-run. Does not purge data. Does not use `sudo tap`.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/../.." && pwd)"
+MARK="$ROOT/install.json"
+CHECKOUT="$ROOT/checkout"
+PROFILE="$ROOT/profile"
+CERT="$PROFILE/certificates/mitmproxy-ca-cert.pem"
+
+fail() { echo "tap-core: $*" >&2; exit 1; }
+info() { echo "tap-core: $*"; }
+
+[ -f "$MARK" ] || fail "missing ownership record $MARK"
+[ -x "$HERE/enable-system-proxy-sudo" ] || fail "missing enable-system-proxy-sudo beside finish-setup"
+[ -f "$CERT" ] || fail "missing profile CA $CERT"
+
+PY="$(head -1 "$ROOT/interpreter")"
+[ -x "$PY" ] || fail "recorded interpreter unavailable: $PY"
+eval "$("$PY" - <<PY
+import json
+from pathlib import Path
+data = json.loads(Path("$MARK").read_text())
+assert data.get("root") == "$ROOT", data.get("root")
+print("WRAPPER=" + repr(data["wrapper"]))
+print("BIN_DIR=" + repr(str(Path(data["wrapper"]).parent)))
+PY
+)"
+[ -x "$WRAPPER" ] || fail "recorded wrapper missing or not executable: $WRAPPER"
+# Refuse a replaced command (same check uninstall uses).
+"$PY" - <<PY
+import hashlib, json
+from pathlib import Path
+data = json.loads(Path("$MARK").read_text())
+wrapper = Path(data["wrapper"])
+digest = hashlib.sha256(wrapper.read_bytes()).hexdigest()
+assert digest == data["wrapper_sha256"], "Command was replaced by another owner; refusing finish-setup"
+PY
+
+export PATH="$BIN_DIR:$PATH"
+
+cat <<EOF
+
+TAP Core — finish setup (about one minute)
+------------------------------------------
+Install root: $ROOT
+
+This will ask for your Mac login password once, then:
+
+  1. Allow TAP to turn the system proxy on/off without asking every time
+     (only networksetup proxy subcommands; owned drop-in for this install)
+  2. Trust THIS installation's HTTPS certificate authority
+  3. Start TAP (system proxy → 127.0.0.1)
+
+You can stop with Ctrl-C. Nothing is deleted if a step fails.
+Re-run this same command after fixing a failure.
+
+EOF
+
+if [ -r /dev/tty ]; then
+  printf 'Press Enter to continue (or Ctrl-C to cancel)... '
+  read -r _ < /dev/tty
+else
+  info "no TTY — continuing without pause"
+fi
+
+info "step 1/3 — sudoers for system proxy"
+TAP_ROOT="$ROOT" bash "$HERE/enable-system-proxy-sudo"
+sudo -v || fail "sudo ticket expired; re-run finish-setup"
+
+info "step 2/3 — trust profile CA in System keychain"
+FP="$(openssl x509 -in "$CERT" -noout -fingerprint -sha256 | sed 's/^.*=//;s/://g' | tr 'A-F' 'a-f')"
+if sudo security add-trusted-cert -d -r trustRoot \
+     -k /Library/Keychains/System.keychain \
+     "$CERT"; then
+  info "CA trusted (sha256=$FP)"
+  "$PY" "$HERE/ownership.py" grant-ca "$ROOT" "$CERT" "$FP"
+else
+  fail "CA trust failed. If Keychain has an older mitmproxy from another install, remove only that entry and re-run"
+fi
+
+info "step 3/3 — tap on"
+"$WRAPPER" --profile "$PROFILE" on
+
+cat <<EOF
+
+Done.
+  New shells:   export PATH="$BIN_DIR:\$PATH"
+  Check:        tap doctor
+  Expect:       Wi-Fi HTTP proxy → 127.0.0.1:18999
+
+If a browser still warns, quit it fully and reopen (old CA may be cached).
+
+EOF
+
+if doctor_out="$("$WRAPPER" --profile "$PROFILE" doctor 2>/dev/null)"; then
+  printf '%s\n' "$doctor_out" | "$PY" -c '
+import json,sys
+d=json.load(sys.stdin)
+s=(d.get("sudoers") or {})
+print("tap-core: healthy=%s routing=%s sudoers=%s proxy=%s" % (
+    d.get("healthy"), d.get("routing"), s.get("ready"), d.get("system_proxy_verified")))
+' 2>/dev/null || true
+fi

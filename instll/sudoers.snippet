@@ -1,0 +1,17 @@
+# tap-core: allow `tap on/off` / routing to flip the system proxy without a password.
+# Scoped to ONLY the proxy subcommands of networksetup — nothing else.
+#
+# Prefer the helper (substitutes your user and syntax-checks the drop-in):
+#   bash "$HOME/.tap-core/checkout/instll/enable-system-proxy-sudo"
+#
+# Or install manually:
+#   sudo visudo -f /etc/sudoers.d/tap-core
+# paste the two directive lines below (replace __TAP_USER__), save.
+# visudo refuses a bad file, so a typo cannot lock you out of sudo.
+
+Cmnd_Alias TAP_CORE_PROXY = /usr/sbin/networksetup -setwebproxy *, \
+                            /usr/sbin/networksetup -setsecurewebproxy *, \
+                            /usr/sbin/networksetup -setwebproxystate *, \
+                            /usr/sbin/networksetup -setsecurewebproxystate *, \
+                            /usr/sbin/networksetup -setproxybypassdomains *
+__TAP_USER__ ALL=(root) NOPASSWD: TAP_CORE_PROXY
