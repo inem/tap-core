@@ -20,6 +20,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tap_core.runtime import MacOS, Profile
+from tap_core.records import decode_record
 
 
 class Origin(BaseHTTPRequestHandler):
@@ -90,14 +91,21 @@ def main():
                 adapter.run(["/usr/bin/curl", "--fail", "--silent", "--noproxy", "", "--proxy",
                              f"http://127.0.0.1:{first.port}", "--output", "/dev/null", url + path])
             def records():
-                return [json.loads(line) for line in (first.root / "data/stream.jsonl").read_text().splitlines()]
+                return [decode_record(line, allow_legacy=False)
+                        for line in (first.root / "data/stream.jsonl").read_bytes().split(b"\n")[:-1]]
             assert adapter.wait(lambda: any(record["url"].endswith("/large") for record in records()), seconds=5)
             seen = {record["url"].removeprefix(url): record for record in records()}
             assert seen["/json"]["body"] == '{"fixture":"tap-core"}'
             assert seen["/html"]["body"] == "<html><body>fixture</body></html>"
             for path in ("/binary", "/sse", "/large"):
                 assert seen[path]["streamed"] and not seen[path]["body_kept"] and "body" not in seen[path]
-            report["capture"] = {"json_html_bodies": True, "binary_sse_large_json_streamed": True}
+            assert seen["/json"]["body_reason"] == seen["/html"]["body_reason"] == "retained"
+            assert seen["/binary"]["body_reason"] == seen["/sse"]["body_reason"] == "media_type"
+            assert seen["/large"]["body_reason"] == "streamed"
+            observed_records = records()
+            assert len({record["record_id"] for record in observed_records}) == len(observed_records)
+            report["capture"] = {"json_html_bodies": True, "binary_sse_large_json_streamed": True,
+                                 "record_version": 1, "validated_body_reasons": True, "unique_record_ids": True}
             old_pid = adapter.service_pid(first)
             assert old_pid and adapter.owns_port(first)
             os.kill(old_pid, signal.SIGTERM)  # only the verified fixture job

@@ -1,4 +1,4 @@
-"""Synthetic reader; current record examples are inputs, not a capture schema."""
+"""Synthetic reader accepting unversioned examples and capture record v1."""
 import json
 import os
 from pathlib import Path
@@ -11,6 +11,9 @@ def main():
     print(json.dumps({"event": "start"}), file=sys.stderr)
     for line in sys.stdin:
         record = json.loads(line)
+        version = record.get("record_version", 0)
+        if type(version) is not int or version not in (0, 1):
+            raise ValueError("Unsupported capture record version")
         url = urlsplit(record.get("url", ""))
         if (url.scheme, url.netloc) != ("https", "fixture.example") or record.get("status") != 200:
             continue

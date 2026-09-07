@@ -131,9 +131,9 @@ shutdown attempts to drain queued records with a bounded wait.
 
 This does not establish a global process-memory cap, a bound on decompression,
 lossless power-failure storage or finalized retention/replay semantics. Those
-belong to #8/#9. The current JSONL retains the legacy record fields, with
-`req_body_kept` added when the response body is retained. It is not yet a stable
-versioned consumer contract.
+belong to #8/#9. New HTTP records use [capture record v1](capture-records.md), retaining the main
+legacy fields and adding identity and explicit body dispositions. Old JSONL is
+read-compatible; reader scheduling/acknowledgement remains #9 work.
 
 `status` reports service identity, listener ownership and writer health without
 issuing an HTTP request. `doctor` additionally checks the pinned backend and
