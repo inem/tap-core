@@ -69,6 +69,13 @@ and fixture credentials stay in the private temporary directory and are not
 included in the public report. Nothing from production capture or the production
 Hub journal is used. CI remains deferred.
 
+The harness holds two distinct loopback listener reservations while preparing
+the fixture, then releases each immediately before starting its service (Hub
+spawn or proxy installation). Context cleanup closes any reservation still held
+after a failure. The services open their own sockets; they do not inherit these
+listeners, so another process can still claim a released port during the brief
+startup handoff. Startup checks detect failure; this is not atomic port ownership.
+
 ## Integration gaps exposed by this wiring
 
 | Concrete coupling or missing product behavior | Follow-up |

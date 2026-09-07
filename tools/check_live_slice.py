@@ -5,6 +5,7 @@ Temporary launchd profile, foreground Hub, separate headless Chrome, loopback
 HTTP/WS. No system proxy mutation or CA trust. No installed-pack claim.
 """
 import argparse
+from contextlib import contextmanager
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -51,10 +52,18 @@ class Origin(BaseHTTPRequestHandler):
         pass
 
 
-def free_port():
+@contextmanager
+def reserve_port():
+    """Hold a loopback listener until the caller closes it just before startup.
+
+    The external services bind their own sockets, so releasing this reservation
+    narrows but cannot eliminate the handoff race. Context exit closes any
+    reservation still held if configuration or another service's startup fails.
+    """
     with socket.socket() as sock:
         sock.bind(('127.0.0.1', 0))
-        return sock.getsockname()[1]
+        sock.listen()
+        yield sock
 
 
 def wait(predicate, label, seconds=20):
@@ -100,7 +109,8 @@ def main():
               'backend': run([args.backend, '--version']).splitlines()[0],
               'bun': run([args.bun, '--version']).strip(),
               'playwright': json.loads((args.playwright / 'package.json').read_text())['version']}
-    with tempfile.TemporaryDirectory(prefix='tap-live-slice-') as directory:
+    with (tempfile.TemporaryDirectory(prefix='tap-live-slice-') as directory,
+          reserve_port() as hub_listener, reserve_port() as proxy_listener):
         root = Path(directory)
         root.chmod(0o700)
         def spawn(argv, label):
@@ -119,8 +129,8 @@ def main():
             origin, denied = [f'http://127.0.0.1:{server.server_port}' for server in origins]
             for name in ('empty-adapters', 'empty-flows', 'probe'):
                 (root / name).mkdir(mode=0o700)
-            config = {'root': str(root), 'source': str(args.source), 'hub_port': free_port(),
-                      'proxy_port': free_port(), 'token': secrets.token_hex(24), 'origin': origin,
+            config = {'root': str(root), 'source': str(args.source), 'hub_port': hub_listener.getsockname()[1],
+                      'proxy_port': proxy_listener.getsockname()[1], 'token': secrets.token_hex(24), 'origin': origin,
                       'denied_origin': denied, 'playwright': str(args.playwright), 'chrome': str(args.chrome)}
             config_path = root / 'fixture.json'
             config_path.write_text(json.dumps(config))
@@ -155,6 +165,7 @@ def response(flow):
 ''')
             config['page_fixture'] = str(FIXTURES / 'page.js')
             config_path.write_text(json.dumps(config))
+            hub_listener.close()
             hub = spawn([args.bun, FIXTURES / 'hub.mjs', config_path], 'hub')
             opener = build_opener(ProxyHandler({}))
             def control(path, payload=None):
@@ -177,6 +188,7 @@ def response(flow):
             report['hub_started_empty'] = True
             profile = Profile(root / 'profile', str(args.backend), config['proxy_port'], 'explicit', origin + '/record', [str(addon)])
             prefix = [sys.executable, ROOT / 'tap', '--profile', profile.root]
+            proxy_listener.close()
             run(prefix + ['install', '--backend', args.backend, '--port', profile.port, '--routing', 'explicit',
                           '--probe-url', profile.probe_url, '--addon', addon])
             run(prefix + ['on'])
