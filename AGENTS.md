@@ -9,6 +9,11 @@ layout, processes and application-specific declarations are not the required
 architecture of this repository. Separate modules, processes, distribution
 packages and repositories as distinct decisions.
 
+The existing `install`, `doctor`, `status`, `where`, `on` and `off` commands are
+part of the product baseline. Characterize their lifecycle and failure behavior
+before replacing implementation. An isolated foreground test runner does not
+substitute for the existing installation and network-control surface.
+
 Follow the release requirements and working choices in `TECHNOLOGY.md`. If a
 choice fails the assigned scenario, document the evidence and update the shared
 decision rather than silently selecting another stack in one task. No additional
