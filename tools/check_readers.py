@@ -29,9 +29,10 @@ def main():
         writer.close()
         assert writer.written == 3 and not writer.thread.is_alive()
         definition = profile.root / 'reader.json'
-        definition.write_text(json.dumps({'version': 1, 'revision': 'fixture-1',
-                              'command': [sys.executable, str(ROOT / 'fixtures/readers/sqlite_projection.py')],
-                              'config': {}}))
+        spec = {'version': 1, 'revision': 'fixture-1',
+                'command': [sys.executable, str(ROOT / 'fixtures/readers/sqlite_projection.py')],
+                'config': {}}
+        definition.write_text(json.dumps(spec))
         def cli(action, name, *extra):
             argv = [sys.executable, str(ROOT / 'tap'), '--profile', str(profile.root), 'reader', action, name]
             if action != 'status':
@@ -45,16 +46,30 @@ def main():
         fast_checkpoint = (profile.root / 'state/readers/fast/checkpoint.json').read_bytes()
         assert cli('run', 'slow')['completed_this_run'] == 2
         assert cli('run', 'slow')['completed_this_run'] == 0
+        definition.write_text(json.dumps(dict(spec, revision='fixture-2', config={'value_prefix': 'new:'})))
         assert cli('replay', 'slow')['progress']['generation'] == 2
-        assert cli('run', 'slow')['completed_this_run'] == 3
+        replay_checkpoint = profile.root / 'state/readers/slow/checkpoint.json'
+        replay_start = replay_checkpoint.read_bytes()
+        assert cli('run', 'slow', '--max-records', '2')['completed_this_run'] == 2
+        # Retry a processed prefix against its retained receipts after restoring
+        # an older synthetic checkpoint. Latest must stay at the newer B result.
+        replay_checkpoint.write_bytes(replay_start)
+        assert cli('run', 'slow', '--max-records', '1')['completed_this_run'] == 1
+        with sqlite3.connect(profile.root / 'data/readers/slow/projection.sqlite3') as db:
+            assert json.loads(db.execute('SELECT body FROM latest').fetchone()[0]) == {'value': 'new:B'}
+        assert cli('run', 'slow')['completed_this_run'] == 2
         assert (profile.root / 'state/readers/fast/checkpoint.json').read_bytes() == fast_checkpoint
         for name in ('slow', 'fast'):
             with sqlite3.connect(profile.root / 'data/readers' / name / 'projection.sqlite3') as db:
                 assert db.execute('SELECT count(*) FROM deliveries').fetchone()[0] == 3
-                assert json.loads(db.execute('SELECT body FROM latest').fetchone()[0]) == {'value': 'A'}
+                prefix = 'new:' if name == 'slow' else ''
+                assert [json.loads(row[0])['value'] for row in db.execute('SELECT body FROM deliveries ORDER BY rowid')] == [prefix + value for value in ('A', 'B', 'A')]
+                assert json.loads(db.execute('SELECT body FROM latest').fetchone()[0]) == {'value': prefix + 'A'}
+                assert db.execute('SELECT count(*) FROM receipts').fetchone()[0] == (6 if name == 'slow' else 3)
     report = {'scope': 'synthetic Writer and real CLI reader subprocesses; no network or launchd',
               'independent_progress': True, 'resume': True, 'explicit_replay': True,
               'projection_a_b_a': True, 'fixture_deduplicates_repeated_delivery': True,
+              'changed_revision_recomputes_projection': True, 'partial_replay_retry_preserves_latest': True,
               'temporary_profile_removed': True}
     rendered = json.dumps(report, indent=2) + '\n'
     if args.output:
