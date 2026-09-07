@@ -26,6 +26,9 @@ We will port and verify existing mechanisms incrementally. A general workflow en
 
 Issues contain the scope, acceptance criteria and dependencies for each slice. Follow the release tracking issue and milestones. A slice is complete when its user-visible behavior is demonstrated, not only when its files have been moved.
 
+Read [TECHNOLOGY.md](TECHNOLOGY.md) for release requirements, working stack choices
+and unresolved packaging decisions before starting an implementation task.
+
 ## License
 
 The new scaffold in this repository is MIT licensed. Existing implementation files and bundled dependencies must pass the migration and license review before being added.
