@@ -24,8 +24,7 @@ def main():
         if os.getppid() != parent:
             stop()
         time.sleep(0.05)
-    # Kill remaining group members even when the entrypoint leaves descendants.
-    # The controlling process sees nonzero on such an uncertain completion.
+    # The controller cleans remaining group members after reaping this guard.
     return process.returncode
 
 

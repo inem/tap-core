@@ -11,8 +11,8 @@
   "direct_listener_forgery_denied": true,
   "browser": {
     "displayed": {
-      "record_id": "e6393bab-8b3b-4b8a-81a9-71466c3459be",
-      "value": "262b60263dd6301c72831437"
+      "record_id": "3d6b8d26-60c5-4f3f-8775-1d47f2eaaec7",
+      "value": "445c0a8333a9a161b5ae6b3a"
     },
     "browser": "152.0.7977.76",
     "two_sessions": true,
@@ -24,8 +24,8 @@
   "restart_resume": true,
   "browser_after_restart": {
     "displayed": {
-      "record_id": "c8aa20c9-8fe1-4eed-be32-3e838bf664b1",
-      "value": "b342ee1867b000614a2407ae"
+      "record_id": "c8b79174-29b4-48c0-8a9c-df971ab0f05a",
+      "value": "8f2c6458a9a341780973a9a7"
     },
     "browser": "152.0.7977.76",
     "two_sessions": true,

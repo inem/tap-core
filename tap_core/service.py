@@ -31,11 +31,11 @@ def main():
                      'hub_pid': hub_pid, 'error': error, 'readers': dict(rows)}
         atomic_json(health_path, state)
     def reader_loop(name, spec):
-        reader, failures = Reader(profile, name), 0
+        reader, failures, first = Reader(profile, name), 0, True
         while not stopping.is_set():
             try:
-                reader.run(spec, max_records=50, timeout=10, guard_parent=True, cancelled=stopping.is_set)
-                failures = 0
+                reader.run(spec, max_records=1 if first else 50, timeout=10, guard_parent=True, cancelled=stopping.is_set)
+                failures, first = 0, False
                 row = {'healthy': True, 'phase': 'waiting', 'progress': reader.load(), 'error': None}
             except Exception as error:
                 failures += 1
@@ -74,7 +74,7 @@ def main():
             if hub_pid is None:
                 raise RuntimeError('Hub exited before readiness')
             for name, spec in profile.components['readers'].items():
-                rows[name] = {'healthy': True, 'phase': 'starting', 'error': None}
+                rows[name] = {'healthy': False, 'phase': 'starting', 'error': None}
                 thread = threading.Thread(target=reader_loop, args=(name, spec), daemon=True)
                 threads.append(thread)
                 thread.start()
