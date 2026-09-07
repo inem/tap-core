@@ -50,6 +50,7 @@ class Profile:
     version: int = 1
     bridge: dict = None
     components: dict = None
+    capture: dict = None
 
     def __post_init__(self):
         self.root = self.root.expanduser().resolve()
@@ -73,6 +74,12 @@ class Profile:
         if self.components is not None:
             from .components import configuration
             configuration(self.components, self)
+        if self.capture is not None:
+            from .capture import capture_limits
+            try:
+                self.capture = capture_limits(self.capture)
+            except ValueError as error:
+                raise TapError(str(error)) from error
 
     @property
     def label(self):
@@ -208,9 +215,12 @@ class MacOS:
 
     def write_plist(self, profile):
         from .routing import select_routing
+        from .capture import capture_limits, mitm_size
+        limits = capture_limits(profile.capture)
         args = [profile.backend, *select_routing(profile, self).backend_args(),
                 "--set", "confdir=" + str(profile.root / "certificates"),
-                "--set", "stream_large_bodies=4m", "-s", str(ADDON)]
+                "--set", f"stream_large_bodies={mitm_size(limits['stream_large_bodies'])}",
+                "-s", str(ADDON)]
         if profile.bridge is not None:
             args.extend(['-s', str(Path(__file__).with_name('bridge.py').resolve())])
         for addon in profile.addons:
@@ -223,7 +233,8 @@ class MacOS:
                  "WorkingDirectory": str(profile.root),
                  "EnvironmentVariables": {"TAP_CORE_DATA": str(profile.root / "data"),
                                           "TAP_CORE_STATE": str(profile.root / "state"),
-                                          "TAP_CORE_PROFILE": str(profile.root)},
+                                          "TAP_CORE_PROFILE": str(profile.root),
+                                          "TAP_CORE_CAPTURE": json.dumps(limits, separators=(",", ":"))},
                  "StandardOutPath": str(profile.root / "logs/capture.log"),
                  "StandardErrorPath": str(profile.root / "logs/capture.log")}
         profile.plist.parent.mkdir(parents=True, exist_ok=True)
