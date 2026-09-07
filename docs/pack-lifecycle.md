@@ -98,9 +98,8 @@ bindings are added. That limitation keeps the current perimeter honest.
 
 ## Build and use an external pack
 
-Clone the reference pack beside a compatible TAP Core checkout, or download its
-[v0.1.0 prerelease](https://github.com/inem/tap-pack-youtube-copy-links/releases/tag/v0.1.0).
-To build from source:
+Clone the reference pack beside a compatible TAP Core checkout. To build from
+source:
 
 ```sh
 PYTHONPATH=/absolute/path/to/tap-core \
