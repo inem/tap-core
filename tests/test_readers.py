@@ -172,6 +172,46 @@ class ReaderTests(unittest.TestCase):
                 time.sleep(0.01)
         self.assertEqual(self.outputs(self.reader), ['A'])
 
+    def test_guarded_controller_crash_releases_lock_only_after_worker_cleanup(self):
+        self.write('A')
+        spec = dict(self.spec, config={'fixture_mode': 'hang_after_once'})
+        command = ('from pathlib import Path; from tap_core.runtime import Profile; '
+                   'from tap_core.readers import Reader; '
+                   'Reader(Profile.load(Path(' + repr(str(self.root)) + ')), "one").run('
+                   + repr(spec) + ', guard_parent=True)')
+        controller = subprocess.Popen([sys.executable, '-B', '-c', command], cwd=ROOT,
+                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        worker = None
+        try:
+            deadline = time.monotonic() + 5
+            pidfile = self.reader.work / 'worker.pid'
+            while not pidfile.exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            worker = int(pidfile.read_text())
+            with self.assertRaisesRegex(TapError, "^Reader 'one' is busy;"):
+                self.reader.run(spec, guard_parent=True)
+            controller.kill(); controller.wait(timeout=3)
+            self.assertIsNone(self.reader.load()['cursor'])
+            while True:
+                try:
+                    self.reader.run(spec, guard_parent=True)
+                    break
+                except TapError as error:
+                    if "Reader 'one' is busy;" not in str(error) or time.monotonic() >= deadline:
+                        raise
+                    time.sleep(0.01)
+            with self.assertRaises(ProcessLookupError):
+                os.kill(worker, 0)
+            self.assertEqual(self.outputs(self.reader), ['A'])
+        finally:
+            if controller.poll() is None:
+                controller.kill(); controller.wait(timeout=3)
+            if worker is not None:
+                try:
+                    os.kill(worker, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
     def test_large_child_output_is_bounded_and_not_success(self):
         self.write('A')
         with self.assertRaisesRegex(ReaderError, 'output limit'):

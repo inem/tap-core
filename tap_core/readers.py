@@ -13,6 +13,7 @@ import re
 import selectors
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -138,7 +139,7 @@ class Reader:
             self.store(state)
         return self.status()
 
-    def run(self, spec, max_records=100, timeout=30):
+    def run(self, spec, max_records=100, timeout=30, *, guard_parent=False, cancelled=None):
         validate_definition(spec)
         if type(max_records) is not int or max_records < 1 or not 0 < timeout <= 300:
             raise ReaderError('Run requires positive max_records and timeout <= 300 seconds')
@@ -154,10 +155,13 @@ class Reader:
             try:
                 with closing(Journal(self.profile.root / 'data').scan(after=state['cursor'])) as entries:
                     for entry in entries:
+                        if cancelled and cancelled():
+                            raise ReaderError('Reader stopped; cursor was not advanced')
                         delivery_id = hashlib.sha256(entry.cursor.encode()).hexdigest()
                         invocation_id = fingerprint([self.name, state['generation'], delivery_id])
                         self.store(state, phase='running', inflight=invocation_id, error=None)
-                        self.execute(spec, entry.record, delivery_id, invocation_id, state['generation'], timeout, lock)
+                        self.execute(spec, entry.record, delivery_id, invocation_id, state['generation'], timeout, lock,
+                                     guard_parent, cancelled)
                         self.store(state, cursor=entry.cursor, processed=state['processed'] + 1,
                                    inflight=None, phase='ready', error=None)
                         completed += 1
@@ -172,7 +176,8 @@ class Reader:
                 raise
         return {'reader': self.name, 'completed_this_run': completed, 'progress': state}
 
-    def execute(self, spec, record, delivery_id, invocation_id, generation, timeout, lock):
+    def execute(self, spec, record, delivery_id, invocation_id, generation, timeout, lock,
+                guard_parent=False, cancelled=None):
         context = {'reader_id': self.name, 'reader_generation': generation,
                    'config': spec['config'], 'state_dir': str(self.work),
                    'output_dir': str(self.output), 'log_dir': str(self.logs)}
@@ -185,13 +190,18 @@ class Reader:
             with tempfile.TemporaryFile(dir=self.state) as source, selectors.DefaultSelector() as selector:
                 source.write((json.dumps(record, ensure_ascii=False) + '\n').encode())
                 source.seek(0)
-                process = subprocess.Popen(spec['command'], stdin=source, stdout=subprocess.PIPE,
+                command = spec['command']
+                if guard_parent:
+                    command = [sys.executable, '-B', str(Path(__file__).with_name('guardian.py')), str(os.getpid()), *command]
+                process = subprocess.Popen(command, stdin=source, stdout=subprocess.PIPE,
                                            stderr=subprocess.PIPE, cwd=self.profile.root,
                                            env=environment, start_new_session=True, pass_fds=(lock.fileno(),))
                 selector.register(process.stdout, selectors.EVENT_READ, 'stdout')
                 selector.register(process.stderr, selectors.EVENT_READ, 'stderr')
                 deadline = time.monotonic() + timeout
                 while selector.get_map() or process.poll() is None:
+                    if cancelled and cancelled():
+                        raise ReaderError('Reader stopped; completion is uncertain and cursor was not advanced')
                     if time.monotonic() >= deadline:
                         raise ReaderError('Reader timed out; completion is uncertain and cursor was not advanced')
                     for key, _ in selector.select(timeout=min(0.05, max(0, deadline - time.monotonic()))):

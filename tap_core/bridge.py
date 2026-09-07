@@ -210,23 +210,35 @@ def token_file(root):
     return Path(root) / 'state/bridge-token'
 
 
-def read_token(root):
-    path = token_file(root)
-    if path.is_symlink() or not stat.S_ISREG(path.stat().st_mode) or path.stat().st_mode & 0o777 != 0o600:
-        raise ValueError('Bridge token must be a private regular file (0600)')
-    token = path.read_text().strip()
+def read_token(root, name='bridge-token'):
+    path = Path(root) / 'state' / name
+    try:
+        mode = path.lstat().st_mode  # Inspect once, without following symlinks.
+        if not stat.S_ISREG(mode) or mode & 0o777 != 0o600:
+            raise ValueError(f'{name} must be a private regular file (0600): {path}')
+        token = path.read_text(encoding='ascii').strip()
+    except FileNotFoundError as error:
+        raise ValueError(f'Missing {name} file: {path}') from error
+    except OSError as error:
+        raise ValueError(f'Cannot read {name} file: {path}: {error.strerror}') from error
+    except UnicodeError as error:
+        raise ValueError(f'Invalid {name}: expected ASCII hexadecimal text') from error
     if not re.fullmatch('[0-9a-f]{48}', token):
-        raise ValueError('Invalid bridge token')
+        raise ValueError(f'Invalid {name}: expected 48 lowercase hexadecimal characters')
     return token
 
 
 class Bridge:
     def __init__(self, config=None, token=None, scripts=None):
         self.config, self.token, self.scripts = config, token, scripts
+        self.component_token = None
 
     def load(self, loader):
         root = Path(os.environ['TAP_CORE_PROFILE'])
-        self.config = configuration(read_json(root / 'profile.json')['bridge'])
+        profile = read_json(root / 'profile.json')
+        self.config = configuration(profile['bridge'])
+        if profile.get('components') is not None:
+            self.component_token = read_token(root, 'component-token')
         self.token = read_token(root)
         self.scripts = read_scripts(self.config) if self.config['enabled'] else []
         state = {'pid': os.getpid(), 'configuration': fingerprint(self.config), 'enabled': self.config['enabled']}
@@ -267,7 +279,7 @@ class Bridge:
             return
         # Only the reserved route interprets these as local Hub authority.
         # Ordinary site traffic retains its own headers unchanged.
-        for name in ('x-tap-probe-token', 'x-tap-probe-origin'):
+        for name in ('x-tap-probe-token', 'x-tap-probe-origin', 'x-tap-component-token'):
             request.headers.pop(name, None)
         flow.metadata['tap_core_bridge_handled'] = True
         pairs = parse_qsl(path.query, keep_blank_values=True)
@@ -296,6 +308,8 @@ class Bridge:
         request.headers['host'] = f"127.0.0.1:{self.config['hub_port']}"
         request.headers['x-tap-probe-token'] = self.token
         request.headers['x-tap-probe-origin'] = origin
+        if self.component_token:
+            request.headers['x-tap-component-token'] = self.component_token
 
     request = requestheaders
 
