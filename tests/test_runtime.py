@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch, PropertyMock
 
 from tap_core.capture import Capture, Writer, wants_body
-from tap_core.runtime import Lifecycle, MacOS, Profile, TapError
+from tap_core.runtime import Lifecycle, MacOS, Profile, TapError, StartupError
 
 
 class NetworkFixture(MacOS):
@@ -259,7 +259,7 @@ class RuntimeTests(unittest.TestCase):
     def test_plist_write_failure_prevents_bootstrap(self):
         adapter = MacOS()
         with patch.object(adapter, "owns_port", return_value=False), patch.object(adapter, "port_open", return_value=False), patch.object(adapter, "service_loaded", return_value=False), patch.object(adapter, "write_plist", side_effect=OSError("disk full")), patch.object(adapter, "run") as run:
-            with self.assertRaises(OSError):
+            with self.assertRaises(StartupError):
                 adapter.start(self.profile)
             run.assert_not_called()
 

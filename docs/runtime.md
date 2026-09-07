@@ -34,7 +34,7 @@ through the proxy, not storage completion or browser certificate trust.
 `install` registers a unique user LaunchAgent and starts capture, without
 changing system routing. `on` starts/verifies that service and probes traffic.
 An explicit profile requires clients to select its proxy endpoint. Its `off`
-stops the service; clients still explicitly configured to use that endpoint must
+stops the service and removes its autoload plist until the next `on`; clients still explicitly configured to use that endpoint must
 stop using it themselves. There is no claim that an explicit client's traffic
 automatically goes direct after shutdown.
 
@@ -53,10 +53,10 @@ It does not install a global command or modify an existing `tap` symlink.
 | Disarm before stopping capture | Preserved for system routing; failed recovery prevents stop. |
 | Port liveness and service identity matter | Both verified, including listener PID matching this exact launchd job. |
 | Operate across network services and preserve bypasses | Both HTTP and HTTPS verified on every enabled service, including inactive adapters. Existing bypass entries are combined with local bypasses and restored on off. |
-| `install` can swallow startup/plist errors | Errors now return nonzero. Plist failure prevents bootstrap. |
+| `install` can swallow startup/plist errors | Errors return nonzero. Failed startup restores routing before removing its job and plist; cleanup failures remain explicit. |
 | Failed arm/rollback can claim safety | Arm failure attempts recovery; failed recovery retains the snapshot and reports failure without stopping capture. |
 | Broad process-pattern termination | Removed; only the exact profile job is booted out. An occupied foreign port is an error. |
-| `off` allows the recorder to respawn | The extracted command explicitly boots out its own job and waits for its PID to exit, so this profile stays stopped until on. |
+| `off` allows the recorder to respawn | The extracted command explicitly removes its autoload plist, boots out its own job and waits for its PID to exit, so this profile stays stopped until on. |
 | Capture rotation resets a shared reader offset | Removed. No reader runs in this slice; capture does not own consumer progress. |
 
 CLI coordination is implemented in Python using the working choice in
@@ -150,7 +150,7 @@ python3 -m unittest discover -s tests -v
 python3 tools/check_runtime.py --backend /absolute/path/to/mitmdump
 ```
 
-The 29 controlled tests cover real arm/disarm methods through substituted OS
+The controlled tests cover real arm/disarm methods through substituted OS
 operations, lifecycle ordering, partial failures, crash recovery, foreign
 listeners, profile/argument isolation, capture streaming, retention and visible
 write failures. The opt-in live check creates two temporary user LaunchAgents,
