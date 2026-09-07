@@ -6,6 +6,7 @@ from unittest.mock import patch, PropertyMock
 
 from tap_core.runtime import Lifecycle, MacOS, Profile, TapError
 from test_runtime import NetworkFixture
+from tap_core.routing import select_routing
 
 
 class LaunchdFixture(NetworkFixture):
@@ -87,7 +88,7 @@ class LaunchdCleanupTests(unittest.TestCase):
 
     def test_failed_start_restores_system_routing_before_bootout(self):
         self.profile.routing = 'system'
-        self.adapter.arm(self.profile)
+        select_routing(self.profile, self.adapter).enable()
         self.adapter.events.clear()
         with self.assertRaisesRegex(TapError, 'previous proxy routing restored'):
             self.lifecycle.on()
@@ -98,7 +99,7 @@ class LaunchdCleanupTests(unittest.TestCase):
 
     def test_failed_routing_recovery_retains_job_and_plist(self):
         self.profile.routing = 'system'
-        self.adapter.arm(self.profile)
+        select_routing(self.profile, self.adapter).enable()
         self.adapter.fail_restore = True
         with self.assertRaisesRegex(TapError, 'rollback FAILED'):
             self.lifecycle.on()

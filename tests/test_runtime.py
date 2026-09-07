@@ -1,3 +1,4 @@
+from tap_core.routing import select_routing
 import copy
 import json
 from pathlib import Path
@@ -91,7 +92,7 @@ class RuntimeTests(unittest.TestCase):
 
     def test_system_on_off_restores_all_services_and_bypass_before_stop(self):
         self.runtime.on()
-        self.assertTrue(self.os.armed(self.profile))
+        self.assertTrue(select_routing(self.profile, self.os).verified())
         self.assertTrue(self.profile.snapshot.exists())
         self.assertEqual(self.os.events[0], "start")
         self.assertEqual(self.os.events[-1], "probe")
@@ -229,7 +230,7 @@ class RuntimeTests(unittest.TestCase):
     def test_only_http_enabled_is_not_armed(self):
         self.runtime.on()
         self.os.network["USB Ethernet"]["https"]["enabled"] = False
-        self.assertFalse(self.os.armed(self.profile))
+        self.assertFalse(select_routing(self.profile, self.os).verified())
 
     def test_profile_roundtrip_and_unique_service_label(self):
         self.assertEqual(Profile.load(self.root), self.profile)
