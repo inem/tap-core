@@ -300,6 +300,7 @@ def effective_configuration(root, base):
     declarations = {}
     use_orders = []
     any_enabled = False
+    has_bridge_bindings = False
     for pack_id in sorted(registry['packs']):
         record = registry['packs'][pack_id]
         if type(record) is not dict or type(record.get('enabled')) is not bool:
@@ -367,6 +368,7 @@ def effective_configuration(root, base):
             if metadata['hashes'].get(name) != digest:
                 raise ValueError(f'Enabled pack integrity check failed: {pack_id}@{version}')
         if roles & {'page', 'handler'}:
+            has_bridge_bindings = True
             for origin in requested_origins:
                 exact_origin(origin)
                 if origin not in result['allow_origins']:
@@ -440,12 +442,7 @@ def effective_configuration(root, base):
                 raise ValueError(f"Page resource {resource_id}@{use['version']} has conflicting "
                                  f"content in {current['pack']} and {pack_id}")
             current['origins'].update(requested_origins)
-    if not any_enabled:
-        return base
-    if (not declarations
-            and result['allow_origins'] == base['allow_origins']
-            and result['page_scripts'] == base['page_scripts']):
-        # Reader-only (or otherwise bridge-inert) packs must not diverge from PackStore.
+    if not any_enabled or not has_bridge_bindings:
         return base
     if declarations:
         for resource_id, origins in order_page_resources(declarations, use_orders):
