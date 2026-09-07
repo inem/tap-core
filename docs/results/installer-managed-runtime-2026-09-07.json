@@ -1,9 +1,26 @@
 {
   "scope": "installer managed runtime; empty root; not clean-Mac matrix or CA trust",
-  "source_commit": "021a92821332c7ad068afc04f5e7eae642cf37b9",
-  "local_checkout": true,
+  "base_commit": "1360d44f2f782f87be96f1d4a696590fccb23560",
+  "worktree_dirty": false,
+  "archived_tree_sha256": null,
+  "local_checkout": false,
+  "architecture": "arm64",
+  "macos": "15.6.1",
+  "routing": "explicit",
+  "runtime_modes": {
+    "TAP_PYTHON": "reuse:/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/bin/python3.14",
+    "TAP_BACKEND": "reuse:/opt/homebrew/Caskroom/mitmproxy/12.2.3/mitmproxy.app/Contents/MacOS/mitmdump",
+    "TAP_BUN": "download"
+  },
+  "cleanup_verified": true,
+  "ok": true,
+  "harness_parent": "/private/var/folders/rc/jrgt0w_x4bvc1hftg6x8g7sh0000gn/T/tap-installer-managed-guhyqbe6",
   "install_ok": true,
   "install_log_tail": [
+    "        },",
+    "        \"error\": null",
+    "      }",
+    "    },",
     "    \"configured\": true,",
     "    \"current_process\": true",
     "  },",
@@ -17,11 +34,18 @@
     "tap-core: Hub HTTP/WS smoke",
     "{\"ok\":true,\"hub_port\":19192,\"protocol\":\"tap.bridge/v1\"}"
   ],
+  "install_ref_recorded": "1360d44f2f782f87be96f1d4a696590fccb23560",
+  "installed_versions": {
+    "python": "Python 3.14.6",
+    "bun": "1.3.11",
+    "backend": "Mitmproxy: 12.2.3 binary"
+  },
   "doctor_after_install": {
     "healthy": true,
     "components": true,
     "bridge": true
   },
+  "bun_download_verified": true,
   "doctor_after_restart": {
     "healthy": true,
     "components": true
@@ -31,6 +55,5 @@
     "hub_port": 19192,
     "protocol": "tap.bridge/v1"
   },
-  "purged": true,
-  "ok": true
+  "purged": true
 }
