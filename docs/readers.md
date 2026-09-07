@@ -172,13 +172,21 @@ legacy compatibility limits. No fsync/power-loss durability was added.
 
 ## Evidence and remaining scope
 
-Run the existing suite and the synthetic CLI check:
+Run the existing suite and the synthetic CLI checks:
 
 ```sh
 python3 -m unittest discover -s tests -v
 python3 tools/check_readers.py
+python3 tools/check_reader_parity.py --output docs/results/reader-delivery-parity-YYYY-MM-DD.json
 python3 tools/check_pack_fixtures.py --bun /absolute/path/to/bun
 ```
+
+`check_reader_parity.py` runs the same fixed A → B → A corpus through a direct
+one-record-per-process path and through `reader run`, compares the SQLite
+projection (order + latest), lists intentional differences, and records
+one-process-per-record wall time. It does not claim batch-stdin pack identity or
+a throughput SLA. See
+[reader-delivery-parity-2026-09-07.json](results/reader-delivery-parity-2026-09-07.json).
 
 The fixtures cover separate progress, restart, new-reader history, child failure
 before/after effects, checkpoint failure, timeout, output overflow, controller
@@ -192,5 +200,7 @@ Local verification on 2026-09-07 passed all 147 tests (24 reader tests), both
 pack fixtures and the [synthetic CLI check](readers-fixture-2026-09-07.json).
 
 Installed packs, automatic background scheduling, protocol version negotiation,
-throughput/backlog policy and wider failure/upgrade acceptance remain #9/#13/#14
-work. This is a reviewable first reader execution slice, not issue closure.
+orphan recovery and wider failure/upgrade acceptance remain #13/#14/#32 work.
+Delivery parity and invocation-cost evidence for the declared n=3 corpus are in
+the parity harness above; a larger corpus or long-lived workers are a follow-up
+threshold, not implied by this measurement.
