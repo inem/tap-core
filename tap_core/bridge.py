@@ -20,7 +20,11 @@ SCRIPT_LIMIT = 256 * 1024
 
 
 class DocumentScripts(HTMLParser):
-    """Read actual HTML attributes, including valid spacing/unquoted forms."""
+    """Recognize nonce/marker attributes using stdlib HTML tokenization.
+
+    Supports attribute spacing, quoting and entities. HTML5 tree semantics,
+    including text-only contexts such as textarea/title, remain unsupported.
+    """
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.nonce = ''
@@ -220,8 +224,13 @@ class Bridge:
             print('[tap bridge] HTML unavailable; injection skipped', flush=True)
             return
         parsed = DocumentScripts()
-        parsed.feed(body)
-        parsed.close()
+        try:
+            parsed.feed(body)
+            parsed.close()
+        except (AssertionError, NotImplementedError):
+            # Invalid marked declarations fail differently across Python versions.
+            print('[tap bridge] HTML parsing failed; injection skipped', flush=True)
+            return
         if parsed.has_bootstrap:
             return
         nonce_attr = ' nonce="' + html.escape(parsed.nonce, quote=True) + '"' if parsed.nonce else ''

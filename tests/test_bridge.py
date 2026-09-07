@@ -173,6 +173,19 @@ class BridgeTests(unittest.TestCase):
                 self.assertIn('id="tap-probe-bootstrap" nonce="' + value + '"', f.response.body)
                 self.assertNotIn('nonce="wrong" data-tap-token', f.response.body)
 
+    def test_malformed_declaration_skips_injection_and_preserves_response(self):
+        body = '<body><![notvalid[example]]><script nonce="correct"></script></body>'
+        f = flow(response=Response(body))
+        headers = dict(f.response.headers)
+        with patch('builtins.print') as diagnostic:
+            self.bridge.response(f)
+        self.assertEqual(f.response.body, body)
+        self.assertEqual(f.response.headers, headers)
+        diagnostic.assert_called_once_with('[tap bridge] HTML parsing failed; injection skipped', flush=True)
+        valid = flow(response=Response())
+        self.bridge.response(valid)
+        self.assertIn('id="tap-probe-bootstrap"', valid.response.body)
+
     def test_foreign_base_cannot_redirect_bootstrap_or_page_asset_urls(self):
         from html.parser import HTMLParser
         from urllib.parse import urljoin, urlsplit
