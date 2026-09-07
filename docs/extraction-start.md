@@ -19,10 +19,13 @@ The recorded run in `legacy-characterization-2026-09-07.json` establishes:
 
 - JSON and HTML records retain their bodies.
 - Binary and SSE records are marked streamed without accessing their bodies.
-- The existing reader stores an initial and a changed version. Repeating A after B
-  leaves the latest pointer at B: a known gap, not a successful acceptance result.
+- The existing reader retains distinct artifacts containing A and B. The A file
+  remains byte-for-byte unchanged after B, and both artifacts remain unchanged
+  after repeating A. That repeat leaves the latest pointer at B: a known gap,
+  not a successful acceptance result.
 - The bootstrap is injected once on each of two allowed synthetic origins and is
-  absent on a denied origin; a padded nonce is retained.
+  absent on a denied origin, whose complete body and headers remain unchanged;
+  a padded nonce is retained.
 - A synthetic same-origin Probe request routes to the local endpoint and removes
   the original credentials and query token.
 

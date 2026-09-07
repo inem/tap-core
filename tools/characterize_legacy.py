@@ -98,8 +98,11 @@ def characterize_reader(source, root):
     env = os.environ.copy()
     env["TAP_OUT"] = str(root)
 
+    def fixture_body(title):
+        return {"mapping": {}, "title": title, "current_node": None}
+
     def send(title):
-        body = {"mapping": {}, "title": title, "current_node": None}
+        body = fixture_body(title)
         record = {"url": f"https://example.test/backend-api/conversations/{cid}",
                   "status": 200, "body": json.dumps(body)}
         result = subprocess.run(
@@ -110,12 +113,28 @@ def characterize_reader(source, root):
         assert result.returncode == 0, result.stderr
         return json.loads((root / "chatgpt" / f"{cid}.json").read_text())["title"]
 
+    def retained_versions(titles):
+        paths = list((root / "chatgpt").glob(f"{cid}.*.json"))
+        assert len(paths) == len(titles), "expected distinct retained version artifacts"
+        assert all(path.is_file() and not path.is_symlink() for path in paths)
+        versions = {path.name: path.read_bytes() for path in paths}
+        bodies = [json.loads(content) for content in versions.values()]
+        assert sorted(body["title"] for body in bodies) == sorted(titles)
+        assert all(body == fixture_body(body["title"]) for body in bodies)
+        return versions
+
     assert send("Fixture A") == "Fixture A"
+    initial = retained_versions(["Fixture A"])
     assert send("Fixture B") == "Fixture B"
+    changed = retained_versions(["Fixture A", "Fixture B"])
+    assert initial.items() <= changed.items(), "initial version was modified or removed"
     latest_after_repeat = send("Fixture A")
+    repeated = retained_versions(["Fixture A", "Fixture B"])
+    assert repeated == changed, "repeat changed retained version artifacts"
     assert latest_after_repeat in ("Fixture A", "Fixture B"), "unexpected latest value"
     return {
         "status": "verified_fixture", "first_store_and_new_version": True,
+        "retained_versions": len(repeated), "version_artifacts_unchanged_on_repeat": True,
         "repeat_a_after_b": "known_gap" if latest_after_repeat == "Fixture B" else "resolved",
         "expected_latest": "Fixture A", "observed_latest": latest_after_repeat,
     }
@@ -157,8 +176,11 @@ def characterize_injection(source, root):
         injector.response(flow)
         assert flow.response.body == before
     denied = SimpleNamespace(request=page_request("denied.test"), response=PageResponse(), metadata={})
+    denied_body = denied.response.body
+    denied_headers = dict(denied.response.headers)
     injector.response(denied)
-    assert "tap-probe-bootstrap" not in denied.response.body
+    assert denied.response.body == denied_body, "denied response body was modified"
+    assert denied.response.headers == denied_headers, "denied response headers were modified"
     request = page_request(path="/__tap/probe/ws?token=synthetic-fixture-token&page=fixture")
     request.headers.update({"cookie": "synthetic", "authorization": "Bearer synthetic",
                             "proxy-authorization": "synthetic"})

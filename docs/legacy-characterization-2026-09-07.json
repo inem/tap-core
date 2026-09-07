@@ -13,6 +13,8 @@
   "reader": {
     "status": "verified_fixture",
     "first_store_and_new_version": true,
+    "retained_versions": 2,
+    "version_artifacts_unchanged_on_repeat": true,
     "repeat_a_after_b": "known_gap",
     "expected_latest": "Fixture A",
     "observed_latest": "Fixture B"
