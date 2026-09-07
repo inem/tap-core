@@ -13,6 +13,7 @@ from pathlib import Path
 import plistlib
 import re
 import shlex
+import secrets
 import socket
 import subprocess
 import time
@@ -47,6 +48,7 @@ class Profile:
     probe_url: str
     addons: list
     version: int = 1
+    bridge: dict = None
 
     def __post_init__(self):
         self.root = self.root.expanduser().resolve()
@@ -62,6 +64,12 @@ class Profile:
         if not isinstance(self.addons, list) or not all(isinstance(p, str) and Path(p).is_absolute() for p in self.addons):
             raise TapError("Additional addons must be explicit absolute paths")
 
+        if self.bridge is not None:
+            from .bridge import configuration
+            configuration(self.bridge)
+            if self.bridge['hub_port'] == self.port:
+                raise TapError('Bridge Hub and proxy must use different ports')
+
     @property
     def label(self):
         return "com.tap.core." + hashlib.sha256(str(self.root).encode()).hexdigest()[:16]
@@ -75,6 +83,13 @@ class Profile:
         return self.root / "state/proxy-before.json"
 
     def save(self):
+        if self.bridge is not None:
+            from .bridge import configuration, read_scripts
+            configuration(self.bridge)
+            if self.bridge['hub_port'] == self.port:
+                raise TapError('Bridge Hub and proxy must use different ports')
+            if self.bridge['enabled']:
+                read_scripts(self.bridge)
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.root.chmod(0o700)
         for directory in ("data", "state", "certificates", "logs"):
@@ -83,6 +98,16 @@ class Profile:
                 raise TapError(f"Profile-owned directory must not be a symlink: {directory}")
             path.mkdir(mode=0o700, parents=True, exist_ok=True)
             path.chmod(0o700)
+        if self.bridge is not None:
+            from .bridge import token_file, read_token
+            path = token_file(self.root)
+            try:
+                descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            except FileExistsError:
+                read_token(self.root)
+            else:
+                with os.fdopen(descriptor, 'w') as handle:
+                    handle.write(secrets.token_hex(24) + '\n')
         data = asdict(self)
         del data["root"]
         atomic_json(self.root / "profile.json", data)
@@ -175,6 +200,8 @@ class MacOS:
         args = [profile.backend, "--listen-host", "127.0.0.1", "-p", str(profile.port),
                 "--set", "confdir=" + str(profile.root / "certificates"),
                 "--set", "stream_large_bodies=4m", "-s", str(ADDON)]
+        if profile.bridge is not None:
+            args.extend(['-s', str(Path(__file__).with_name('bridge.py').resolve())])
         for addon in profile.addons:
             args.extend(["-s", addon])
         # Preserve the legacy shell ulimit wrapper; quote argv, never interpolate
@@ -184,7 +211,8 @@ class MacOS:
                  "RunAtLoad": True, "KeepAlive": True, "ThrottleInterval": 3,
                  "WorkingDirectory": str(profile.root),
                  "EnvironmentVariables": {"TAP_CORE_DATA": str(profile.root / "data"),
-                                          "TAP_CORE_STATE": str(profile.root / "state")},
+                                          "TAP_CORE_STATE": str(profile.root / "state"),
+                                          "TAP_CORE_PROFILE": str(profile.root)},
                  "StandardOutPath": str(profile.root / "logs/capture.log"),
                  "StandardErrorPath": str(profile.root / "logs/capture.log")}
         profile.plist.parent.mkdir(parents=True, exist_ok=True)

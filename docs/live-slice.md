@@ -1,5 +1,9 @@
 # One live vertical slice before completing M1
 
+This document records the #29 experiment at `040b415`. The current harness uses
+[profile-owned injection](profile-bridge.md); use that commit to reproduce the
+original generated-wrapper setup.
+
 Issue #29 supplies an early integration check. A controlled HTTP response is
 captured by the new checkout runtime, processed by the #28 reader runner, and
 returned from its saved projection through the legacy Hub and injected page

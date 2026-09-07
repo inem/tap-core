@@ -18,9 +18,18 @@ process.once('SIGTERM', async () => {
     const context = await browser.newContext();
     await context.route('**/*', route => {
       const url = new URL(route.request().url());
-      return url.origin === config.origin || url.origin === config.denied_origin
+      return [config.origin, config.second_origin, config.denied_origin].includes(url.origin)
         ? route.continue() : route.abort();
     });
+    if (config.disabled) {
+      for (const origin of [config.origin, config.second_origin, config.denied_origin]) {
+        const page = await context.newPage();
+        await page.goto(origin, { waitUntil: 'domcontentloaded' });
+        if (await page.locator('#tap-probe-bootstrap').count()) throw new Error('disabled injection');
+      }
+      fs.writeFileSync(config.root + '/disabled-result.json', JSON.stringify({ not_injected: true }));
+      return;
+    }
     const page = await context.newPage();
     const frames = { sent: [], received: [] };
     let sockets = 0;
@@ -34,11 +43,14 @@ process.once('SIGTERM', async () => {
     await page.waitForFunction(() => window.TapProbe?.isReady(), null, { timeout: 15000 });
     if (await page.locator('#tap-probe-bootstrap').count() !== 1) throw new Error('bootstrap count');
     const second = await context.newPage();
-    await second.goto(config.origin, { waitUntil: 'domcontentloaded' });
+    await second.goto(config.second_origin, { waitUntil: 'domcontentloaded' });
     await second.waitForFunction(() => window.TapProbe?.isReady(), null, { timeout: 15000 });
     const denied = await context.newPage();
     await denied.goto(config.denied_origin, { waitUntil: 'domcontentloaded' });
     if (await denied.locator('#tap-probe-bootstrap').count() !== 0) throw new Error('denied injection');
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => window.TapProbe?.isReady(), null, { timeout: 15000 });
+    if (await page.locator('#tap-probe-bootstrap').count() !== 1) throw new Error('reload bootstrap count');
     await page.locator('#load').click();
     await page.waitForFunction(() => document.querySelector('#result').textContent !== 'waiting', null, { timeout: 30000 });
     const displayed = JSON.parse(await page.locator('#result').textContent());

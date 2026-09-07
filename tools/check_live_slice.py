@@ -27,7 +27,7 @@ from tap_core.runtime import MacOS, Profile
 from tap_core.records import decode_record
 
 FIXTURES = ROOT / 'fixtures/live-slice'
-SOURCE_FILES = ('mutators/site-probe.py', 'probe/hub.js', 'probe/runtime.js', 'probe/adapter-runtime.js')
+SOURCE_FILES = ('probe/hub.js', 'probe/runtime.js', 'probe/adapter-runtime.js')
 
 
 class Origin(BaseHTTPRequestHandler):
@@ -111,51 +111,25 @@ def main():
             return child
         try:
             nonce = secrets.token_hex(12)
-            for _ in range(2):
+            for _ in range(3):
                 server = ThreadingHTTPServer(('127.0.0.1', 0), Origin)
                 server.fixture_value = nonce
                 origins.append(server)
                 threading.Thread(target=server.serve_forever, daemon=True).start()
-            origin, denied = [f'http://127.0.0.1:{server.server_port}' for server in origins]
+            origin, second_origin, denied = [f'http://127.0.0.1:{server.server_port}' for server in origins]
             for name in ('empty-adapters', 'empty-flows', 'probe'):
                 (root / name).mkdir(mode=0o700)
             config = {'root': str(root), 'source': str(args.source), 'hub_port': free_port(),
                       'proxy_port': free_port(), 'token': secrets.token_hex(24), 'origin': origin,
-                      'denied_origin': denied, 'playwright': str(args.playwright), 'chrome': str(args.chrome)}
+                      'denied_origin': denied, 'second_origin': second_origin, 'playwright': str(args.playwright), 'chrome': str(args.chrome)}
             config_path = root / 'fixture.json'
             config_path.write_text(json.dumps(config))
             config_path.chmod(0o600)
-            (root / 'probe/token').write_text(config['token'])
-            (root / 'probe/token').chmod(0o600)
-            (root / 'probe/allowlist.txt').write_text(origin + '\n')
-            # Load the exact legacy injector as a normal trusted addon, with only
-            # its configuration redirected. No source copy/modification needed.
-            addon = root / 'injector.py'
-            addon.write_text('''import importlib.util
-import sys
-sys.dont_write_bytecode = True
-import json
-from pathlib import Path
-config = json.loads(Path(__file__).with_name('fixture.json').read_text())
-spec = importlib.util.spec_from_file_location('legacy_probe_fixture', Path(config['source']) / 'mutators/site-probe.py')
-probe = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(probe)
-probe.TOKEN_PATH = config['root'] + '/probe/token'
-probe.ALLOWLIST_PATH = config['root'] + '/probe/allowlist.txt'
-probe.HUB_HOST = '127.0.0.1'
-probe.HUB_PORT = config['hub_port']
-requestheaders = probe.requestheaders
-request = probe.request
-def response(flow):
-    probe.response(flow)
-    if flow.response and probe._is_allowed(flow.request) and flow.request.path == '/' and not flow.metadata.get('tap_probe_routed'):
-        html = flow.response.get_text(strict=False)
-        code = Path(config['page_fixture']).read_text()
-        flow.response.set_text(html.replace('</body>', '<script>' + code + '</script></body>'))
-''')
-            config['page_fixture'] = str(FIXTURES / 'page.js')
-            config_path.write_text(json.dumps(config))
-            hub = spawn([args.bun, FIXTURES / 'hub.mjs', config_path], 'hub')
+            bridge_config = {'version': 1, 'enabled': True, 'hub_port': config['hub_port'],
+                             'allow_origins': [origin, second_origin, denied],
+                             'exclude_origins': [denied], 'page_scripts': [str(FIXTURES / 'page.js')]}
+            bridge_path = root / 'bridge-config.json'
+            bridge_path.write_text(json.dumps(bridge_config))
             opener = build_opener(ProxyHandler({}))
             def control(path, payload=None):
                 req = Request(f"http://127.0.0.1:{config['hub_port']}" + path,
@@ -170,15 +144,17 @@ def response(flow):
                     return control('/v1/pages')['ok']
                 except OSError:
                     return False
-            wait(hub_ready, 'Hub startup')
-            wait(lambda: (root / 'hub.log').stat().st_size > 0, 'Hub startup evidence')
-            assert json.loads((root / 'hub.log').read_text().splitlines()[0])['emptyNeeds']
-            assert read_lines(root / 'bus.jsonl') == []
-            report['hub_started_empty'] = True
-            profile = Profile(root / 'profile', str(args.backend), config['proxy_port'], 'explicit', origin + '/record', [str(addon)])
+            profile = Profile(root / 'profile', str(args.backend), config['proxy_port'], 'explicit', origin + '/record', [])
             prefix = [sys.executable, ROOT / 'tap', '--profile', profile.root]
             run(prefix + ['install', '--backend', args.backend, '--port', profile.port, '--routing', 'explicit',
-                          '--probe-url', profile.probe_url, '--addon', addon])
+                          '--probe-url', profile.probe_url, '--bridge-config', bridge_path])
+            profile = Profile.load(profile.root)
+            config['token'] = (profile.root / 'state/bridge-token').read_text().strip()
+            config_path.write_text(json.dumps(config))
+            hub = spawn([args.bun, FIXTURES / 'hub.mjs', config_path], 'hub')
+            wait(hub_ready, 'Hub startup')
+            assert read_lines(root / 'bus.jsonl') == []
+            report['hub_started_empty'] = True
             run(prefix + ['on'])
             assert json.loads(run(prefix + ['doctor']))['healthy']
             # Distinguish the browser's request from install/on/doctor probes.
@@ -218,6 +194,27 @@ def response(flow):
             assert {'Hello', 'Event', 'Result'} <= set(browser_result['frames']['sent'])
             assert {'Welcome', 'Command'} <= set(browser_result['frames']['received'])
             assert browser_result['other_tab_unchanged'] and browser_result['denied_origin_unchanged']
+            # A configured user exclusion overrides an allow entry on real pages.
+            explanation = json.loads(run(prefix + ['bridge', 'explain', '--origin', denied]))
+            assert explanation['reason'] == 'user_exclusion' and not explanation['allowed']
+            bridge_config['enabled'] = False
+            bridge_path.write_text(json.dumps(bridge_config))
+            changing = subprocess.run(list(map(str, prefix + ['bridge', 'configure', '--config', bridge_path])),
+                                      text=True, capture_output=True, timeout=15)
+            assert changing.returncode == 1 and 'Stop this profile' in changing.stderr
+            run(prefix + ['off'])
+            run(prefix + ['bridge', 'configure', '--config', bridge_path])
+            run(prefix + ['on'])
+            config['disabled'] = True
+            config_path.write_text(json.dumps(config))
+            disabled_browser = spawn([args.node, FIXTURES / 'browser.cjs', config_path], 'disabled-browser')
+            disabled_browser.wait(timeout=30)
+            if disabled_browser.returncode:
+                raise RuntimeError('Disabled browser failed: ' + (root / 'disabled-browser.log').read_text())
+            assert json.loads((root / 'disabled-result.json').read_text())['not_injected']
+            report['profile_bridge'] = {'two_allowed_origins': True, 'user_exclusion_overrides_allow': True,
+                                        'live_reconfigure_rejected': True, 'off_configure_on_disables': True,
+                                        'legacy_injector_or_generated_addon_needed': False}
             assert hashes == {name: hashlib.sha256((args.source / name).read_bytes()).hexdigest() for name in SOURCE_FILES}
             report.update({'capture_reader_projection_page_match': True, 'controller_received_page_result': True,
                            'reader_records_processed': progress['completed_this_run'],
