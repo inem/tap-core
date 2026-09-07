@@ -1,7 +1,7 @@
 # Experimental pack contract, version 1
 
 Preparatory result for #5, based on runtime commit
-`be6b4df09b54d523b4cb28da939182f45ad8e951`. **That runtime does not load packs or
+`c3006777bd79e2253097133b0623457d651524a4`. **That runtime does not load packs or
 advertise pack API support.** `pack_api: 1` below names the experimental fixture
 contract. It is not a claim that installed-pack integration has shipped.
 
@@ -36,7 +36,7 @@ Each pack directory contains UTF-8 `pack.json`, with these required fields:
 | `id` | Lowercase identifier of letters/digits separated by `.` or `-`, starting with a letter. Used for profile-local paths. |
 | `version` | Exact `MAJOR.MINOR.PATCH` release version. No range or prerelease syntax in this slice. |
 | `requires.pack_api` | Exact integer API expected from the future host; fixtures supply `1`. |
-| `requires.dependencies` | Array of `{id, version}` declarations for additional executable/package dependencies, with exact release versions. Host inventory must match before activation. No downloads or dependency resolution here. |
+| `requires.dependencies` | Array of `{id, version}` declarations for additional executable/package dependencies, with exact release versions. A pack cannot depend on itself. Host inventory must match before activation. No downloads or dependency resolution here. |
 | `files` | Unique canonical relative file paths. Every file must exist and resolve inside the pack. Absolute paths, traversal, backslashes and escaping symlinks fail. |
 | `entrypoints` | One or more roles from the table below, each `{file, interface}`; the file must be in `files`. |
 | `config` | Named settings, each `{type, default}`. Only string, integer and boolean values; unknown overrides and wrong types fail. No expressions or configuration language. |
@@ -114,12 +114,15 @@ record delivery, retention and progress contracts remain #8/#9.
 
 ```sh
 python3 -m unittest discover -s tests -p test_packs.py -v
+python3 tools/check_pack_fixtures.py
 python3 tools/check_pack_fixtures.py --bun "$(command -v bun)"
 ```
 
 Bun is used **only as the JavaScript test executor**; the page module uses browser
-JavaScript. The standalone fixture command requires an explicit Bun path; the
-corresponding unittest is marked skipped if Bun is unavailable. The verifier
+JavaScript. Python reader, handler and mutator checks always run, including when
+Bun is unavailable. The standalone command without `--bun` reports the page test
+as untested; supplying an explicit Bun path adds that test. Only the page unittest
+is marked skipped if Bun is unavailable. The verifier
 uses a temporary profile, validates both packs first, runs the reader, calls the
 mutator on synthetic responses and executes page → bridge fixture → actual
 Python handler → page. It checks configuration/output isolation, EOF shutdown,

@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from tap_core.packs import (PackError, check_activation, fixture_context, load_manifest,
                             resolve_config, validate_manifest)
-from tools.check_pack_fixtures import FIXTURES, prepare, run
+from tools.check_pack_fixtures import FIXTURES, prepare, run_page, run_python
 
 
 class PackManifestTests(unittest.TestCase):
@@ -102,6 +102,15 @@ class PackManifestTests(unittest.TestCase):
                 check_activation(self.manifest, ["https://fixture.example"], ["capture.read"], inventory)
         check_activation(self.manifest, ["https://fixture.example"], ["capture.read"], {"helper": "1.2.3"})
 
+    def test_pack_cannot_depend_on_itself_even_if_installed(self):
+        self.manifest["requires"]["dependencies"] = [
+            {"id": self.manifest["id"], "version": self.manifest["version"]}]
+        with self.assertRaisesRegex(PackError, "cannot depend on itself"):
+            validate_manifest(self.manifest, self.root)
+        inventory = {self.manifest["id"]: self.manifest["version"]}
+        with self.assertRaisesRegex(PackError, "cannot depend on itself"):
+            check_activation(self.manifest, ["https://fixture.example"], ["capture.read"], inventory)
+
     def test_validation_does_not_execute_code_and_prepare_rejects_before_start(self):
         marker = Path(self.directory.name) / "executed"
         (self.root / "reader.py").write_text(f"from pathlib import Path\nPath({str(marker)!r}).touch()\n")
@@ -140,14 +149,23 @@ class PackManifestTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("incompatible", result.stderr)
 
-    @unittest.skipUnless(shutil.which("bun"), "Bun required only for executing the browser-module fixture")
-    def test_both_packs_run_through_controlled_fixtures(self):
+    def without_pack_writes(self, check):
         before = {path.relative_to(FIXTURES): path.read_bytes() for path in FIXTURES.rglob("*") if path.is_file()}
-        result = run(Path(shutil.which("bun")))
-        self.assertEqual(result["page_to_handler_shape"], "passed")
-        self.assertEqual(result["live_ws"], "not tested")
+        result = check()
         after = {path.relative_to(FIXTURES): path.read_bytes() for path in FIXTURES.rglob("*") if path.is_file()}
         self.assertEqual(before, after, "pack execution must not write into installed code")
+        return result
+
+    def test_python_reader_handler_and_mutator_fixtures(self):
+        result = self.without_pack_writes(run_python)
+        for role in ("reader", "handler", "mutator"):
+            self.assertEqual(result[role], "passed")
+        self.assertEqual(result["live_ws"], "not tested")
+
+    @unittest.skipUnless(shutil.which("bun"), "Bun required only for executing the browser-module fixture")
+    def test_page_to_handler_fixture(self):
+        result = self.without_pack_writes(lambda: run_page(Path(shutil.which("bun"))))
+        self.assertEqual(result["page_to_handler_shape"], "passed")
 
 
 if __name__ == "__main__":

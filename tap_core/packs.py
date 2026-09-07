@@ -96,6 +96,7 @@ def validate_manifest(manifest, root, host_api=PACK_API):
         fields(dependency, ("id", "version"), label="dependency")
         require(type(dependency["id"]) is str and ID.fullmatch(dependency["id"]),
                 "dependency.id: invalid identifier")
+        require(dependency["id"] != manifest["id"], "dependency.id: pack cannot depend on itself")
         require(dependency["id"] not in names, "dependency.id: duplicate")
         names.add(dependency["id"])
         require(type(dependency["version"]) is str and VERSION.fullmatch(dependency["version"]),
@@ -171,6 +172,7 @@ def check_activation(manifest, granted_origins, granted_capabilities, dependenci
         missing = set(manifest["access"][category]) - set(granted)
         require(not missing, f"access.{category}: not granted: {sorted(missing)}")
     for dependency in manifest["requires"]["dependencies"]:
+        require(dependency["id"] != manifest["id"], "dependency.id: pack cannot depend on itself")
         require(dependencies.get(dependency["id"]) == dependency["version"],
                 f"dependency {dependency['id']}: expected installed version {dependency['version']}")
 

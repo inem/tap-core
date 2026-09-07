@@ -61,18 +61,21 @@ def check_mutator(pack, manifest):
         spec.loader.exec_module(module)
     finally:
         sys.dont_write_bytecode = previous
-    flow = SimpleNamespace(request=SimpleNamespace(pretty_url="https://fixture.example/page"),
-                           response=ResponseFixture())
-    module.response(flow)
-    assert 'src="/__tap/fixture/page.js"' in flow.response.body
-    assert "etag" not in flow.response.headers and "content-length" not in flow.response.headers
-    once = flow.response.body
-    module.response(flow)
-    assert flow.response.body == once
+    for content_type in ("text/html", "  TeXt/HTML ; charset=utf-8"):
+        flow = SimpleNamespace(request=SimpleNamespace(pretty_url="https://fixture.example/page"),
+                               response=ResponseFixture(content_type))
+        module.response(flow)
+        assert 'src="/__tap/fixture/page.js"' in flow.response.body
+        assert "etag" not in flow.response.headers and "content-length" not in flow.response.headers
+        once = flow.response.body
+        module.response(flow)
+        assert flow.response.body == once
     for url, content_type, streamed in [
         ("https://unrelated.example/page", "text/html", False),
         ("https://fixture.example:8443/page", "text/html", False),
         ("https://fixture.example/data", "application/json", False),
+        ("https://fixture.example/data", 'application/json; profile="text/html"', False),
+        ("https://fixture.example/data", "text/html-not-really", False),
         ("https://fixture.example/events", "text/html", True),
     ]:
         flow = SimpleNamespace(request=SimpleNamespace(pretty_url=url),
@@ -82,7 +85,7 @@ def check_mutator(pack, manifest):
         assert (flow.response.body, flow.response.headers) == before
 
 
-def run(bun):
+def run_python():
     with tempfile.TemporaryDirectory(prefix="tap-pack-fixtures-") as directory:
         profile = Path(directory)
         reader = FIXTURES / "reader"
@@ -97,6 +100,11 @@ def run(bun):
             {"label": "checked", "body": {"fixture": "tap-core"}}]
         assert (Path(reader_context["output_dir"]) / "observations.jsonl").read_text() == result.stdout
         assert [json.loads(line)["event"] for line in result.stderr.splitlines()] == ["start", "stop"]
+        reply = python_entry(page, page_manifest, "handler", page_context,
+                             json.dumps({"op": "echo", "text": "hello"}) + "\n")
+        assert reply.returncode == 0, reply.stderr
+        assert json.loads(reply.stdout) == {"ok": True, "text": "local:hello"}
+        assert [json.loads(line)["event"] for line in reply.stderr.splitlines()] == ["start", "stop"]
         for pack, manifest, role, context in [
             (reader, reader_manifest, "reader", reader_context),
             (page, page_manifest, "handler", page_context),
@@ -105,6 +113,15 @@ def run(bun):
             assert failure.returncode != 0 and not failure.stdout
             assert json.loads(failure.stderr.splitlines()[-1])["event"] == "error"
         check_mutator(page, page_manifest)
+        return {"pack_api": 1, "evidence": "synthetic fixtures only",
+                "reader": "passed", "handler": "passed", "mutator": "passed",
+                "start_stop_error": "passed", "live_ws": "not tested", "installed_host": "not implemented"}
+
+
+def run_page(bun):
+    with tempfile.TemporaryDirectory(prefix="tap-page-fixture-") as directory:
+        page = FIXTURES / "page-bridge"
+        page_manifest, page_context = prepare(page, Path(directory))
         env = dict(os.environ, TAP_PACK_CONTEXT=json.dumps(page_context))
         result = subprocess.run([str(bun), str(FIXTURES / "check_page.mjs"),
                                  str(page / page_manifest["entrypoints"]["page"]["file"]),
@@ -114,13 +131,17 @@ def run(bun):
         assert result.returncode == 0, result.stderr
         page_result = json.loads(result.stdout)
         assert page_result == {"started": "local:hello", "stopped": True, "bad_reply_rejected": True}
-        return {"pack_api": 1, "evidence": "synthetic fixtures only",
-                "reader": "passed", "mutator": "passed", "page_to_handler_shape": "passed",
-                "start_stop_error": "passed", "live_ws": "not tested", "installed_host": "not implemented"}
+        return {"page_to_handler_shape": "passed"}
+
+
+def run(bun=None):
+    result = run_python()
+    result.update(run_page(bun) if bun else {"page_to_handler_shape": "not tested: supply --bun"})
+    return result
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--bun", required=True, type=Path, help="explicit Bun executable, for the page test only")
+    parser.add_argument("--bun", type=Path, help="explicit Bun executable; omit to run Python fixtures only")
     args = parser.parse_args()
-    print(json.dumps(run(args.bun.resolve()), indent=2))
+    print(json.dumps(run(args.bun.resolve() if args.bun else None), indent=2))
