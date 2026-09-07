@@ -1,0 +1,54 @@
+{
+  "date": "2026-09-07",
+  "platform": {"system": "Darwin", "release": "15.6.1", "machine": "arm64"},
+  "scope": "self-created processes, IPv4 loopback TCP, same origin",
+  "attribution": {
+    "status": "verified",
+    "samples": 10,
+    "samples_matching_both_clients": 10,
+    "executables": {"curl": "curl", "python": "Python"}
+  },
+  "parent_pid_does_not_own_child_connections": true,
+  "restart": {
+    "pid_changed": true,
+    "new_connection_attributed": true,
+    "old_connection_absent_after_exit": true,
+    "executable_basename_unchanged": true
+  },
+  "source_port_reuse": {
+    "same_connection_tuple": true,
+    "pid_changed": true,
+    "new_owner_attributed": true,
+    "old_pid_no_longer_owns_tuple": true
+  },
+  "closed_connection_lookup": "unknown",
+  "lsof_wall_ms": {"min": 82.02, "median": 82.68, "max": 85.18, "samples": 10},
+  "pid_reuse": "unresolved; not forced",
+  "bundle_identity": "unresolved",
+  "backend_probe": {
+    "mitmproxy_version": "12.2.3",
+    "client_has_pid_field": false,
+    "client_has_process_name_field": false,
+    "local_capture_started": false,
+    "parsed_modes": {
+      "local:12345": {"data": "12345", "type": "local"},
+      "local:curl": {"data": "curl", "type": "local"},
+      "local:curl,!12345": {"data": "curl,!12345", "type": "local"}
+    },
+    "set_intercept_api": true,
+    "unavailable_reason": null,
+    "bundled_rust_and_macos_versions": "metadata unavailable in standalone distribution",
+    "redirector_app_present": false,
+    "mitmproxy_network_extension_registered": false
+  },
+  "routing_marker_fixture": {
+    "direct": "tap-core-direct",
+    "explicit_proxy": "tap-core-intercepted",
+    "local_capture_verified": false
+  },
+  "routing": {
+    "status": "unresolved",
+    "reason": "Local Capture activation would install a shared OS component; deferred to separate acceptance"
+  },
+  "system_settings_changed": false
+}
