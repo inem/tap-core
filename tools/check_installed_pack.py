@@ -82,13 +82,17 @@ def run(argv, timeout=60, check=True):
     return result
 
 
-def fetch(url, proxy_port=None, ca=None):
-    argv = ["/usr/bin/curl", "--silent", "--show-error", "--max-time", "10", url]
+def http_get(url, proxy_port=None, ca=None):
+    """Return (status_code, body). Status is checked so an error page (502/403)
+    can never pass a body assertion by merely lacking the injection marker."""
+    argv = ["/usr/bin/curl", "--silent", "--show-error", "--max-time", "10", "-o", "-", "-w", "\\n%{http_code}", url]
     if proxy_port is not None:
         argv[1:1] = ["--proxy", f"http://127.0.0.1:{proxy_port}"]
     if ca is not None:
         argv[1:1] = ["--cacert", str(ca)]
-    return run(argv).stdout
+    out = run(argv).stdout
+    body, _, code = out.rpartition("\n")
+    return (int(code) if code.isdigit() else 0), body
 
 
 def build_pack(source, origins):
@@ -216,8 +220,11 @@ def main():
         ca = profile.root / "certificates/mitmproxy-ca-cert.pem"
         token = (profile.root / "state/bridge-token").read_text().strip()
 
-        granted_html = wait(lambda: (fetch(injected_origin + "/", profile.port, ca) or None), "granted-origin fetch")
-        # Require the origin's real served body too, so a 502/empty response can
+        def granted_ready():
+            code, body = http_get(injected_origin + "/", profile.port, ca)
+            return (code, body) if code == 200 and body else None
+        _, granted_html = wait(granted_ready, "granted-origin fetch")
+        # 200 + the origin's real body + injection markers: an error page can
         # never masquerade as "injected" (or, below, as "suppressed").
         steps["injection_granted_marker"] = (BODY_MARK in granted_html and MARKER in granted_html
                                              and "core/0.js" in granted_html)
@@ -225,17 +232,19 @@ def main():
                                                        else "NOT injected")
 
         # Fetch the pack's OWN resource over the reserved token route and compare bytes.
-        served = fetch(f"{injected_origin}/__tap/probe/core/0.js?token={token}", profile.port, ca)
-        steps["installed_resource_served"] = served == UI_JS
+        res_code, served = http_get(f"{injected_origin}/__tap/probe/core/0.js?token={token}", profile.port, ca)
+        steps["installed_resource_served"] = res_code == 200 and served == UI_JS
         report["installed_resource_sha256_match"] = (
             hashlib.sha256(served.encode()).hexdigest() == hashlib.sha256(UI_JS.encode()).hexdigest())
         if steps["installed_resource_served"]:
             report["transport"]["reserved_route_resource_delivery"] = "verified_live"
 
-        # Granted-but-excluded origin must serve its real body but NOT be injected
-        # on the proxy bridge. Requiring the body rejects a 502/empty false pass.
-        excluded_html = fetch(excluded_origin + "/", profile.port, ca)
-        steps["exclusion_suppresses_injection"] = BODY_MARK in excluded_html and MARKER not in excluded_html
+        # Granted-but-excluded origin must serve its real body (HTTP 200 + body)
+        # but NOT be injected on the proxy bridge. Requiring 200+body rejects a
+        # 502/403/empty false pass.
+        exc_code, excluded_html = http_get(excluded_origin + "/", profile.port, ca)
+        steps["exclusion_suppresses_injection"] = (exc_code == 200 and BODY_MARK in excluded_html
+                                                   and MARKER not in excluded_html)
         if steps["exclusion_suppresses_injection"]:
             report["transport"]["exclusion_override_on_proxy_bridge"] = "verified_live"
 
@@ -249,7 +258,7 @@ def main():
         steps["off"] = "ok"
         # Sentinels in the pack's OWN state/data directories (not the general
         # profile data dir), which uninstall claims to retain.
-        pack_dirs = {kind: profile.root / kind / "packs" / PACK_ID for kind in ("state", "data")}
+        pack_dirs = {kind: profile.root / kind / "packs" / PACK_ID for kind in ("state", "data", "logs")}
         for path in pack_dirs.values():
             path.mkdir(parents=True, exist_ok=True)
             (path / "sentinel.txt").write_text(DATA_SENTINEL)
