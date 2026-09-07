@@ -1,0 +1,18 @@
+{
+  "scope": "live macOS launchd; explicit loopback HTTP; no system routing mutation or CA trust",
+  "platform": {
+    "macOS": "15.6.1",
+    "architecture": "arm64",
+    "python": "3.9.6"
+  },
+  "backend": "mitmproxy 12.2.3",
+  "capture": {
+    "json_html_bodies": true,
+    "binary_sse_large_json_streamed": true
+  },
+  "launchd_keepalive_restart": true,
+  "stopping_one_profile_preserves_other": true,
+  "off_removes_autoload_on_recreates": true,
+  "system_settings_unchanged": true,
+  "fixture_jobs_removed": true
+}

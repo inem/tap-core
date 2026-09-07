@@ -41,3 +41,27 @@ Results on 2026-09-07:
 No production TAP files, capture journal, Hub or trust store were changed. Live
 system-routing transitions, clean-Mac distribution and authenticated browser WS
 remain separate acceptance work.
+
+## Follow-up review verification
+
+The review fixes were integrated on 2026-09-07 with runtime base `56094c0`.
+Published branches incorporated this base by merge, without rewriting history.
+Sequential integration merges were clean; an attempted octopus merge conflicted
+in listener diagnostics and was discarded before those sequential merges.
+
+- `issue-5-pack-contract`: `808a7433423175c3fe82ef6b23bdcfb5dc72de0f`.
+- `issue-8-writer-recovery`: `cde6ce385e09919751f9c250cc09ef17d3616d3f`.
+- `issue-13-observation-errors`: `1a82988a6035708ce63296aa87ae532941760b90`.
+
+All 96 tests passed: 37 runtime/lifecycle, 19 storage, 16 pack and 24 diagnostic
+tests. Each feature branch also passed independently (53 pack, 56 storage,
+61 diagnostics). Python pack fixtures run without Bun; only the page fixture
+needs Bun. The capture/recovery/reader pipeline and both pack fixtures passed.
+
+The updated live check passed with two temporary explicit profiles, including
+removing the autoload plist on off and recreating it on on while the second
+profile kept its PID and listener. See
+[review live result](results/next-slices-review-live-2026-09-07.json).
+A real logout/login was not performed. Startup failure cleanup and disarm-before-
+cleanup ordering were tested with substituted OS operations; live system-routing
+transitions, HTTPS trust, real browser WS and clean-machine acceptance remain open.
