@@ -130,7 +130,7 @@ class Reader:
     def replay(self, spec):
         validate_definition(spec)
         self.prepare()
-        with profile_lock(self.state):
+        with profile_lock(self.state, busy_message=f"Reader '{self.name}' is busy; another run or replay holds its lock"):
             previous = self.load()
             state = self.initial(spec, previous['generation'] + 1 if previous else 1)
             self.store(state)
@@ -141,7 +141,7 @@ class Reader:
         if type(max_records) is not int or max_records < 1 or not 0 < timeout <= 300:
             raise ReaderError('Run requires positive max_records and timeout <= 300 seconds')
         self.prepare()
-        with profile_lock(self.state) as lock:
+        with profile_lock(self.state, busy_message=f"Reader '{self.name}' is busy; another run or replay holds its lock") as lock:
             state = self.load()
             if state is None:
                 state = self.initial(spec)
