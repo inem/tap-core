@@ -94,6 +94,36 @@ class BridgeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.profile.save()
 
+    def test_token_failures_identify_the_file_without_exposing_contents(self):
+        self.profile.save()
+        for name in ('bridge-token', 'component-token'):
+            path = self.root / 'state' / name
+            path.unlink(missing_ok=True)
+            with self.subTest(name=name, failure='missing'), self.assertRaisesRegex(ValueError, 'Missing ' + name):
+                read_token(self.root, name)
+            for failure, content, mode in [('permissions', b'a' * 48, 0o644),
+                                           ('format', b'not-a-valid-secret', 0o600),
+                                           ('encoding', b'\xff' * 48, 0o600)]:
+                path.write_bytes(content)
+                path.chmod(mode)
+                with self.subTest(name=name, failure=failure), self.assertRaisesRegex(ValueError, name) as raised:
+                    read_token(self.root, name)
+                self.assertNotIn(content.decode('ascii', errors='replace'), str(raised.exception))
+            path.unlink()
+            path.symlink_to(self.root / 'missing-target')
+            with self.subTest(name=name, failure='symlink'), self.assertRaisesRegex(ValueError, name + ' must be a private regular file'):
+                read_token(self.root, name)
+            path.unlink()
+            path.mkdir(mode=0o700)
+            with self.subTest(name=name, failure='directory'), self.assertRaisesRegex(ValueError, name + ' must be a private regular file'):
+                read_token(self.root, name)
+            path.rmdir()
+            path.write_text('a' * 48)
+            path.chmod(0o600)
+            with self.subTest(name=name, failure='unreadable'), patch.object(Path, 'read_text', side_effect=PermissionError(13, 'Permission denied')):
+                with self.assertRaisesRegex(ValueError, 'Cannot read ' + name):
+                    read_token(self.root, name)
+
     def test_hub_cannot_route_back_into_profile_proxy(self):
         self.profile.bridge = config(hub_port=self.profile.port)
         with self.assertRaises(TapError):

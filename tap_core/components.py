@@ -5,11 +5,10 @@ import os
 from pathlib import Path
 import plistlib
 import secrets
-import stat
 from urllib.request import ProxyHandler, Request, build_opener
 
 from .runtime import TapError, StartupError, atomic_json
-from .bridge import exact_origin, fingerprint
+from .bridge import exact_origin, fingerprint, read_token
 from .readers import Reader, validate_definition
 
 ROOT = Path(__file__).resolve().parent
@@ -43,13 +42,10 @@ def configuration(value, profile):
 
 
 def secret(profile):
-    path = profile.root / 'state/component-token'
-    if path.is_symlink() or not stat.S_ISREG(path.stat().st_mode) or path.stat().st_mode & 0o777 != 0o600:
-        raise TapError('Component authority requires a private regular file')
-    value = path.read_text().strip()
-    if len(value) != 48 or any(c not in '0123456789abcdef' for c in value):
-        raise TapError('Invalid component authority')
-    return value
+    try:
+        return read_token(profile.root, 'component-token')
+    except ValueError as error:
+        raise TapError(str(error)) from error
 
 
 def prepare(profile):

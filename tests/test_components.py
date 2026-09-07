@@ -34,6 +34,21 @@ class ComponentTests(unittest.TestCase):
         self.assertNotIn(token, (self.root / 'profile.json').read_text())
         self.assertEqual(Profile.load(self.root).components, self.binding)
 
+    def test_component_secret_translates_missing_and_invalid_files_to_tap_error(self):
+        self.profile.components = self.binding
+        self.profile.save()
+        path = self.root / 'state/component-token'
+        path.unlink()
+        with self.assertRaisesRegex(TapError, 'Missing component-token'):
+            secret(self.profile)
+        path.write_text('invalid-secret')
+        path.chmod(0o600)
+        with self.assertRaisesRegex(TapError, 'Invalid component-token'):
+            secret(self.profile)
+        path.chmod(0o644)
+        with self.assertRaisesRegex(TapError, 'component-token must be a private regular file'):
+            secret(self.profile)
+
     def test_configuration_rejects_implicit_paths_and_nonfinite_handler_values(self):
         for field, value in [('python', 'python'), ('version', True), ('readers', []), ('unknown', None)]:
             with self.subTest(field=field), self.assertRaises(TapError):

@@ -212,11 +212,19 @@ def token_file(root):
 
 def read_token(root, name='bridge-token'):
     path = Path(root) / 'state' / name
-    if path.is_symlink() or not stat.S_ISREG(path.stat().st_mode) or path.stat().st_mode & 0o777 != 0o600:
-        raise ValueError('Bridge token must be a private regular file (0600)')
-    token = path.read_text().strip()
+    try:
+        mode = path.lstat().st_mode  # Inspect once, without following symlinks.
+        if not stat.S_ISREG(mode) or mode & 0o777 != 0o600:
+            raise ValueError(f'{name} must be a private regular file (0600): {path}')
+        token = path.read_text(encoding='ascii').strip()
+    except FileNotFoundError as error:
+        raise ValueError(f'Missing {name} file: {path}') from error
+    except OSError as error:
+        raise ValueError(f'Cannot read {name} file: {path}: {error.strerror}') from error
+    except UnicodeError as error:
+        raise ValueError(f'Invalid {name}: expected ASCII hexadecimal text') from error
     if not re.fullmatch('[0-9a-f]{48}', token):
-        raise ValueError('Invalid bridge token')
+        raise ValueError(f'Invalid {name}: expected 48 lowercase hexadecimal characters')
     return token
 
 
