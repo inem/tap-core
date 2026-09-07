@@ -139,8 +139,10 @@ class RoutingTests(unittest.TestCase):
         def failing_on(self):
             raise TapError('Capture startup failed: boom; proxy settings were not changed')
         with patch.object(Lifecycle, 'off', fake_off), patch.object(Lifecycle, 'on', failing_on):
-            with self.assertRaisesRegex(TapError, 'Routing set to system, but starting it failed'):
+            with self.assertRaisesRegex(TapError, 'Routing set to system, but starting it failed') as failure:
                 routing_set(profile, adapter, 'system')
+        self.assertNotIn('and stopped', str(failure.exception))
+        self.assertIn('services may still be running', str(failure.exception))
         # The mode is committed even though startup failed: honest partial state.
         self.assertEqual(Profile.load(profile.root).routing, 'system')
 

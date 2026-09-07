@@ -368,7 +368,8 @@ def routing_set(profile, adapter, target):
             return f"Routing set to {target}; {lifecycle.on()}"
         except (TapError, OSError) as error:
             raise TapError(f"Routing set to {target}, but starting it failed: {error}. "
-                           f"The profile is now {target} and stopped; run on to retry.") from error
+                           f"The saved routing is now {target}; startup is incomplete and services may still be running. "
+                           "Inspect status/doctor; use off to recover before retrying on.") from error
     return f"Routing set to {target}; profile remains stopped — run on to start it"
 
 
