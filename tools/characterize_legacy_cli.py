@@ -82,7 +82,8 @@ INSTALL_SUFFIX = ["permission", "armed", "certificate"]
 
 
 def case(name, command, events, text, *, codes=None, exit_code=0, gap=None):
-    return dict(name=name, command=command, events=events, text=text,
+    markers = [text] if isinstance(text, str) else list(text)
+    return dict(name=name, command=command, events=events, markers=markers,
                 codes=codes or {}, exit_code=exit_code, gap=gap)
 
 
@@ -122,7 +123,8 @@ def scenarios():
         case("install_plist_write_failure", "install", successful_install, "loaded, capture live",
              codes={"PLIST": 1},
              gap="Plist write failure does not prevent bootstrap or a success claim if later checks pass."),
-        case("install_setup_instructions", "install", successful_install, "trust the cert",
+        case("install_setup_instructions", "install", successful_install,
+             ["allow proxy toggle:", "start capturing:", "trust the cert:"],
              codes={"PERMISSION": 1, "ARMED": 1, "CERTIFICATE": 1}),
     ]
 
@@ -142,15 +144,16 @@ def run_case(item, script, root):
         errors.append(f"exit {result.returncode}, expected {item['exit_code']}")
     if observed != item["events"]:
         errors.append(f"events {observed!r}, expected {item['events']!r}")
-    if item["text"] not in result.stdout:
-        errors.append(f"missing output marker: {item['text']!r}")
+    for marker in item["markers"]:
+        if marker not in result.stdout:
+            errors.append(f"missing output marker: {marker!r}")
     if result.stderr:
         errors.append(f"unexpected stderr: {result.stderr}")
     if errors:
         raise RuntimeError(f"{item['name']}: " + "; ".join(errors))
     return {"name": item["name"], "status": "known_gap" if item["gap"] else "verified_fixture",
             "exit_code": result.returncode, "events": observed,
-            "observed_output_marker": item["text"], **({"gap": item["gap"]} if item["gap"] else {})}
+            "observed_output_markers": item["markers"], **({"gap": item["gap"]} if item["gap"] else {})}
 
 
 def main():

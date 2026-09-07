@@ -13,7 +13,9 @@
         "arm",
         "flows"
       ],
-      "observed_output_marker": "ON —"
+      "observed_output_markers": [
+        "ON —"
+      ]
     },
     {
       "name": "on_start_failure",
@@ -22,7 +24,9 @@
       "events": [
         "start"
       ],
-      "observed_output_marker": "proxy untouched"
+      "observed_output_markers": [
+        "proxy untouched"
+      ]
     },
     {
       "name": "on_arm_failure",
@@ -32,7 +36,9 @@
         "start",
         "arm"
       ],
-      "observed_output_marker": "proxy is off, net safe",
+      "observed_output_markers": [
+        "proxy is off, net safe"
+      ],
       "gap": "Arm failure returns without attempting rollback; the off claim is unverified."
     },
     {
@@ -45,7 +51,9 @@
         "flows",
         "disarm"
       ],
-      "observed_output_marker": "disarmed, net safe"
+      "observed_output_markers": [
+        "disarmed, net safe"
+      ]
     },
     {
       "name": "on_rollback_failure",
@@ -57,7 +65,9 @@
         "flows",
         "disarm"
       ],
-      "observed_output_marker": "disarmed, net safe",
+      "observed_output_markers": [
+        "disarmed, net safe"
+      ],
       "gap": "Failed rollback is still reported as disarmed and safe."
     },
     {
@@ -68,7 +78,9 @@
         "disarm",
         "stop"
       ],
-      "observed_output_marker": "recorder may respawn"
+      "observed_output_markers": [
+        "recorder may respawn"
+      ]
     },
     {
       "name": "off_disarm_failure",
@@ -77,7 +89,9 @@
       "events": [
         "disarm"
       ],
-      "observed_output_marker": "REFUSING to kill"
+      "observed_output_markers": [
+        "REFUSING to kill"
+      ]
     },
     {
       "name": "off_stop_failure",
@@ -87,7 +101,9 @@
         "disarm",
         "stop"
       ],
-      "observed_output_marker": "traffic goes direct"
+      "observed_output_markers": [
+        "traffic goes direct"
+      ]
     },
     {
       "name": "install_missing_backend",
@@ -96,7 +112,9 @@
       "events": [
         "backend"
       ],
-      "observed_output_marker": "mitmproxy not installed"
+      "observed_output_markers": [
+        "mitmproxy not installed"
+      ]
     },
     {
       "name": "install_success",
@@ -116,7 +134,9 @@
         "armed",
         "certificate"
       ],
-      "observed_output_marker": "loaded, capture live"
+      "observed_output_markers": [
+        "loaded, capture live"
+      ]
     },
     {
       "name": "install_start_failure",
@@ -148,7 +168,9 @@
         "armed",
         "certificate"
       ],
-      "observed_output_marker": "service didn't load",
+      "observed_output_markers": [
+        "service didn't load"
+      ],
       "gap": "Failed service startup still exits zero."
     },
     {
@@ -181,7 +203,9 @@
         "armed",
         "certificate"
       ],
-      "observed_output_marker": "proxy disarmed (traffic direct",
+      "observed_output_markers": [
+        "proxy disarmed (traffic direct"
+      ],
       "gap": "Failed startup and failed rollback still exit zero and claim direct traffic."
     },
     {
@@ -203,7 +227,9 @@
         "armed",
         "certificate"
       ],
-      "observed_output_marker": "service didn't load",
+      "observed_output_markers": [
+        "service didn't load"
+      ],
       "gap": "Port-only liveness is correctly rejected, but the failed install exits zero."
     },
     {
@@ -224,7 +250,9 @@
         "armed",
         "certificate"
       ],
-      "observed_output_marker": "loaded, capture live",
+      "observed_output_markers": [
+        "loaded, capture live"
+      ],
       "gap": "Plist write failure does not prevent bootstrap or a success claim if later checks pass."
     },
     {
@@ -245,7 +273,11 @@
         "armed",
         "certificate"
       ],
-      "observed_output_marker": "trust the cert"
+      "observed_output_markers": [
+        "allow proxy toggle:",
+        "start capturing:",
+        "trust the cert:"
+      ]
     }
   ],
   "matched_cases": 15,
