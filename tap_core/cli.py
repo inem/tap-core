@@ -5,6 +5,7 @@ import math
 import os
 from pathlib import Path
 import platform
+import re
 import sys
 import time
 
@@ -40,6 +41,31 @@ def health(profile, adapter):
             "healthy": current and state["writer_alive"] and state["write_errors"] == 0}
 
 
+def bridge_status(profile, adapter):
+    if profile.bridge is None:
+        return {"configured": False, "healthy": True}
+    from .bridge import fingerprint
+    try:
+        state = json.loads((profile.root / 'state/bridge.json').read_text())
+        if state is None:
+            raise TapError('Invalid bridge startup record')
+    except FileNotFoundError:
+        state = None
+    if state is not None and (
+            type(state) is not dict or set(state) != {'pid', 'configuration', 'enabled'}
+            or type(state['pid']) is not int or state['pid'] < 1
+            or type(state['enabled']) is not bool
+            or not isinstance(state['configuration'], str)
+            or not re.fullmatch('[0-9a-f]{64}', state['configuration'])):
+        raise TapError('Invalid bridge startup record')
+    healthy = (state is not None and state['pid'] == adapter.service_pid(profile)
+               and state['configuration'] == fingerprint(profile.bridge)
+               and state['enabled'] is profile.bridge['enabled'])
+    return {"configured": True, "healthy": healthy, "enabled": profile.bridge['enabled'],
+            "hub_port": profile.bridge['hub_port'], "applies": "startup snapshot",
+            "hub_liveness": "not_checked"}
+
+
 def status(profile, adapter):
     errors = {}
     def observe(name, operation, unavailable=None):
@@ -57,6 +83,8 @@ def status(profile, adapter):
               "system_proxy_verified": observe("system_proxy_verified", lambda: adapter.armed(profile)) if profile.routing == "system" else "not_used",
               "capture": observe("capture", lambda: health(profile, adapter),
                                  {"available": None, "healthy": None, "current_process": None})}
+    result['bridge'] = observe('bridge', lambda: bridge_status(profile, adapter),
+                               {'configured': profile.bridge is not None, 'healthy': None})
     result["inspection_errors"] = errors
     return result
 
@@ -76,7 +104,7 @@ def doctor(profile, adapter):
         except TapError as error:
             result["inspection_errors"]["traffic_probe"] = str(error)
     result["healthy"] = bool("backend_error" not in result and not result["inspection_errors"] and result["port_owned"]
-                         and result["capture"]["healthy"] and result["traffic_probe"]
+                         and result["capture"]["healthy"] and result["traffic_probe"] and result["bridge"]["healthy"]
                          and (profile.routing == "explicit" or result["system_proxy_verified"]))
     return result
 
@@ -91,8 +119,25 @@ def parser():
     install.add_argument("--routing", choices=["explicit", "system"], required=True)
     install.add_argument("--probe-url", default="http://example.com/")
     install.add_argument("--addon", type=Path, action="append", default=[], help="Additional trusted addon (optional)")
+    install.add_argument("--bridge-config", type=Path, help="Explicit page bridge configuration JSON")
     for name in ("on", "off", "status", "doctor", "where", "uninstall"):
         commands.add_parser(name)
+    bridge = commands.add_parser('bridge', help='Configure or explain page injection and local routes')
+    bridge_actions = bridge.add_subparsers(dest='bridge_action', required=True)
+    configure = bridge_actions.add_parser('configure')
+    configure.add_argument('--config', type=Path, required=True)
+    explain = bridge_actions.add_parser('explain')
+    explain.add_argument('--origin', required=True)
+    reader = commands.add_parser("reader", help="Run independent readers over retained capture")
+    actions = reader.add_subparsers(dest="reader_action", required=True)
+    for action in ("run", "status", "replay"):
+        command = actions.add_parser(action)
+        command.add_argument("name")
+        if action != "status":
+            command.add_argument("--definition", type=Path, required=True)
+        if action == "run":
+            command.add_argument("--max-records", type=int, default=100)
+            command.add_argument("--timeout", type=float, default=30)
     return result
 
 
@@ -107,8 +152,37 @@ def main(argv=None):
         if args.command == "install":
             profile = Profile(root, str(args.backend.expanduser().resolve()), args.port, args.routing,
                               args.probe_url, [str(p.expanduser().resolve()) for p in args.addon])
+            if args.bridge_config:
+                from .bridge import configuration, read_json
+                profile.bridge = configuration(read_json(args.bridge_config))
         else:
             profile = Profile.load(root)
+        if args.command == 'bridge':
+            from .bridge import configuration, read_json, decision
+            if args.bridge_action == 'configure':
+                with profile_lock(root):
+                    if adapter.service_loaded(profile):
+                        raise TapError('Stop this profile with off before changing bridge configuration')
+                    profile.bridge = configuration(read_json(args.config))
+                    profile.save()
+                output = {'configured': True, 'applies': 'next on'}
+            else:
+                if profile.bridge is None:
+                    raise TapError('No bridge configured in this profile')
+                output = decision(configuration(profile.bridge), args.origin)
+            print(json.dumps(output, indent=2))
+            return 0
+        if args.command == "reader":
+            from .readers import Reader, definition
+            reader = Reader(profile, args.name)
+            if args.reader_action == "status":
+                output = reader.status()
+            elif args.reader_action == "replay":
+                output = reader.replay(definition(args.definition))
+            else:
+                output = reader.run(definition(args.definition), args.max_records, args.timeout)
+            print(json.dumps(output, indent=2))
+            return 0
         if args.command in ("status", "doctor", "where"):
             if args.command == "where":
                 result = {"profile": str(root), "config": str(root / "profile.json"),

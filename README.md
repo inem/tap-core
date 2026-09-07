@@ -9,6 +9,14 @@ surface. This is not yet a packaged clean-Mac release.
 [Capture record v1 and journal positions](docs/capture-records.md) define the
 current storage input for independent readers, including legacy compatibility
 and explicit errors when retention removes a saved position.
+[Independent reader runs](docs/readers.md) add per-reader progress, resume and
+explicit replay over retained capture, with synthetic subprocess examples.
+
+[The first live vertical slice](docs/live-slice.md) connects captured data to a
+reader projection and an injected browser page through the existing WS bridge.
+
+[Profile-owned injection and local routes](docs/profile-bridge.md) replace the
+first live slice’s temporary injector configuration with explicit profile policy.
 
 ## Scope
 
@@ -40,6 +48,10 @@ architecture by default.
 
 Read [TECHNOLOGY.md](TECHNOLOGY.md) for release requirements, working stack choices
 and unresolved packaging decisions before starting an implementation task.
+Use the [review lenses](docs/review-planes.md) to check the affected responsibility,
+state, access and delivery boundaries and the evidence behind each claim.
+The [development views](docs/development-views.md) show useful cycles, their
+operating conditions and the route from a live harness to an installable product.
 
 ## License
 

@@ -1,0 +1,11 @@
+{
+  "scope": "synthetic Writer and real CLI reader subprocesses; no network or launchd",
+  "independent_progress": true,
+  "resume": true,
+  "explicit_replay": true,
+  "projection_a_b_a": true,
+  "fixture_deduplicates_repeated_delivery": true,
+  "changed_revision_recomputes_projection": true,
+  "partial_replay_retry_preserves_latest": true,
+  "temporary_profile_removed": true
+}

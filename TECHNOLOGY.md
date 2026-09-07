@@ -61,6 +61,19 @@ requirements, not to preserve the legacy architecture.
 | Platform process routing | Evaluate mitmproxy Local Capture before writing a custom helper. | Upstream documents selection by process name/PID. Verify installed-version behavior, permissions, source attribution, reconfiguration and conflicts on macOS. Documentation is not a live acceptance result. |
 | Product UI | CLI and open example-pack surfaces for the first core slice. | No mandatory Electron/Tauri/desktop shell in this milestone. A later UI must not be required to keep capture and data access working. |
 
+## Runtime decision for v0.1 (2026-09-07)
+
+The mandatory core installation and the open example pack do **not** require
+Elixir/OTP. The independent finite reader runner is Python; the existing Bun
+page/Hub implementation remains the WS extraction candidate. The legacy
+`read/run.exs` loop is Elixir, while `readers/chatgpt` is Python: running one
+fixture is not evidence that the legacy loop and all materializers were ported.
+
+A pack retaining Elixir readers must declare and deliver its Elixir/OTP dependency
+explicitly. Core must not discover it accidentally through an author's mise or
+neighboring checkout. Pack dependency installation and clean-Mac runtime delivery
+remain acceptance work; this decision does not claim those installers exist.
+
 ## Dependency and packaging decisions still open
 
 - Exact supported versions and distribution of mitmproxy/Python/Bun. The

@@ -27,3 +27,9 @@ acceptance in reports.
 Return the commit/PR, changed interfaces, verification commands and results,
 remaining limits, and any migration required by dependent issues. Do not call an
 issue complete while its acceptance criteria or integration checks are missing.
+
+For implementation and review, use [review lenses](docs/review-planes.md) for the
+boundaries affected by the change. Authors identify affected lenses; reviewers
+check for omissions. A separate report for every lens is not required. Distinguish
+a stated slice limitation from an unmet acceptance criterion; a follow-up issue
+does not by itself waive a requirement of the current task.
