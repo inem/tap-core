@@ -1,6 +1,7 @@
 #!/bin/bash
 # One-time sudoers drop-in so system routing can call networksetup via sudo -n.
-# Does not change the profile, proxy state, or keychain.
+# Prefer finish-setup (sudoers + CA trust + tap on). This script is the sudoers
+# step alone. Does not change the profile, proxy state, or keychain.
 set -euo pipefail
 
 ROOT="${TAP_ROOT:-$HOME/.tap-core}"
@@ -20,7 +21,7 @@ echo "tap-core: installing $TARGET for user $USER_NAME (password once)"
 sudo install -m 440 "$tmp" "$TARGET"
 sudo visudo -c -f "$TARGET" >/dev/null || fail "installed drop-in failed visudo -c; inspect $TARGET"
 if sudo -n -l 2>/dev/null | grep -Eq 'TAP_CORE_PROXY|networksetup -setwebproxy'; then
-  echo "tap-core: sudoers ready — run: export PATH=\"\$HOME/.local/bin:\$PATH\"; tap on"
+  echo "tap-core: sudoers ready"
 else
-  echo "tap-core: drop-in written; open a new shell if sudo -n is still denied, then: tap on"
+  echo "tap-core: drop-in written; open a new shell if sudo -n is still denied"
 fi

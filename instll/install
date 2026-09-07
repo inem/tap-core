@@ -233,26 +233,22 @@ write_mark() {
     "$ROOT" "$WRAPPER" "$PYTHON" "$BACKEND" "$REPO" "$RESOLVED_REF" "$arch" "$PORT" "$ROUTING" "$SKIP_START"
 }
 
-sudoers_ready() {
-  sudo -n -l 2>/dev/null | grep -Eq 'TAP_CORE_PROXY|networksetup -setwebproxy'
-}
-
-print_sudoers_hint() {
+print_finish_hint() {
   cat <<EOF
 
-System routing needs a one-time passwordless networksetup rule (same idea as legacy TAP).
-Run once (will ask for your Mac password):
+────────────────────────────────────────────────────────────
+  Almost done — one command left (Mac password once):
 
-  bash "$CHECKOUT/instll/enable-system-proxy-sudo"
+    bash "$CHECKOUT/instll/finish-setup"
 
-Then:
+  That will: allow system proxy control → trust this CA → tap on.
+  Safe to re-run. Stop with Ctrl-C anytime; nothing is deleted on failure.
 
-  export PATH="$BIN_DIR:\$PATH"
-  tap on
+  Prefer no system proxy / no sudoers?
 
-Or install without system proxy mutation:
-
-  TAP_ROUTING=explicit curl -fsSL https://instll.sh/inem/tap-core | sh
+    TAP_ROUTING=explicit  (reinstall with that env) or later:
+    tap routing set explicit && tap on
+────────────────────────────────────────────────────────────
 
 EOF
 }
@@ -266,9 +262,10 @@ start_profile() {
     --probe-url "$PROBE_URL" \
     --bridge-config "$ROOT/managed/bridge.json" \
     --components-config "$ROOT/managed/components.json"
-  if [ "$ROUTING" = system ] && ! sudoers_ready; then
-    info "profile installed; deferring on until sudoers is enabled"
-    print_sudoers_hint
+  if [ "$ROUTING" = system ]; then
+    # curl|sh cannot collect a Mac password on the script pipe. Hand the user one
+    # guided command that does sudoers + CA trust + on with a single sudo ticket.
+    info "profile installed; system proxy/CA need an interactive finish step"
     STARTED=0
     return
   fi
@@ -308,8 +305,8 @@ TAP Core installed.
 For next shells:
   export PATH="$BIN_DIR:\$PATH"
 
-CA (manual trust; installer does not mutate keychain):
-  open "$PROFILE/certificates/mitmproxy-ca-cert.pem"
+CA (HTTPS):
+  trusted by finish-setup; or open "$PROFILE/certificates/mitmproxy-ca-cert.pem"
 
 Uninstall:
   bash "$CHECKOUT/instll/uninstall"
@@ -317,7 +314,7 @@ Uninstall:
 EOF
 
 if [ "$ROUTING" = system ] && [ "$STARTED" != 1 ] && [ "$SKIP_START" != 1 ]; then
-  print_sudoers_hint
+  print_finish_hint
 fi
 
 export PATH="$BIN_DIR:$PATH"
@@ -326,7 +323,7 @@ uname -m
 if [ "$SKIP_START" = 1 ]; then
   info "skip tap doctor / hub smoke (TAP_SKIP_START=1)"
 elif [ "$STARTED" != 1 ]; then
-  info "skip doctor/smoke until: bash \"$CHECKOUT/instll/enable-system-proxy-sudo\" && tap on"
+  info "next: bash \"$CHECKOUT/instll/finish-setup\""
 else
   tap doctor
   info "Hub HTTP/WS smoke"

@@ -40,10 +40,10 @@ What it does:
 6. Writes managed bridge/components under `~/.tap-core/managed/` with absolute paths
    only inside the install root (Hub, example reader/handlers from the checkout).
 7. Refuses an existing install root or occupied command path; creates an owned `~/.local/bin/tap`.
-8. Runs `install` for a **system**-routing profile on port `18999` (Hub on `19000`)
-   with those managed bindings. If passwordless `networksetup` sudoers is missing,
-   prints the one-time enable command and leaves `on` for you after that.
-   Opt out of system proxy mutation with `TAP_ROUTING=explicit`.
+8. Runs `install` for a **system**-routing profile on port `18999` (Hub on `19000`).
+   Because `curl | sh` cannot collect a Mac password on the pipe, it then prints
+   **one** guided command: `finish-setup` (sudoers + trust this CA + `tap on`).
+   Opt out of system proxy mutation with `TAP_ROUTING=explicit` (then `on` runs in the installer).
 
 
 ## Uninstall
@@ -84,7 +84,7 @@ export PATH="$HOME/.local/bin:$PATH"
 tap doctor
 ```
 
-Trust the CA manually:
+HTTPS trust for system installs is part of `finish-setup`. Manual fallback:
 
 ```sh
 open "$HOME/.tap-core/profile/certificates/mitmproxy-ca-cert.pem"
@@ -92,13 +92,15 @@ open "$HOME/.tap-core/profile/certificates/mitmproxy-ca-cert.pem"
 
 ## Two install modes
 
-**System (default)** — browsers pick up the macOS proxy after `tap on`, like legacy TAP.
-Needs a one-time sudoers drop-in (password once):
+**System (default)** — browsers pick up the macOS proxy after finish-setup, like legacy TAP.
 
 ```sh
-bash "$HOME/.tap-core/checkout/instll/enable-system-proxy-sudo"
-tap on
+curl -fsSL https://instll.sh/inem/tap-core | sh
+bash "$HOME/.tap-core/checkout/instll/finish-setup"   # Mac password once
 ```
+
+`finish-setup` explains each step, installs scoped sudoers, trusts **this**
+profile CA in the System keychain, then runs `tap on`. Safe to re-run.
 
 **Explicit** — no sudoers, no system proxy mutation; clients must point at the proxy:
 
@@ -107,8 +109,6 @@ TAP_ROUTING=explicit curl -fsSL https://instll.sh/inem/tap-core | sh
 ```
 
 The installer prints these hints itself. `doctor` reports `sudoers.ready` for system profiles.
-
-Point a dedicated client at the proxy only for explicit routing. This installer does not establish CA trust.
 
 ## Failure and ownership contract
 
@@ -143,7 +143,7 @@ install root unless uninstall cleanup is verified.
 ## Still open for #7 / #15
 
 - Signed/notarized release package and locked matrix of OS/browser versions
-- Automatic CA trust install/removal with verified HTTPS clients (no `-k`) — next delivery slice
+- Automatic CA trust via `finish-setup`; verified browser HTTPS matrix and CA removal ownership still open
 - In-place update preserving profile/packs/data — next delivery slice
 - System-routing recovery acceptance on a clean machine
 - Full live coexistence acceptance with a parallel legacy TAP install; file/path conflicts are covered by controlled regressions
