@@ -130,6 +130,20 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(Profile.load(profile.root).routing, 'explicit')
         self.assertIn('ON — new mode', result)
 
+    def test_startup_failure_after_commit_reports_committed_mode(self):
+        profile = self.profile(mode='explicit')
+        adapter = self.observations()
+        adapter.service_loaded.return_value = True  # running
+        def fake_off(self):
+            pass
+        def failing_on(self):
+            raise TapError('Capture startup failed: boom; proxy settings were not changed')
+        with patch.object(Lifecycle, 'off', fake_off), patch.object(Lifecycle, 'on', failing_on):
+            with self.assertRaisesRegex(TapError, 'Routing set to system, but starting it failed'):
+                routing_set(profile, adapter, 'system')
+        # The mode is committed even though startup failed: honest partial state.
+        self.assertEqual(Profile.load(profile.root).routing, 'system')
+
     def test_failed_recovery_leaving_system_does_not_commit_new_mode(self):
         profile = self.profile(mode='system')
         adapter = self.observations()

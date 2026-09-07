@@ -240,11 +240,16 @@ def main(argv=None):
             print(json.dumps(result, indent=2))
             return 1 if args.command == "doctor" and not result["healthy"] else 0
         if args.command == "routing":
-            # Leaving OR entering system mutates shared network settings, so take
-            # the shared network lock whenever either side is system — not only
-            # when the current mode is system (that would miss explicit -> system).
-            needs_network_lock = profile.routing == "system" or args.mode == "system"
             with profile_lock(root):
+                # Reload under the lock: the profile read before locking may be
+                # stale if another command changed routing in between, which would
+                # otherwise decide the shared lock or the no-op on old state.
+                profile = Profile.load(root)
+                # Leaving OR entering system mutates shared network settings, so
+                # take the shared network lock whenever either side is system —
+                # not only when the current mode is system (that would miss the
+                # explicit -> system direction).
+                needs_network_lock = profile.routing == "system" or args.mode == "system"
                 with (SystemProxyRouting(profile, adapter).mutation_lock()
                       if needs_network_lock else nullcontext()):
                     output = routing_set(profile, adapter, args.mode)
@@ -290,7 +295,14 @@ def routing_set(profile, adapter, target):
     profile.routing = target
     profile.save()
     if running:
-        return f"Routing set to {target}; {lifecycle.on()}"
+        # The mode is already committed; on() is a separate step. If it fails,
+        # say so plainly instead of letting on()'s "settings were not changed"
+        # message hide that the profile is now in the new mode, stopped.
+        try:
+            return f"Routing set to {target}; {lifecycle.on()}"
+        except (TapError, OSError) as error:
+            raise TapError(f"Routing set to {target}, but starting it failed: {error}. "
+                           f"The profile is now {target} and stopped; run on to retry.") from error
     return f"Routing set to {target}; profile remains stopped — run on to start it"
 
 
