@@ -45,13 +45,84 @@ def record(args):
         handle.write(code)
 
 
+def _load_mark(root):
+    marker = canonical(root / 'install.json')
+    data = json.loads(marker.read_text())
+    require(data.get('version') == 1 and data.get('root') == str(root),
+            'Ownership record does not match install root')
+    return marker, data
+
+
+def _save_mark(marker, data):
+    temporary = marker.with_suffix('.tmp')
+    temporary.write_text(json.dumps(data, indent=2) + '\n')
+    temporary.chmod(0o600)
+    temporary.replace(marker)
+
+
+def grant_sudoers(root, path, digest, alias):
+    root = canonical(root)
+    marker, data = _load_mark(root)
+    grants = dict(data.get('grants') or {})
+    grants['sudoers'] = {'path': str(path), 'sha256': digest, 'alias': alias}
+    data['grants'] = grants
+    _save_mark(marker, data)
+
+
+def grant_ca(root, cert, digest):
+    root = canonical(root)
+    marker, data = _load_mark(root)
+    grants = dict(data.get('grants') or {})
+    grants['ca'] = {'cert': str(Path(cert).resolve()), 'sha256': digest.lower()}
+    data['grants'] = grants
+    _save_mark(marker, data)
+
+
+def revoke_grants(root, data):
+    """Best-effort removal of grants owned by this install. Failures stay explicit."""
+    grants = data.get('grants') or {}
+    errors = []
+    sudoers = grants.get('sudoers') or {}
+    path = sudoers.get('path')
+    if path:
+        target = Path(path)
+        try:
+            import subprocess
+            if target.is_file():
+                listed = subprocess.run(['/usr/bin/sudo', '-n', 'cat', str(target)],
+                                        text=True, capture_output=True, check=False)
+                owned = f'tap-core-owned root={root}' in listed.stdout
+                digest = hashlib.sha256(listed.stdout.encode()).hexdigest() if listed.returncode == 0 else None
+                if owned and digest == sudoers.get('sha256'):
+                    removed = subprocess.run(['/usr/bin/sudo', '-n', 'rm', '-f', str(target)],
+                                             text=True, capture_output=True, check=False)
+                    if removed.returncode != 0:
+                        errors.append('sudoers remove failed: ' + (removed.stderr or removed.stdout).strip())
+                elif target.is_file():
+                    errors.append('sudoers file present but not owned/matched; left untouched: ' + str(target))
+        except OSError as error:
+            errors.append('sudoers revoke error: ' + str(error))
+    ca = grants.get('ca') or {}
+    cert = ca.get('cert')
+    if cert and Path(cert).is_file():
+        try:
+            import subprocess
+            # Remove trust for this exact certificate file; do not delete unrelated mitmproxy entries.
+            removed = subprocess.run(
+                ['/usr/bin/sudo', '-n', '/usr/bin/security', 'remove-trusted-cert', '-d', cert],
+                text=True, capture_output=True, check=False)
+            if removed.returncode != 0:
+                errors.append('CA trust revoke failed: ' + (removed.stderr or removed.stdout).strip())
+        except OSError as error:
+            errors.append('CA revoke error: ' + str(error))
+    return errors
+
+
 def remove(root, purge):
     root = canonical(root)
     require(root not in (Path('/'), Path.home().resolve()), 'Refusing broad install root')
     require(purge in ('0', '1'), 'TAP_PURGE must be 0 or 1')
-    marker = canonical(root / 'install.json')
-    data = json.loads(marker.read_text())
-    require(data.get('version') == 1 and data.get('root') == str(root), 'Ownership record does not match install root')
+    marker, data = _load_mark(root)
     require(type(data.get('profile_requested')) is bool, 'Invalid install state')
     require(str(Path(__file__).resolve()) == str(root / 'checkout/instll/ownership.py'),
             'Use the uninstaller from this installation')
@@ -64,9 +135,6 @@ def remove(root, purge):
     check_wrapper()
     profile_root = canonical(root / 'profile')
     sys.path.insert(0, str(root / 'checkout'))
-    # Use the same profile + network locks and recovery-first lifecycle as CLI.
-    # Retain them through removal so concurrent on cannot restart between off
-    # and deletion. No new independent process manager is introduced here.
     from tap_core.runtime import MacOS, Profile, profile_lock
     from tap_core.routing import select_routing
     from tap_core.cli import mutate
@@ -85,11 +153,17 @@ def remove(root, purge):
             with network_lock:
                 if configured:
                     mutate('uninstall', profile, adapter)
+                grant_errors = revoke_grants(root, data)
                 check_wrapper()
                 wrapper.unlink(missing_ok=True)
                 if purge == '1':
                     shutil.rmtree(root)
-                print('Profile service removed; ' + ('installation purged' if purge == '1' else 'data and runtime retained'))
+                message = 'Profile service removed; ' + (
+                    'installation purged' if purge == '1' else 'data and runtime retained')
+                if grant_errors:
+                    print(message + '; grant cleanup incomplete: ' + '; '.join(grant_errors))
+                else:
+                    print(message)
 
 
 def main():
@@ -98,6 +172,10 @@ def main():
             record(sys.argv[2:])
         elif sys.argv[1] == 'remove':
             remove(*sys.argv[2:])
+        elif sys.argv[1] == 'grant-sudoers':
+            grant_sudoers(*sys.argv[2:])
+        elif sys.argv[1] == 'grant-ca':
+            grant_ca(*sys.argv[2:])
         else:
             raise ValueError('Unknown installer action')
     except Exception as error:

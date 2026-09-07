@@ -6,24 +6,24 @@
 # Usage (after main):
 #   curl -fsSL instll.sh/inem/tap-core | sh
 # Branch test (after instll.sh @ref is deployed):
-#   curl -fsSL instll.sh/inem/tap-core@issue-49-installer-managed-runtime | sh
+#   curl -fsSL instll.sh/inem/tap-core@issue-49-installer-managed-runtime \
+#     | TAP_REF=issue-49-installer-managed-runtime bash
 # Fallback:
 #   curl -fsSL \
 #     https://raw.githubusercontent.com/inem/tap-core/issue-49-installer-managed-runtime/instll/install \
 #     | TAP_REF=issue-49-installer-managed-runtime bash
 #
 # System routing by default (legacy TAP behavior). Explicit is opt-in:
-#   TAP_ROUTING=explicit curl ... | sh
-# Never changes keychain trust.
+#   curl -fsSL instll.sh/inem/tap-core | TAP_ROUTING=explicit bash
+# Never changes keychain trust by itself; finish-setup owns CA trust.
 # Delivers portable Python, mitmproxy and Bun, then wires managed Hub/readers
 # from the installed checkout (issue #49).
 
 set -euo pipefail
 
 REPO="${TAP_REPO:-inem/tap-core}"
-# Default to this PR branch so @ref one-liners fetch matching checkout code.
-# Flip back to main when this lands.
-REF="${TAP_REF:-issue-49-installer-managed-runtime}"
+# Release channel. Branch one-liners must pass TAP_REF explicitly (or use @ref + TAP_REF=...).
+REF="${TAP_REF:-main}"
 ROOT="${TAP_ROOT:-$HOME/.tap-core}"
 BIN_DIR="${TAP_BIN_DIR:-$HOME/.local/bin}"
 PORT="${TAP_PORT:-18999}"
@@ -246,8 +246,8 @@ print_finish_hint() {
 
   Prefer no system proxy / no sudoers?
 
-    TAP_ROUTING=explicit  (reinstall with that env) or later:
-    tap routing set explicit && tap on
+    curl -fsSL … | TAP_ROUTING=explicit bash
+    (new TAP_ROOT) or later: tap routing set explicit && tap on
 ────────────────────────────────────────────────────────────
 
 EOF

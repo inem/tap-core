@@ -77,12 +77,29 @@ def attempt_purge(install_root, env, timeout=120):
     uninstaller = install_root / 'checkout/instll/uninstall'
     if not uninstaller.is_file():
         return False, 'installed uninstaller missing'
-    result = run(['/bin/bash', str(uninstaller)], {**env, 'TAP_PURGE': '1'}, timeout=timeout)
+    try:
+        result = run(['/bin/bash', str(uninstaller)], {**env, 'TAP_PURGE': '1'}, timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        return False, f'uninstall timeout after {error.timeout}s'
+    except OSError as error:
+        return False, f'uninstall OSError: {error}'
     if result.returncode != 0:
         return False, (result.stderr or result.stdout or 'uninstall failed').strip()
     if install_root.exists():
         return False, 'install root still present after purge'
     return True, None
+
+
+def recovery_command(install_root):
+    interpreter = install_root / 'interpreter'
+    python = interpreter.read_text().strip() if interpreter.is_file() else None
+    ownership = install_root / 'checkout/instll/ownership.py'
+    if python and Path(python).is_file() and ownership.is_file():
+        return f'{python} {ownership} remove {install_root} 0'
+    uninstall = install_root / 'checkout/instll/uninstall'
+    if uninstall.is_file():
+        return f'TAP_ROOT={install_root} bash {uninstall}'
+    return f'inspect retained install at {install_root}'
 
 
 def emit(report, output):
@@ -218,20 +235,23 @@ def main(argv=None):
     except Exception as error:
         report['error'] = type(error).__name__ + ': ' + str(error)
     finally:
-        if install_root.exists():
-            verified, error = attempt_purge(install_root, env)
-            report['cleanup_verified'] = verified
-            if not verified:
-                report['cleanup_error'] = error
-                report['retained_root'] = str(install_root)
-                report['recovery'] = (
-                    f'{install_root}/python/bin/python3 '
-                    f'{install_root}/checkout/instll/ownership.py remove {install_root} 0'
-                )
-            elif parent.exists():
+        try:
+            if install_root.exists():
+                verified, error = attempt_purge(install_root, env)
+                report['cleanup_verified'] = verified
+                if not verified:
+                    report['cleanup_error'] = error
+                    report['retained_root'] = str(install_root)
+                    report['recovery'] = recovery_command(install_root)
+                elif parent.exists():
+                    shutil.rmtree(parent, ignore_errors=True)
+            elif report.get('cleanup_verified') and parent.exists():
                 shutil.rmtree(parent, ignore_errors=True)
-        elif report.get('cleanup_verified') and parent.exists():
-            shutil.rmtree(parent, ignore_errors=True)
+        except (subprocess.TimeoutExpired, OSError) as error:
+            report['cleanup_verified'] = False
+            report['cleanup_error'] = str(error)
+            report['retained_root'] = str(install_root)
+            report['recovery'] = recovery_command(install_root)
 
     emit(report, args.output)
     return 0 if report.get('ok') and report.get('cleanup_verified') else 1

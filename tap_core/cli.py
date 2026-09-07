@@ -112,11 +112,12 @@ def doctor(profile, adapter):
         result["sudoers"] = {
             "ready": ready,
             "fix": None if ready else
-            'bash "$HOME/.tap-core/checkout/instll/enable-system-proxy-sudo"',
+            'bash "$HOME/.tap-core/checkout/instll/finish-setup"',
         }
         if not ready:
             result["inspection_errors"]["sudoers"] = (
-                "system routing needs passwordless networksetup; run enable-system-proxy-sudo once")
+                "system routing needs finish-setup (sudoers + CA trust); "
+                "run the finish-setup from this installation's checkout")
     result["traffic_probe"] = None
     if result["port_owned"] is True:
         try:

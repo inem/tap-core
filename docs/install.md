@@ -105,7 +105,7 @@ profile CA in the System keychain, then runs `tap on`. Safe to re-run.
 **Explicit** — no sudoers, no system proxy mutation; clients must point at the proxy:
 
 ```sh
-TAP_ROUTING=explicit curl -fsSL https://instll.sh/inem/tap-core | sh
+curl -fsSL https://instll.sh/inem/tap-core | TAP_ROUTING=explicit bash
 ```
 
 The installer prints these hints itself. `doctor` reports `sudoers.ready` for system profiles.

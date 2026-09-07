@@ -247,3 +247,40 @@ class InstallerTests(unittest.TestCase):
         rendered.write_text(snippet.replace('__TAP_USER__', 'fixtureuser'))
         check = subprocess.run(['visudo', '-c', '-f', str(rendered)], capture_output=True, text=True)
         self.assertEqual(check.returncode, 0, check.stderr)
+
+    def test_installer_default_ref_is_main(self):
+        text = (REPO / 'instll/install').read_text()
+        self.assertRegex(text, r'REF="\$\{TAP_REF:-main\}"')
+        self.assertNotRegex(text, r'REF="\$\{TAP_REF:-issue-49')
+
+    def test_docs_and_hints_put_routing_env_on_bash_side_of_pipe(self):
+        docs = (REPO / 'docs/install.md').read_text()
+        self.assertIn('curl -fsSL https://instll.sh/inem/tap-core | TAP_ROUTING=explicit bash', docs)
+        self.assertNotIn('TAP_ROUTING=explicit curl -fsSL https://instll.sh/inem/tap-core | sh', docs)
+
+    def test_grant_sudoers_and_ca_roundtrip_in_ownership_record(self):
+        self.prepare()
+        ownership.grant_sudoers(str(self.root), '/etc/sudoers.d/tap-core-fixture', 'abc', 'TAP_CORE_PROXY_fixture')
+        ownership.grant_ca(str(self.root), str(self.root / 'profile/certificates/mitmproxy-ca-cert.pem'), 'deadbeef')
+        data = json.loads((self.root / 'install.json').read_text())
+        self.assertEqual(data['grants']['sudoers']['alias'], 'TAP_CORE_PROXY_fixture')
+        self.assertEqual(data['grants']['ca']['sha256'], 'deadbeef')
+
+    def test_finish_setup_resolves_root_from_its_location(self):
+        script = (REPO / 'instll/finish-setup').read_text()
+        self.assertIn('HERE="$(cd "$(dirname "$0")" && pwd)"', script)
+        self.assertIn('ROOT="$(cd "$HERE/../.." && pwd)"', script)
+        self.assertNotIn('ROOT="${TAP_ROOT:-$HOME/.tap-core}"', script)
+
+    def test_recovery_command_prefers_recorded_interpreter(self):
+        harness = importlib.util.spec_from_file_location(
+            'check_installer_managed_runtime', REPO / 'tools/check_installer_managed_runtime.py')
+        module = importlib.util.module_from_spec(harness)
+        harness.loader.exec_module(module)
+        self.root.mkdir()
+        (self.root / 'interpreter').write_text(sys.executable + '\n')
+        (self.root / 'checkout/instll').mkdir(parents=True)
+        (self.root / 'checkout/instll/ownership.py').write_text('pass\n')
+        command = module.recovery_command(self.root)
+        self.assertTrue(command.startswith(sys.executable))
+        self.assertIn('ownership.py remove', command)
