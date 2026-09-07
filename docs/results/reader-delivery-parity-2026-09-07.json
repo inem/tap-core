@@ -1,19 +1,22 @@
 {
   "scope": "synthetic Writer + SQLite fixture; no network or launchd",
-  "commit": "836d09b0f0f8e28ccc4f3a590bdbaa724898f9be",
+  "commit": "f752bf473eef09728adfa8960662af1a15135485",
+  "measured_at": "2026-09-07T22:20:02.417841+00:00",
+  "source_dirty": false,
   "corpus": "a_b_a_n3",
   "records": 3,
   "reader": "fixtures/readers/sqlite_projection.py",
   "digests": {
     "reader_sha256": "8871eb4b23ae9aa475c53275639c936fb74588b37d2133a84ab954ab547dd831",
-    "corpus_stream_sha256": "55e44922420fd436e2eb25f5d8ccdbf5920903a8a16ac9cf44d1bc7d958f3488",
+    "source_jsonl_sha256": "c729714a8385f7644433c90da45e19582c7be6001c40eba33ed507775b33cc3f",
+    "corpus_stream_sha256": "c729714a8385f7644433c90da45e19582c7be6001c40eba33ed507775b33cc3f",
     "corpus_values_sha256": "a8da1d7ebbf9ad6555728aff59196db30117a563dbbb1cd4fe7cdbee1783bdfc",
     "capture_template_sha256": "e54aa1d9f0212ce760de2f4ccc3d0fa75a37204d05ad5f71fa7fe66766939fac"
   },
   "environment": {
-    "python": "3.14.6",
-    "executable": "/opt/homebrew/opt/python@3.14/bin/python3.14",
-    "platform": "macOS-15.6.1-arm64-arm-64bit-Mach-O",
+    "python": "3.9.6",
+    "executable": "/Applications/Xcode.app/Contents/Developer/usr/bin/python3",
+    "platform": "macOS-15.6.1-arm64-arm-64bit",
     "system": "Darwin",
     "release": "24.6.0",
     "machine": "arm64",
@@ -22,7 +25,9 @@
   "baseline": {
     "direct": "independent_subprocess",
     "runner": "tap_reader_cli",
-    "shares_reader_execute": false
+    "shares_reader_execute": false,
+    "shares_journal_scan": false,
+    "source": "stable source JSONL before Writer"
   },
   "projection_equal": true,
   "order_equal": true,
@@ -49,16 +54,16 @@
   "intentional_differences": [
     "Direct baseline is an independent subprocess host and does not call Reader.execute, so runner delivery bugs are not masked.",
     "Direct does not set TAP_READER_LOCK_FD, OUTPUT_LIMIT, killpg, guardian, or persist a checkpoint.",
-    "Delivery/invocation IDs still follow the documented cursor hash + name/generation formula so projection keys are comparable.",
+    "Direct IDs derive from stable source record IDs; runner IDs derive from journal cursors and reader generations. Compare projected values/order/receipt count, not identity bytes.",
     "Neither path exercises pack batch-stdin EOF over many lines in one process.",
     "JSON projection equality is structural (order/latest/receipts), not byte-for-byte stdout identity.",
     "Append-only pack readers may duplicate on retry; this SQLite fixture uses generation-scoped receipts."
   ],
   "invocation_cost": {
     "n_records": 3,
-    "direct_wall_ms_total": 103.99,
-    "runner_wall_ms_total": 185.54,
-    "runner_wall_ms_per_record": 61.85,
+    "direct_wall_ms_total": 91.03,
+    "runner_wall_ms_total": 171.22,
+    "runner_wall_ms_per_record": 57.07,
     "model": "one_process_per_record",
     "note": "Wall time includes process startup on a tiny synthetic corpus; not a throughput SLA.",
     "next_threshold": "Revisit long-lived workers if per-record startup dominates a declared larger corpus or live backlog (#32), not from this n=3 alone."
