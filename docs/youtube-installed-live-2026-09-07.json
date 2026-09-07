@@ -1,0 +1,23 @@
+{
+  "browser": "152.0.7977.76",
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+  "bootstrap_count": 1,
+  "pack_runtime": true,
+  "copy_button_label": "Copy video URL https://youtu.be/dQw4w9WgXcQ",
+  "clipboard": "https://youtu.be/dQw4w9WgXcQ",
+  "visible_success_flash": true,
+  "csp_header_present": true,
+  "bootstrap_nonce_present": false,
+  "tls": "accepted only with Playwright ignoreHTTPSErrors; CA trust not established",
+  "artifact_sha256": "19d2e79e43eb4bb3c418c15136063acf5bf60b22b3a495b6dc7c2a65a769ee4a",
+  "installed_version": "0.1.0",
+  "installed_code": "packs/example.youtube-copy-links/versions/0.1.0",
+  "installed_page_scripts": [
+    "packs/example.youtube-copy-links/versions/0.1.0/youtube-ui.js",
+    "packs/example.youtube-copy-links/versions/0.1.0/copy-links.js"
+  ],
+  "source_checkout_not_bound": true,
+  "origin_grant_enforced": true,
+  "youtube_records_observed": 46,
+  "evidence": "live installed artifact; CA trust bypassed in fresh browser"
+}

@@ -8,9 +8,9 @@ profile bridge (`page_scripts`) instead of a custom mutator route.
 and button flash. Caption fetch remains a page-side side effect for capture; it
 is not required for the visible Copy result.
 
-This is not an installed pack (#14). Hub auto-start (#11/#32) is not required
-for Copy itself, but the current bridge still injects the legacy TapProbe
-`runtime.js` tag that expects a Hub on `hub_port`.
+The source now has a `pack.json` for the first installed
+`browser-scripts-v1` binding. Hub auto-start (#11/#32) is not required for Copy
+itself, but the bridge still injects `runtime.js` before the pack scripts.
 
 ## Files
 
@@ -26,12 +26,13 @@ for Copy itself, but the current bridge still injects the legacy TapProbe
 | Evidence | Status | Owner |
 | --- | --- | --- |
 | Fixture seam admit (`tools/check_youtube_copy_links_seams.py`) | Covered by this change | this example |
-| Live MITM cert + CSP/nonce on real YouTube | Open | #38 |
-| Manual Copy with visible feedback | Open | #38 |
-| Pack install / Hub auto-start | Out of scope here | #14 / #11 / #32 |
+| Live installed injection + Copy with visible feedback | Automated pass; [report](../../docs/youtube-installed-live-2026-09-07.json) | #14 / #38 |
+| System CA trust + nonce-bearing live response | Open; test browser bypassed cert errors and this response had no source nonce | #38 |
+| Immutable pack build/install/enable | Covered by the #14 lifecycle slice | #14 |
+| Hub auto-start | Covered separately | #11 / #32 |
 
-This staging PR must not close #38. Live rows stay on #38 until a report records
-them.
+This pack slice must not close #38: the live report proves installed injection
+and the Copy interaction, but not system CA trust or nonce reuse.
 
 ## Wire to a profile
 
@@ -50,6 +51,11 @@ python3 tools/check_youtube_copy_links_seams.py \
 
 Point the browser (or a dedicated profile) at the proxy. Do not use the live
 user capture journal as test state.
+
+For the installed path, build the artifact and use `tap pack install` / `enable`
+as documented in [the pack lifecycle](../../docs/pack-lifecycle.md). The profile
+then contains immutable script paths and separate user grants; no bridge config
+needs paths back into this source directory.
 
 ## Seams this example must prove
 

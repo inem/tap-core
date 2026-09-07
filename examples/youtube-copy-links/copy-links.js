@@ -5,11 +5,26 @@
 
   var UI = window.YouTubeUI;
   var state = window.__tapYoutubeCopyLinks = { lastCaptionRequest: null };
-  var COPY_ICON = '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" style="display:block;pointer-events:none"><path fill="currentColor" d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12V1zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H8V7h11v14z"/></svg>';
-  var CHECK_ICON = '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" style="display:block;pointer-events:none"><path fill="currentColor" d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z"/></svg>';
-  var ERROR_ICON = '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" style="display:block;pointer-events:none"><path fill="currentColor" d="m6.4 5 5.6 5.6L17.6 5 19 6.4 13.4 12l5.6 5.6-1.4 1.4-5.6-5.6L6.4 19 5 17.6l5.6-5.6L5 6.4 6.4 5z"/></svg>';
-  var LOAD_ICON = '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path fill="currentColor" d="M11 4h2v9l3.5-3.5 1.4 1.4L12 16.8l-5.9-5.9 1.4-1.4L11 13V4zm-5 15h12v2H6v-2z"/></svg>';
-  var COPY_ALL_ICON = '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path fill="currentColor" d="M7 2h10v2H7V2zM4 6h16v2H4V6zm2 4h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2zm0 2v8h12v-8H6z"/></svg>';
+  var COPY_PATH = 'M16 1H4a2 2 0 0 0-2 2v14h2V3h12V1zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H8V7h11v14z';
+  var CHECK_PATH = 'M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z';
+  var ERROR_PATH = 'm6.4 5 5.6 5.6L17.6 5 19 6.4 13.4 12l5.6 5.6-1.4 1.4-5.6-5.6L6.4 19 5 17.6l5.6-5.6L5 6.4 6.4 5z';
+  var LOAD_PATH = 'M11 4h2v9l3.5-3.5 1.4 1.4L12 16.8l-5.9-5.9 1.4-1.4L11 13V4zm-5 15h12v2H6v-2z';
+  var COPY_ALL_PATH = 'M7 2h10v2H7V2zM4 6h16v2H4V6zm2 4h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2zm0 2v8h12v-8H6z';
+
+  function icon(pathData) {
+    var namespace = 'http://www.w3.org/2000/svg';
+    var svg = document.createElementNS(namespace, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('width', '24');
+    svg.setAttribute('height', '24');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.style.cssText = 'display:block;pointer-events:none';
+    var path = document.createElementNS(namespace, 'path');
+    path.setAttribute('fill', 'currentColor');
+    path.setAttribute('d', pathData);
+    svg.appendChild(path);
+    return svg;
+  }
 
   function legacyCopy(text) {
     var textarea = document.createElement('textarea');
@@ -37,12 +52,12 @@
     clearTimeout(button.__tapFlashTimer);
     if (!button.__tapCopyLabel) button.__tapCopyLabel = button.getAttribute('aria-label') || 'Copy link';
     button.dataset.state = stateName;
-    UI.setButtonIcon(button, stateName === 'success' ? CHECK_ICON : ERROR_ICON);
+    UI.setButtonIcon(button, icon(stateName === 'success' ? CHECK_PATH : ERROR_PATH));
     button.setAttribute('aria-label', message);
     button.title = message;
     button.__tapFlashTimer = setTimeout(function(){
       delete button.dataset.state;
-      UI.setButtonIcon(button, COPY_ICON);
+      UI.setButtonIcon(button, icon(COPY_PATH));
       button.setAttribute('aria-label', button.__tapCopyLabel);
       button.title = button.__tapCopyLabel;
     }, 1100);
@@ -140,7 +155,7 @@
   function mountCard(entry) {
     var button = UI.addVideoCardAction(entry, {
       id: 'tap-copy-link',
-      icon: COPY_ICON,
+      icon: icon(COPY_PATH),
       title: 'Copy video URL ' + entry.shortUrl,
       ariaLabel: 'Copy video URL ' + entry.shortUrl,
       onClick: function(current, event, button) {
@@ -182,14 +197,14 @@
 
     UI.addPlaylistAction({
       id: 'tap-youtube-copy-all',
-      icon: COPY_ALL_ICON,
+      icon: icon(COPY_ALL_PATH),
       title: 'Copy all loaded video links (' + entries().length + ')',
       ariaLabel: 'Copy all loaded video links (' + entries().length + ')',
       onClick: function(event, button){ copyAll(button); }
     });
     UI.addPlaylistAction({
       id: 'tap-youtube-load-all',
-      icon: LOAD_ICON,
+      icon: icon(LOAD_PATH),
       title: 'Load every video in this playlist',
       ariaLabel: 'Load every video in this playlist',
       onClick: function(event, button){ loadAll(button); }
@@ -246,12 +261,12 @@
       button.disabled = false;
       button.removeAttribute('aria-busy');
       button.setAttribute('aria-disabled', 'false');
-      UI.setButtonIcon(button, CHECK_ICON);
+      UI.setButtonIcon(button, icon(CHECK_PATH));
       button.title = 'Loaded ' + loadedCount + ' videos';
       button.setAttribute('aria-label', button.title);
       setTimeout(function(){
         if (!button.isConnected) return;
-        UI.setButtonIcon(button, LOAD_ICON);
+        UI.setButtonIcon(button, icon(LOAD_PATH));
         syncCollectionActions();
       }, 1200);
     }
@@ -263,20 +278,20 @@
     if (!text) {
       UI.showToast('No video links found');
       if (button) {
-        UI.setButtonIcon(button, ERROR_ICON);
-        setTimeout(function(){ if (button.isConnected) UI.setButtonIcon(button, COPY_ALL_ICON); }, 1200);
+        UI.setButtonIcon(button, icon(ERROR_PATH));
+        setTimeout(function(){ if (button.isConnected) UI.setButtonIcon(button, icon(COPY_ALL_PATH)); }, 1200);
       }
       return;
     }
     copyText(text).then(
       function(){
         UI.showToast('Copied ' + all.length + ' video links');
-        if (button) UI.setButtonIcon(button, CHECK_ICON);
+        if (button) UI.setButtonIcon(button, icon(CHECK_PATH));
         restoreCopyAll(button);
       },
       function(){
         UI.showToast('Copy failed');
-        if (button) UI.setButtonIcon(button, ERROR_ICON);
+        if (button) UI.setButtonIcon(button, icon(ERROR_PATH));
         restoreCopyAll(button);
       }
     );
@@ -285,7 +300,7 @@
   function restoreCopyAll(button) {
     setTimeout(function(){
       if (!button || !button.isConnected) return;
-      UI.setButtonIcon(button, COPY_ALL_ICON);
+      UI.setButtonIcon(button, icon(COPY_ALL_PATH));
       syncCollectionActions();
     }, 1200);
   }
@@ -302,7 +317,7 @@
     };
     var options = {
       id: 'tap-copy-current-video',
-      icon: COPY_ICON,
+      icon: icon(COPY_PATH),
       label: 'Copy',
       title: 'Copy video URL ' + entry.shortUrl,
       ariaLabel: 'Copy video URL ' + entry.shortUrl,

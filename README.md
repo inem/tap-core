@@ -51,6 +51,9 @@ reader projection and an injected browser page through the existing WS bridge.
 
 [Profile-owned injection and local routes](docs/profile-bridge.md) replace the
 first live slice’s temporary injector configuration with explicit profile policy.
+[External pack lifecycle](docs/pack-lifecycle.md) adds a deterministic artifact,
+immutable profile-local versions, separate grants and the first installed page
+binding using the YouTube copy-links example.
 
 [Managed components](docs/managed-components.md) let the same profile lifecycle
 start a generic Hub, schedule readers and return declared handler results to the

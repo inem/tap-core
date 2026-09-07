@@ -1,0 +1,34 @@
+{
+  "manifest_version": 1,
+  "id": "example.youtube-copy-links",
+  "version": "0.1.0",
+  "requires": {
+    "pack_api": 1,
+    "dependencies": []
+  },
+  "files": [
+    "PROVENANCE.md",
+    "README.md",
+    "youtube-ui.js",
+    "copy-links.js"
+  ],
+  "entrypoints": {
+    "page": {
+      "interface": "browser-scripts-v1",
+      "files": [
+        "youtube-ui.js",
+        "copy-links.js"
+      ]
+    }
+  },
+  "config": {},
+  "access": {
+    "origins": [
+      "https://www.youtube.com",
+      "https://youtube.com"
+    ],
+    "capabilities": [
+      "page.inject"
+    ]
+  }
+}

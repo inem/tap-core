@@ -1,9 +1,9 @@
 # Experimental pack contract, version 1
 
-Preparatory result for #5, based on runtime commit
-`56094c0`. **That runtime does not load packs or
-advertise pack API support.** `pack_api: 1` below names the experimental fixture
-contract. It is not a claim that installed-pack integration has shipped.
+The contract began as the preparatory #5 result based on runtime commit
+`56094c0`. `pack_api: 1` remains experimental. The current host can install an
+immutable artifact and bind `page/browser-scripts-v1`; reader, handler, mutator
+and `page/browser-module-v1` activation have not shipped.
 
 The source evidence is the legacy executable reader consuming JSONL on stdin,
 the Python mutator loader forwarding mitmproxy hooks, and the site-probe/page
@@ -56,7 +56,8 @@ dependency's provenance or install it.
 | --- | --- | --- |
 | `reader`: `python-jsonl-v1` | Python executable, UTF-8 JSON objects on stdin; EOF stops it. Fixture emits results on stdout and diagnostics on stderr. | Start outside the proxy hook path, supply allowed records and explicit context, own delivery/checkpoint/replay semantics. Stdout is **not** a durable acknowledgement. |
 | `mutator`: `mitmproxy-python` | Import and call the actual `response(flow)` export using small flow fixtures. | Load only after validation and a user grant; pass native backend hooks. Report exceptions and enforce bounded hooks/streaming behavior. In-process code remains trusted. |
-| `page`: `browser-module-v1` | Call exported `start({bridge, document})` and `stop({document})` against a document/bridge fixture. | Serve packaged assets and invoke exports through a bootstrap on approved pages. Own frame selection, resource URLs, page lifecycle, CSP/cache handling and errors. |
+| `page`: `browser-module-v1` | Call exported `start({bridge, document})` and `stop({document})` against a document/bridge fixture. | This remains a fixture interface; an installed module loader has not shipped. |
+| `page`: `browser-scripts-v1` | Ordered `files` list of classic UTF-8 browser scripts. | First installed binding: verify and snapshot scripts into the profile bridge at startup. Disable applies after restart; an already-open page must reload. |
 | `handler`: `python-jsonl-v1` | Python executable consuming the example's JSON request and returning JSON reply; EOF stops it. | Connect a bounded adapter to the local bridge. The Python fixture does not replace the existing Bun Hub or select its eventual execution topology. |
 
 Roles are independent: a page-only, handler-only or reader-only pack is valid.
@@ -139,8 +140,13 @@ missing/undeclared/escaping files, exact origins, typed overrides, independent
 access grants, fixed dependencies and rejection before code execution.
 
 An external author can copy either fixture directory, change its ID and code,
-and validate it using the same command without a vendor account. Installation and
-execution by the actual profile runtime, authenticated live WS, browser injection
-and a real independently distributed example pack remain #10/#11/#14 integration
-work. Issue #5 must be assessed against that deliberately limited fixture scope;
-this change does not complete #14 or the release acceptance scenario.
+and validate it using the same command without a vendor account. The fixture
+transport is still not installed execution. Authenticated live WS, installed
+reader/handler/mutator bindings and the combined independently distributed
+example remain #10/#11/#14 integration work. Issue #5 must be assessed against
+that deliberately limited fixture scope; these additions do not complete #14 or
+the release acceptance scenario.
+
+The first immutable artifact store and actual `browser-scripts-v1` profile
+binding are described in [the external pack lifecycle](pack-lifecycle.md). Other
+roles still fail activation until their concrete installed bindings exist.

@@ -59,7 +59,7 @@ def check_files():
     assert hashlib.sha256(UI.read_bytes()).hexdigest() == (
         '77317dfe7a6708eb0d96ce465ce619aefb5a226b4c4ebaa8c16c78540cc467ed')
     assert hashlib.sha256(BOOTSTRAP.read_bytes()).hexdigest() == (
-        '2465181b3fb85ceeb4ca22fa678cbac31c97cfc2f5a394c259baa99089786acf')
+        '2b3ceae0470ba11023534f49333df29f2540b9319b14e047779c4167bc852daf')
     return ui, boot
 
 

@@ -74,6 +74,16 @@ class PackManifestTests(unittest.TestCase):
             manifest["access"]["capabilities"] = [capability]
             validate_manifest(manifest, FIXTURES / "page-bridge")
 
+    def test_ordered_classic_page_scripts_are_a_distinct_interface(self):
+        manifest = load_manifest(FIXTURES / "page-bridge")
+        manifest["entrypoints"] = {"page": {"interface": "browser-scripts-v1",
+                                                   "files": ["page.js", "handler.py"]}}
+        manifest["access"]["capabilities"] = ["page.inject"]
+        validate_manifest(manifest, FIXTURES / "page-bridge")
+        manifest["entrypoints"]["page"]["files"].append("missing.js")
+        with self.assertRaisesRegex(PackError, "declared"):
+            validate_manifest(manifest, FIXTURES / "page-bridge")
+
     def test_typed_configuration(self):
         self.assertEqual(resolve_config(self.manifest), {"prefix": "seen"})
         self.assertEqual(resolve_config(self.manifest, {"prefix": "changed"}), {"prefix": "changed"})

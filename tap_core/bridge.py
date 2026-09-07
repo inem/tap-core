@@ -1,14 +1,15 @@
 """Profile-scoped bootstrap and route for the existing page/Hub wire protocol.
 
-Trusted classic page scripts; no installed pack host, TLS bypass or app routing.
-This file also loads directly as a mitmproxy addon, so imports are stdlib only.
+Trusted classic page scripts and installed page-pack snapshots; no TLS bypass or
+app routing. This file also loads directly as a mitmproxy addon, so imports are
+stdlib only.
 """
 import hashlib
 import hmac
 import html
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import stat
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -197,6 +198,103 @@ def fingerprint(config):
     return hashlib.sha256(json.dumps(config, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
+def effective_configuration(root, base):
+    """Resolve installed page packs without importing the checkout as a package.
+
+    mitmproxy loads this file as a standalone addon. Keep this path stdlib-only
+    and re-check the installed snapshot before any page code is read.
+    """
+    root = Path(root).resolve()
+    try:
+        registry = read_json(root / 'state/pack-registry.json')
+    except FileNotFoundError:
+        return base
+    if (type(registry) is not dict or set(registry) != {'version', 'packs'}
+            or registry['version'] != 1 or type(registry['packs']) is not dict):
+        raise ValueError('Pack registry is malformed or incompatible')
+    result = json.loads(json.dumps(base))
+    claimed = {}
+    for pack_id in sorted(registry['packs']):
+        record = registry['packs'][pack_id]
+        if type(record) is not dict or type(record.get('enabled')) is not bool:
+            raise ValueError(f'Pack registry entry is malformed: {pack_id}')
+        if not record['enabled']:
+            continue
+        version = record.get('selected')
+        versions = record.get('versions')
+        if type(version) is not str or type(versions) is not dict:
+            raise ValueError(f'Enabled pack version is malformed: {pack_id}')
+        metadata = versions.get(version)
+        grants = record.get('grants')
+        if type(metadata) is not dict or type(metadata.get('hashes')) is not dict or type(grants) is not dict:
+            raise ValueError(f'Enabled pack registry entry is malformed: {pack_id}')
+        code = root / 'packs' / pack_id / 'versions' / str(version)
+        if code.is_symlink() or not code.is_dir() or code.resolve() != code:
+            raise ValueError(f'Enabled pack code is missing or unsafe: {pack_id}@{version}')
+        manifest = read_json(code / 'pack.json')
+        if (type(manifest) is not dict or manifest.get('id') != pack_id or manifest.get('version') != version
+                or type(manifest.get('files')) is not list or len(manifest['files']) > 256
+                or not all(type(name) is str for name in manifest['files'])
+                or len(manifest['files']) != len(set(manifest['files']))
+                or type(manifest.get('entrypoints')) is not dict
+                or set(manifest['entrypoints']) != {'page'}):
+            raise ValueError(f'Enabled pack manifest is incompatible: {pack_id}@{version}')
+        page = manifest['entrypoints']['page']
+        access = manifest.get('access')
+        if (type(page) is not dict or set(page) != {'interface', 'files'}
+                or page.get('interface') != 'browser-scripts-v1'
+                or type(page.get('files')) is not list or not page['files']
+                or not all(type(name) is str for name in page['files'])
+                or len(page['files']) != len(set(page['files']))
+                or type(access) is not dict or set(access) != {'origins', 'capabilities'}
+                or type(access['origins']) is not list or type(access['capabilities']) is not list
+                or not all(type(value) is str for value in access['origins'] + access['capabilities'])):
+            raise ValueError(f'Enabled pack has no installed page binding: {pack_id}@{version}')
+        requested_origins = access['origins']
+        requested_capabilities = access['capabilities']
+        if (not set(requested_origins) <= set(grants.get('origins', []))
+                or not set(requested_capabilities) <= set(grants.get('capabilities', []))):
+            raise ValueError(f'Enabled pack access is not granted: {pack_id}@{version}')
+        dependencies = manifest.get('requires', {}).get('dependencies')
+        inventory = grants.get('dependencies')
+        if type(dependencies) is not list or type(inventory) is not dict:
+            raise ValueError(f'Enabled pack dependencies are malformed: {pack_id}@{version}')
+        for dependency in dependencies:
+            if (type(dependency) is not dict or inventory.get(dependency.get('id')) != dependency.get('version')):
+                raise ValueError(f'Enabled pack dependency is unavailable: {pack_id}@{version}')
+        expected = {'pack.json', *manifest['files']}
+        for name in expected:
+            path = PurePosixPath(name)
+            if (not name or path.is_absolute() or '..' in path.parts
+                    or str(path) != name or '\\' in name or '\x00' in name):
+                raise ValueError(f'Enabled pack contains an unsafe path: {pack_id}@{version}')
+        observed = set()
+        for path in code.rglob('*'):
+            if path.is_symlink():
+                raise ValueError(f'Enabled pack contains a symlink: {pack_id}@{version}')
+            if path.is_file():
+                observed.add(path.relative_to(code).as_posix())
+        if observed != expected or set(metadata['hashes']) != expected:
+            raise ValueError(f'Enabled pack file set changed: {pack_id}@{version}')
+        for name in sorted(expected):
+            path = code / name
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            if metadata['hashes'].get(name) != digest:
+                raise ValueError(f'Enabled pack integrity check failed: {pack_id}@{version}')
+        for name in page['files']:
+            if name not in expected:
+                raise ValueError(f'Enabled pack page script is undeclared: {pack_id}@{version}')
+        for origin in requested_origins:
+            exact_origin(origin)
+            if origin in claimed:
+                raise ValueError(f'Page origin {origin} is claimed by both {claimed[origin]} and {pack_id}')
+            claimed[origin] = pack_id
+            if origin not in result['allow_origins']:
+                result['allow_origins'].append(origin)
+        result['page_scripts'].extend(str(code / name) for name in page['files'])
+    return configuration(result)
+
+
 def decision(config, origin):
     exact_origin(origin)
     reason = ('disabled' if not config['enabled'] else 'user_exclusion' if origin in config['exclude_origins']
@@ -236,7 +334,7 @@ class Bridge:
     def load(self, loader):
         root = Path(os.environ['TAP_CORE_PROFILE'])
         profile = read_json(root / 'profile.json')
-        self.config = configuration(profile['bridge'])
+        self.config = effective_configuration(root, configuration(profile['bridge']))
         if profile.get('components') is not None:
             self.component_token = read_token(root, 'component-token')
         self.token = read_token(root)

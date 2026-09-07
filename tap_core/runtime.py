@@ -92,8 +92,11 @@ class Profile:
             configuration(self.bridge)
             if self.bridge['hub_port'] == self.port:
                 raise TapError('Bridge Hub and proxy must use different ports')
-            if self.bridge['enabled']:
-                read_scripts(self.bridge)
+        from .pack_store import PackStore
+        effective_bridge = PackStore(self.root).effective_bridge(self.bridge)
+        if effective_bridge is not None and effective_bridge['enabled']:
+            from .bridge import read_scripts
+            read_scripts(effective_bridge)
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.root.chmod(0o700)
         for directory in ("data", "state", "certificates", "logs"):
