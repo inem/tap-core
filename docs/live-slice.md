@@ -14,8 +14,10 @@ HTTP check followed by an unrelated WebSocket echo.
 
 The [machine-readable report](live-slice-2026-09-07.json) records the source
 hashes, runtime versions and assertions. The run used macOS 15.6.1 arm64,
-mitmproxy 12.2.3, Python 3.9.6, Bun 1.3.11, Chrome 152.0.7977.76 and
-Playwright 1.62.1. This is one tested configuration, not a support matrix.
+mitmproxy 12.2.3, Python 3.9.6, Bun 1.3.11, Node 24.19.0,
+Chrome 152.0.7977.76 and Playwright 1.62.1. This is one tested configuration,
+not a support matrix. The report's `node` field records `--version` from the
+exact executable supplied through `--node`.
 
 1. The harness creates two loopback HTTP origins, a fresh profile, an empty
    Hub journal/mailbox/flows/adapters directory, and private fixture credentials.

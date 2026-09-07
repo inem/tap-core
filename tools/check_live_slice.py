@@ -113,9 +113,10 @@ def main():
                                                    'python': platform.python_version()},
               'backend': run([args.backend, '--version']).splitlines()[0],
               'bun': run([args.bun, '--version']).strip(),
+              'node': run([args.node, '--version']).strip(),
               'playwright': json.loads((args.playwright / 'package.json').read_text())['version']}
-    with (tempfile.TemporaryDirectory(prefix='tap-live-slice-') as directory,
-          reserve_port() as hub_listener, reserve_port() as proxy_listener):
+    with tempfile.TemporaryDirectory(prefix='tap-live-slice-') as directory, \
+            reserve_port() as hub_listener, reserve_port() as proxy_listener:
         root = Path(directory)
         root.chmod(0o700)
         def spawn(argv, label):
