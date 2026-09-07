@@ -65,10 +65,14 @@ each resource ID:
 - equal ID/version with different hashes conflict;
 - a missing provider or changed store file fails before page code runs.
 
-Pack IDs are sorted and each pack's `uses` order is retained, making the first
-provider and resulting asset indices deterministic. Resources are then selected
-per exact document origin; an authenticated request from another allowed origin
-cannot fetch a resource outside its plan.
+Every pack's `uses` order becomes an ordering constraint on each of that pack's
+exact origins. The host computes a deterministic topological order, using sorted
+pack IDs and first declaration as the tie-break. A cycle on one origin rejects
+the candidate activation before the registry changes. Opposite constraints on
+disjoint origins are represented as separate origin-scoped asset entries, so
+each document still executes the resource once in its own valid order.
+An authenticated request from another allowed origin cannot fetch a resource
+outside its plan.
 
 ## Ownership and compatibility
 

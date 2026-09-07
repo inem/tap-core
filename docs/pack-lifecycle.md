@@ -72,6 +72,10 @@ fixture lifecycle has shipped. On install and startup the host:
 - collects declarations from every enabled pack for each exact origin;
 - collapses the same resource `id` when version and bytes match, unions its
   origins and injects it once per document;
+- preserves every pack's ordered `uses` through deterministic topological
+  composition; a cycle on one origin rejects activation before registry save;
+- keeps opposite but valid orders on disjoint origins in separate scoped asset
+  entries, without injecting either resource twice in one document;
 - rejects conflicting versions or bytes under one resource ID before changing
   the active registry;
 - snapshots the deterministic per-origin plan into bridge memory under the

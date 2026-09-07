@@ -164,7 +164,7 @@ def exact_origin(value):
     return value
 
 
-def configuration(value):
+def configuration(value, script_origins=None):
     if (not isinstance(value, dict)
             or set(value) != {'version', 'enabled', 'hub_port', 'allow_origins', 'exclude_origins', 'page_scripts'}
             or type(value['version']) is not int or value['version'] != 1
@@ -174,13 +174,32 @@ def configuration(value):
     for name in ('allow_origins', 'exclude_origins', 'page_scripts'):
         items = value[name]
         if (not isinstance(items, list) or len(items) > 64
-                or not all(isinstance(item, str) for item in items) or len(set(items)) != len(items)):
+                or not all(isinstance(item, str) for item in items)
+                or (name != 'page_scripts' or script_origins is None)
+                and len(set(items)) != len(items)):
             raise ValueError('Bridge lists must contain at most 64 unique strings')
     for origin in value['allow_origins'] + value['exclude_origins']:
         exact_origin(origin)
     for script in value['page_scripts']:
         if not Path(script).is_absolute() or '\0' in script:
             raise ValueError('Bridge page scripts require explicit absolute paths')
+    if script_origins is not None:
+        if (not isinstance(script_origins, list)
+                or len(script_origins) != len(value['page_scripts'])):
+            raise ValueError('Effective page script origins are malformed')
+        seen = {}
+        allowed = set(value['allow_origins'])
+        for script, origins in zip(value['page_scripts'], script_origins):
+            if (not isinstance(origins, list) or not origins or len(origins) > 64
+                    or not all(isinstance(origin, str) for origin in origins)
+                    or len(set(origins)) != len(origins) or not set(origins) <= allowed):
+                raise ValueError('Effective page script origins are malformed')
+            for origin in origins:
+                exact_origin(origin)
+            overlap = seen.setdefault(script, set()).intersection(origins)
+            if overlap:
+                raise ValueError(f'Page resource would be injected twice for {sorted(overlap)[0]}')
+            seen[script].update(origins)
     return value
 
 
@@ -202,6 +221,65 @@ def fingerprint(config):
     return hashlib.sha256(json.dumps(config, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
+def order_page_resources(declarations, use_orders):
+    """Return resource/origin entries preserving every pack's ordered uses.
+
+    A single global topological order keeps one entry per resource when
+    possible. If only disjoint origins disagree, emit origin-scoped entries;
+    each document still receives a resource once. A cycle on one origin is an
+    unsupported composition and must fail before activation.
+    """
+    priority = {resource_id: index for index, resource_id in enumerate(declarations)}
+
+    def topological(nodes, edges):
+        nodes = set(nodes)
+        followers = {node: set() for node in nodes}
+        incoming = {node: 0 for node in nodes}
+        for before, after in edges:
+            if before not in nodes or after not in nodes or after in followers[before]:
+                continue
+            followers[before].add(after)
+            incoming[after] += 1
+        key = lambda node: (priority[node], node)
+        ready = sorted((node for node in nodes if incoming[node] == 0), key=key)
+        ordered = []
+        while ready:
+            node = ready.pop(0)
+            ordered.append(node)
+            for after in sorted(followers[node], key=key):
+                incoming[after] -= 1
+                if incoming[after] == 0:
+                    ready.append(after)
+                    ready.sort(key=key)
+        return ordered if len(ordered) == len(nodes) else None
+
+    all_edges = set()
+    for item in use_orders:
+        all_edges.update(zip(item['resources'], item['resources'][1:]))
+    ordered = topological(declarations, all_edges)
+    if ordered is not None:
+        return [(resource_id, sorted(declarations[resource_id]['origins']))
+                for resource_id in ordered]
+
+    origins = sorted({origin for item in use_orders for origin in item['origins']})
+    grouped = {}
+    for origin in origins:
+        nodes = {resource_id for resource_id, declaration in declarations.items()
+                 if origin in declaration['origins']}
+        edges = set()
+        for item in use_orders:
+            if origin in item['origins']:
+                edges.update(zip(item['resources'], item['resources'][1:]))
+        sequence = topological(nodes, edges)
+        if sequence is None:
+            raise ValueError(f'Page resource order is cyclic for origin {origin}')
+        grouped.setdefault(tuple(sequence), []).append(origin)
+    result = []
+    for sequence, scoped_origins in sorted(grouped.items(), key=lambda item: item[1][0]):
+        result.extend((resource_id, scoped_origins) for resource_id in sequence)
+    return result
+
+
 def effective_configuration(root, base):
     """Resolve installed page packs without importing the checkout as a package.
 
@@ -220,6 +298,7 @@ def effective_configuration(root, base):
     base_origins = list(result['allow_origins'])
     script_origins = [list(base_origins) for _ in result['page_scripts']]
     declarations = {}
+    use_orders = []
     any_enabled = False
     for pack_id in sorted(registry['packs']):
         record = registry['packs'][pack_id]
@@ -328,6 +407,8 @@ def effective_configuration(root, base):
             exact_origin(origin)
             if origin not in result['allow_origins']:
                 result['allow_origins'].append(origin)
+        use_orders.append({'pack': pack_id, 'origins': tuple(requested_origins),
+                           'resources': tuple(use['id'] for use in page['uses'])})
         for use in page['uses']:
             resource = resource_index[(use['id'], use['version'])]
             shared = (root / 'resources' / 'page' / resource['id'] / resource['version']
@@ -355,13 +436,11 @@ def effective_configuration(root, base):
             current['origins'].update(requested_origins)
     if not any_enabled:
         return base
-    for declaration in declarations.values():
+    for resource_id, origins in order_page_resources(declarations, use_orders):
+        declaration = declarations[resource_id]
         result['page_scripts'].append(declaration['path'])
-        script_origins.append(sorted(declaration['origins']))
-    configuration(result)
-    if (len(script_origins) != len(result['page_scripts'])
-            or not all(origins and len(origins) <= 64 for origins in script_origins)):
-        raise ValueError('Effective page script origins are malformed')
+        script_origins.append(origins)
+    configuration(result, script_origins)
     result['page_script_origins'] = script_origins
     return result
 

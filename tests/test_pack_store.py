@@ -60,7 +60,7 @@ class PackStoreTests(unittest.TestCase):
         return output
 
     def sibling_source(self, pack_id="fixture.installed-page-second", *, shared_version="1.0.0",
-                       shared_suffix="", origins=None):
+                       shared_suffix="", origins=None, feature_first=False):
         source = self.root / pack_id
         shutil.copytree(SOURCE, source)
         (source / "second.js").write_text("window.secondPack = true;\n")
@@ -86,6 +86,19 @@ class PackStoreTests(unittest.TestCase):
             {"id": "fixture.ui", "version": shared_version},
             {"id": pack_id + ".feature", "version": "0.1.0"},
         ]
+        if feature_first:
+            manifest["entrypoints"]["page"]["uses"].reverse()
+        if origins is not None:
+            manifest["access"]["origins"] = origins
+        (source / "pack.json").write_text(json.dumps(manifest, indent=2) + "\n")
+        return source
+
+    def reversed_source(self, pack_id, origins=None):
+        source = self.root / pack_id
+        shutil.copytree(SOURCE, source)
+        manifest = json.loads((source / "pack.json").read_text())
+        manifest["id"] = pack_id
+        manifest["entrypoints"]["page"]["uses"].reverse()
         if origins is not None:
             manifest["access"]["origins"] = origins
         (source / "pack.json").write_text(json.dumps(manifest, indent=2) + "\n")
@@ -162,7 +175,7 @@ class PackStoreTests(unittest.TestCase):
 
     def test_same_origin_packs_merge_declarations_and_inject_shared_resource_once(self):
         first = self.artifact(SOURCE, "first.tap-pack")
-        second = self.artifact(self.sibling_source(), "second.tap-pack")
+        second = self.artifact(self.sibling_source(feature_first=True), "second.tap-pack")
         self.store.install(first)
         self.store.install(second)
         self.store.enable(PACK_ID, "0.1.0",
@@ -172,10 +185,54 @@ class PackStoreTests(unittest.TestCase):
 
         effective = self.store.effective_bridge(bridge())
         resource_ids = [Path(path).parent.parent.name for path in effective["page_scripts"]]
-        self.assertEqual(resource_ids, ["fixture.ui", "fixture.feature",
-                                        "fixture.installed-page-second.feature"])
+        self.assertEqual(resource_ids, ["fixture.installed-page-second.feature",
+                                        "fixture.ui", "fixture.feature"])
         self.assertEqual(resource_ids.count("fixture.ui"), 1)
         self.assertEqual(effective["page_script_origins"], [ORIGINS, ORIGINS, ORIGINS])
+        self.assertEqual(effective_configuration(self.profile, bridge()), effective)
+
+    def test_same_origin_order_cycle_fails_before_activation_in_both_resolvers(self):
+        reverse_id = "fixture.reverse-order"
+        for artifact in (self.artifact(SOURCE, "first.tap-pack"),
+                         self.artifact(self.reversed_source(reverse_id), "reverse.tap-pack")):
+            self.store.install(artifact)
+        self.store.enable(PACK_ID, "0.1.0",
+                          origins=ORIGINS, capabilities=CAPABILITIES)
+        with self.assertRaisesRegex(PackError, "order is cyclic"):
+            self.store.enable(reverse_id, "0.1.0",
+                              origins=ORIGINS, capabilities=CAPABILITIES)
+        self.assertFalse(self.store.status()["packs"][reverse_id]["enabled"])
+
+        candidate = self.store.load()
+        candidate["packs"][reverse_id].update(
+            selected="0.1.0", enabled=True,
+            grants={"origins": ORIGINS, "capabilities": CAPABILITIES,
+                    "dependencies": {}}, config={})
+        self.store.save(candidate)
+        with self.assertRaisesRegex(ValueError, "order is cyclic"):
+            effective_configuration(self.profile, bridge())
+
+    def test_opposite_orders_on_disjoint_origins_are_scoped_per_document(self):
+        second_origin = "https://second.fixture.example"
+        reverse_id = "fixture.reverse-origin"
+        for artifact in (self.artifact(SOURCE, "first.tap-pack"),
+                         self.artifact(self.reversed_source(
+                             reverse_id, [second_origin]), "reverse.tap-pack")):
+            self.store.install(artifact)
+        self.store.enable(PACK_ID, "0.1.0",
+                          origins=ORIGINS, capabilities=CAPABILITIES)
+        self.store.enable(reverse_id, "0.1.0",
+                          origins=[second_origin], capabilities=CAPABILITIES)
+
+        effective = self.store.effective_bridge(bridge())
+        pairs = [(Path(path).parent.parent.name, origins)
+                 for path, origins in zip(effective["page_scripts"],
+                                          effective["page_script_origins"])]
+        for origin, expected in ((ORIGINS[0], ["fixture.ui", "fixture.feature"]),
+                                 (second_origin, ["fixture.feature", "fixture.ui"])):
+            sequence = [resource_id for resource_id, origins in pairs if origin in origins]
+            self.assertEqual(sequence, expected)
+            self.assertEqual(len(sequence), len(set(sequence)))
         self.assertEqual(effective_configuration(self.profile, bridge()), effective)
 
     def test_shared_resource_version_or_content_conflict_fails_before_activation(self):

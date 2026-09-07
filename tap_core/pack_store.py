@@ -332,11 +332,14 @@ class PackStore:
         base_origins = list(result["allow_origins"])
         script_origins = [list(base_origins) for _ in result["page_scripts"]]
         declarations = {}
+        use_orders = []
         for pack_id, root, manifest, page, record in enabled:
             origins = manifest["access"]["origins"]
             for origin in origins:
                 if origin not in result["allow_origins"]:
                     result["allow_origins"].append(origin)
+            use_orders.append({"pack": pack_id, "origins": tuple(origins),
+                               "resources": tuple(use["id"] for use in page["uses"])})
             resources = {(resource["id"], resource["version"]): resource
                          for resource in manifest.get("resources", [])}
             for use in page["uses"]:
@@ -363,14 +366,16 @@ class PackStore:
                         f"page resource {resource_id}@{use['version']} has conflicting content "
                         f"in {current['pack']} and {pack_id}")
                 current["origins"].update(origins)
-        for declaration in declarations.values():
+        from .bridge import configuration, order_page_resources
+        try:
+            ordered = order_page_resources(declarations, use_orders)
+        except ValueError as error:
+            raise PackError(str(error)) from error
+        for resource_id, origins in ordered:
+            declaration = declarations[resource_id]
             result["page_scripts"].append(declaration["path"])
-            script_origins.append(sorted(declaration["origins"]))
-        from .bridge import configuration
-        configuration(result)
-        require(len(script_origins) == len(result["page_scripts"])
-                and all(bool(origins) and len(origins) <= 64 for origins in script_origins),
-                "effective page script origins are malformed")
+            script_origins.append(origins)
+        configuration(result, script_origins)
         result["page_script_origins"] = script_origins
         return result
 
