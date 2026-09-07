@@ -1,0 +1,36 @@
+{
+  "scope": "installer managed runtime; empty root; not clean-Mac matrix or CA trust",
+  "source_commit": "021a92821332c7ad068afc04f5e7eae642cf37b9",
+  "local_checkout": true,
+  "install_ok": true,
+  "install_log_tail": [
+    "    \"configured\": true,",
+    "    \"current_process\": true",
+    "  },",
+    "  \"inspection_errors\": {},",
+    "  \"backend_version\": \"12.2.3\",",
+    "  \"ca_file_present\": true,",
+    "  \"ca_trust\": \"not_verified; HTTPS clients must trust this profile CA explicitly\",",
+    "  \"traffic_probe\": true,",
+    "  \"healthy\": true",
+    "}",
+    "tap-core: Hub HTTP/WS smoke",
+    "{\"ok\":true,\"hub_port\":19192,\"protocol\":\"tap.bridge/v1\"}"
+  ],
+  "doctor_after_install": {
+    "healthy": true,
+    "components": true,
+    "bridge": true
+  },
+  "doctor_after_restart": {
+    "healthy": true,
+    "components": true
+  },
+  "hub_smoke": {
+    "ok": true,
+    "hub_port": 19192,
+    "protocol": "tap.bridge/v1"
+  },
+  "purged": true,
+  "ok": true
+}

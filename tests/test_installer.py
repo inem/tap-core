@@ -141,7 +141,7 @@ class InstallerTests(unittest.TestCase):
         # record, substituting only the download and backend binary.
         archive = self.parent / 'checkout.tar.gz'
         with tarfile.open(archive, 'w:gz') as out:
-            for name in ('tap', 'tap_core', 'instll'):
+            for name in ('tap', 'tap_core', 'instll', 'fixtures'):
                 out.add(REPO / name, arcname='tap-core-fixture/' + name)
         fake_bin = self.parent / 'download-bin'
         fake_bin.mkdir()
@@ -151,9 +151,13 @@ class InstallerTests(unittest.TestCase):
         backend = self.parent / 'backend'
         backend.write_text('#!/bin/sh\necho "Mitmproxy: 12.2.3"\n')
         backend.chmod(0o700)
+        bun = self.parent / 'bun'
+        bun.write_text('#!/bin/sh\necho 1.3.11\n')
+        bun.chmod(0o700)
         env = {**os.environ, 'PATH': str(fake_bin) + os.pathsep + os.environ['PATH'],
                'TAP_ROOT': str(self.root), 'TAP_BIN_DIR': str(self.wrapper.parent),
-               'TAP_PYTHON': sys.executable, 'TAP_BACKEND': str(backend), 'TAP_SKIP_START': '1'}
+               'TAP_PYTHON': sys.executable, 'TAP_BACKEND': str(backend), 'TAP_BUN': str(bun),
+               'TAP_SKIP_START': '1'}
         installed = subprocess.run(['/bin/bash', str(REPO / 'instll/install')],
                                    env=env, capture_output=True, text=True)
         self.assertEqual(installed.returncode, 0, installed.stderr)
@@ -161,9 +165,51 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(metadata['root'], str(self.root))
         self.assertFalse(metadata['profile_requested'])
         self.assertTrue(self.wrapper.is_file())
+        managed = json.loads((self.root / 'managed/components.json').read_text())
+        self.assertEqual(managed['bun'], str(bun))
+        self.assertEqual(managed['python'], sys.executable)
+        self.assertTrue(managed['readers']['projection']['command'][1].startswith(str(self.root / 'checkout')))
+        bridge = json.loads((self.root / 'managed/bridge.json').read_text())
+        self.assertEqual(bridge['hub_port'], 19000)
+        self.assertTrue(bridge['page_scripts'][0].startswith(str(self.root / 'checkout')))
         removed = subprocess.run(['/bin/bash', str(self.root / 'checkout/instll/uninstall')],
                                  env={**env, 'TAP_PURGE': '1'}, capture_output=True, text=True)
         self.assertEqual(removed.returncode, 0, removed.stderr)
         self.assertFalse(self.root.exists())
         self.assertFalse(self.wrapper.exists())
         self.assertTrue(backend.exists())
+
+    def test_write_managed_rejects_missing_checkout_artifacts(self):
+        write_spec = importlib.util.spec_from_file_location('write_managed', REPO / 'instll/write_managed.py')
+        module = importlib.util.module_from_spec(write_spec)
+        write_spec.loader.exec_module(module)
+        with self.assertRaises(SystemExit):
+            module.main(str(self.parent / 'missing'), str(self.parent), sys.executable,
+                        sys.executable, '19000', str(self.parent / 'profile'))
+
+    def test_write_managed_bindings_validate_as_profile_components(self):
+        write_spec = importlib.util.spec_from_file_location('write_managed', REPO / 'instll/write_managed.py')
+        module = importlib.util.module_from_spec(write_spec)
+        write_spec.loader.exec_module(module)
+        root = self.parent / 'managed-root'
+        root.mkdir()
+        checkout = root / 'checkout'
+        for name in ('tap', 'tap_core', 'instll', 'fixtures'):
+            target = checkout / name
+            if (REPO / name).is_dir():
+                shutil.copytree(REPO / name, target)
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(REPO / name, target)
+        bun = self.parent / 'bun-ok'
+        bun.write_text('#!/bin/sh\necho 1.3.11\n')
+        bun.chmod(0o700)
+        module.main(str(root), str(checkout), sys.executable, str(bun), '19001', str(root / 'profile'))
+        bridge = json.loads((root / 'managed/bridge.json').read_text())
+        components = json.loads((root / 'managed/components.json').read_text())
+        from tap_core.bridge import configuration as bridge_configuration
+        from tap_core.components import configuration as components_configuration
+        bridge_configuration(bridge)
+        profile = Profile(root / 'profile', '/fixture/backend', 18999, 'explicit',
+                          'http://example.com/', [], bridge=bridge)
+        components_configuration(components, profile)

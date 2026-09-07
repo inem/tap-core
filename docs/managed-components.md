@@ -6,9 +6,11 @@ routing adapter extraction (#39). `install` / `on` start the components; the tes
 harness no longer schedules readers or handles requests. A page asks a declared
 handler for the actual saved reader projection. No private TAP checkout is used.
 
-This is a **development-checkout** binding. Pack installation, compatibility and
-entrypoint binding belong to #14; delivery of Python/Bun and clean-Mac acceptance
-belong to #7 / #15. These remain release requirements, not claims of this slice.
+This began as a **development-checkout** binding. The one-line installer (#49)
+now downloads pinned Python/Bun/mitmproxy and writes the same bridge/components
+shape under `~/.tap-core/managed/` with absolute paths inside the install root.
+Pack installation remains #14; CA trust, update and clean-Mac matrix remain
+#7 / #15.
 
 ## Run and configure
 

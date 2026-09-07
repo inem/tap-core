@@ -1,26 +1,34 @@
 {
-  "stage": "development-checkout; release distribution unresolved",
+  "stage": "installer delivers portable Python, mitmproxy and Bun; signed release unresolved",
   "coordinator": {
     "runtime": "CPython",
     "minimum_version": "3.9",
-    "tested_version": "3.9.6",
+    "tested_version": "3.12.14",
     "packages": [],
-    "delivery": "explicit prerequisite; no runtime bundled yet"
+    "delivery": "portable python-build-standalone under ~/.tap-core/python, or TAP_PYTHON override"
   },
   "capture_backend": {
     "name": "mitmproxy",
     "required_version": "12.2.3",
     "version_enforced": true,
-    "tested_distribution": "standalone macOS arm64 binary",
+    "tested_distribution": "standalone macOS arm64/x86_64 app bundle via installer",
     "embedded_python": "3.14.4",
-    "delivery": "explicit --backend executable; never installed or upgraded implicitly",
+    "delivery": "downloaded into ~/.tap-core/backend by installer, or TAP_BACKEND override",
     "license": "MIT",
     "license_url": "https://github.com/mitmproxy/mitmproxy/blob/v12.2.3/LICENSE"
+  },
+  "page_hub_runtime": {
+    "runtime": "Bun",
+    "required_version": "1.3.11",
+    "version_enforced": true,
+    "delivery": "downloaded into ~/.tap-core/bun by installer, or TAP_BUN override",
+    "license": "MIT",
+    "license_url": "https://github.com/oven-sh/bun/blob/bun-v1.3.11/LICENSE"
   },
   "platform": {
     "tested_os": "macOS 15.6.1",
     "tested_architecture": "arm64",
-    "system_tools": ["launchctl", "networksetup", "sudo", "lsof", "curl", "bash"],
+    "system_tools": ["launchctl", "networksetup", "sudo", "lsof", "curl", "bash", "tar", "ditto"],
     "tested_bash": "3.2.57",
     "minimum_os": "not established",
     "browser_https_acceptance": "not established"
