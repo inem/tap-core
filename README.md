@@ -9,6 +9,8 @@ surface. This is not yet a packaged clean-Mac release.
 [Capture record v1 and journal positions](docs/capture-records.md) define the
 current storage input for independent readers, including legacy compatibility
 and explicit errors when retention removes a saved position.
+[Independent reader runs](docs/readers.md) add per-reader progress, resume and
+explicit replay over retained capture, with synthetic subprocess examples.
 
 ## Scope
 

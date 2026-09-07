@@ -93,6 +93,16 @@ def parser():
     install.add_argument("--addon", type=Path, action="append", default=[], help="Additional trusted addon (optional)")
     for name in ("on", "off", "status", "doctor", "where", "uninstall"):
         commands.add_parser(name)
+    reader = commands.add_parser("reader", help="Run independent readers over retained capture")
+    actions = reader.add_subparsers(dest="reader_action", required=True)
+    for action in ("run", "status", "replay"):
+        command = actions.add_parser(action)
+        command.add_argument("name")
+        if action != "status":
+            command.add_argument("--definition", type=Path, required=True)
+        if action == "run":
+            command.add_argument("--max-records", type=int, default=100)
+            command.add_argument("--timeout", type=float, default=30)
     return result
 
 
@@ -109,6 +119,17 @@ def main(argv=None):
                               args.probe_url, [str(p.expanduser().resolve()) for p in args.addon])
         else:
             profile = Profile.load(root)
+        if args.command == "reader":
+            from .readers import Reader, definition
+            reader = Reader(profile, args.name)
+            if args.reader_action == "status":
+                output = reader.status()
+            elif args.reader_action == "replay":
+                output = reader.replay(definition(args.definition))
+            else:
+                output = reader.run(definition(args.definition), args.max_records, args.timeout)
+            print(json.dumps(output, indent=2))
+            return 0
         if args.command in ("status", "doctor", "where"):
             if args.command == "where":
                 result = {"profile": str(root), "config": str(root / "profile.json"),

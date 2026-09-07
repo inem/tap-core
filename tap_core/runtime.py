@@ -103,7 +103,7 @@ def profile_lock(root):
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as error:
             raise TapError("Another command is changing this profile") from error
-        yield
+        yield lock
 
 
 class MacOS:
