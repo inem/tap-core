@@ -115,7 +115,8 @@ def run_python():
         check_mutator(page, page_manifest)
         return {"pack_api": 1, "evidence": "synthetic fixtures only",
                 "reader": "passed", "handler": "passed", "mutator": "passed",
-                "start_stop_error": "passed", "live_ws": "not tested", "installed_host": "not implemented"}
+                "start_stop_error": "passed", "live_ws": "not tested",
+                "installed_host": "not tested here; page/browser-scripts-v1 has a separate lifecycle check"}
 
 
 def run_page(bun):
