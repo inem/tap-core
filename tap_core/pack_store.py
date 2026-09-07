@@ -116,8 +116,9 @@ def _extract_artifact(artifact, destination):
                 target.parent.mkdir(parents=True, exist_ok=True)
                 source = archive.extractfile(member)
                 require(source is not None, f"artifact: cannot read {name}")
-                with target.open("xb") as handle:
-                    shutil.copyfileobj(source, handle)
+                with source:
+                    with target.open("xb") as handle:
+                        shutil.copyfileobj(source, handle)
     except (OSError, tarfile.TarError) as error:
         raise PackError(f"artifact: {error}") from error
     manifest = load_manifest(destination)
@@ -130,12 +131,28 @@ class PackStore:
     def __init__(self, profile_root):
         self.root = Path(profile_root).resolve()
         self.code = self.root / "packs"
+        self.resources = self.root / "resources"
         self.registry_file = self.root / "state/pack-registry.json"
+
+    def _safe_profile_path(self, path):
+        """Reject symlinks in every existing component below the profile root."""
+        path = Path(path)
+        try:
+            relative = path.relative_to(self.root)
+        except ValueError as error:
+            raise PackError(f"Pack path escapes the profile: {path}") from error
+        current = self.root
+        for part in relative.parts:
+            current = current / part
+            require(not current.is_symlink(),
+                    f"Pack path must not traverse a symlink: {current}")
+        return path
 
     def _empty(self):
         return {"version": REGISTRY_VERSION, "packs": {}}
 
     def load(self):
+        self._safe_profile_path(self.registry_file)
         try:
             value = json.loads(self.registry_file.read_text(encoding="utf-8"),
                                object_pairs_hook=no_duplicate_keys)
@@ -187,7 +204,7 @@ class PackStore:
         return value
 
     def save(self, value):
-        _private_directory(self.registry_file.parent)
+        _private_directory(self._safe_profile_path(self.registry_file.parent))
         fd, name = tempfile.mkstemp(prefix=".pack-registry-", dir=self.registry_file.parent)
         temporary = Path(name)
         try:
@@ -200,7 +217,36 @@ class PackStore:
             temporary.unlink(missing_ok=True)
 
     def version_root(self, pack_id, version):
-        return self.code / pack_id / "versions" / version
+        return self._safe_profile_path(self.code / pack_id / "versions" / version)
+
+    def resource_file(self, resource):
+        return self._safe_profile_path(
+            self.resources / "page" / resource["id"] / resource["version"]
+            / (resource["sha256"] + ".js"))
+
+    def _materialize_resources(self, source, manifest):
+        for resource in manifest.get("resources", []):
+            directory = self.resources
+            for name in ("page", resource["id"], resource["version"]):
+                directory = _private_directory(self._safe_profile_path(directory / name))
+            target = self.resource_file(resource)
+            if target.exists():
+                require(target.is_file() and not target.is_symlink()
+                        and _digest(target) == resource["sha256"],
+                        f"shared page resource is changed or unsafe: "
+                        f"{resource['id']}@{resource['version']}")
+                continue
+            fd, name = tempfile.mkstemp(prefix=".resource-", dir=directory)
+            temporary = Path(name)
+            try:
+                with os.fdopen(fd, "wb") as output, (source / resource["file"]).open("rb") as input_:
+                    shutil.copyfileobj(input_, output)
+                temporary.chmod(0o600)
+                require(_digest(temporary) == resource["sha256"],
+                        f"resource changed while installing: {resource['id']}@{resource['version']}")
+                temporary.replace(target)
+            finally:
+                temporary.unlink(missing_ok=True)
 
     def _record(self, registry, pack_id):
         record = registry["packs"].get(pack_id)
@@ -208,7 +254,7 @@ class PackStore:
         return record
 
     def install(self, artifact):
-        _private_directory(self.code)
+        _private_directory(self._safe_profile_path(self.code))
         stage = Path(tempfile.mkdtemp(prefix=".stage-", dir=self.code))
         try:
             manifest = _extract_artifact(artifact, stage)
@@ -223,13 +269,15 @@ class PackStore:
                 existing = load_manifest(target)
                 require(_tree_hashes(target, existing) == hashes,
                         "installed version is immutable and has different content")
-            else:
-                _private_directory(target.parent)
+            self._materialize_resources(stage, manifest)
+            if not target.exists():
+                _private_directory(self._safe_profile_path(target.parent))
                 stage.replace(target)
             record["versions"][manifest["version"]] = {"hashes": hashes}
             self.save(registry)
             return {"id": manifest["id"], "version": manifest["version"],
-                    "installed": True, "enabled": record["enabled"], "code": str(target)}
+                    "installed": True, "enabled": record["enabled"], "code": str(target),
+                    "resources": len(manifest.get("resources", []))}
         finally:
             if stage.exists():
                 shutil.rmtree(stage)
@@ -289,12 +337,19 @@ class PackStore:
             for origin in origins:
                 if origin not in result["allow_origins"]:
                     result["allow_origins"].append(origin)
-            hashes = record["versions"][record["selected"]]["hashes"]
-            for script in page["scripts"]:
-                resource_id = script["id"]
-                declaration = {"version": script["version"],
-                               "digest": hashes[script["file"]],
-                               "path": str(root / script["file"]),
+            resources = {(resource["id"], resource["version"]): resource
+                         for resource in manifest.get("resources", [])}
+            for use in page["uses"]:
+                resource = resources[(use["id"], use["version"])]
+                shared = self.resource_file(resource)
+                require(shared.is_file() and not shared.is_symlink()
+                        and _digest(shared) == resource["sha256"],
+                        f"shared page resource is missing or changed: "
+                        f"{resource['id']}@{resource['version']}")
+                resource_id = use["id"]
+                declaration = {"version": use["version"],
+                               "digest": resource["sha256"],
+                               "path": str(shared),
                                "origins": set(origins),
                                "pack": pack_id}
                 current = declarations.get(resource_id)
@@ -305,7 +360,7 @@ class PackStore:
                         f"page resource {resource_id} requests conflicting versions: "
                         f"{current['version']} and {declaration['version']}")
                 require(current["digest"] == declaration["digest"],
-                        f"page resource {resource_id}@{script['version']} has conflicting content "
+                        f"page resource {resource_id}@{use['version']} has conflicting content "
                         f"in {current['pack']} and {pack_id}")
                 current["origins"].update(origins)
         for declaration in declarations.values():
@@ -407,6 +462,7 @@ class PackStore:
             registry["packs"].pop(pack_id)
         self.save(registry)
         return {"id": pack_id, "removed_versions": versions, "code_removed": True,
+                "shared_resources_retained": True,
                 "state_retained": True, "data_retained": True, "logs_retained": True}
 
     def status(self):

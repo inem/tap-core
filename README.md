@@ -53,7 +53,11 @@ reader projection and an injected browser page through the existing WS bridge.
 first live slice’s temporary injector configuration with explicit profile policy.
 [External pack lifecycle](docs/pack-lifecycle.md) adds a deterministic artifact,
 immutable profile-local versions, separate grants and a declaratively composed
-page injection plan using the YouTube copy-links example.
+page injection plan. [Page resource provider contract v1](contracts/page-resource/v1/README.md)
+defines the matching provider/pack/host seam for reusable UI and site-adapter
+libraries, including offline vendoring and profile-local deduplication. The open
+[YouTube Copy Links pack](https://github.com/inem/tap-pack-youtube-copy-links)
+is released independently from Core.
 
 [Managed components](docs/managed-components.md) let the same profile lifecycle
 start a generic Hub, schedule readers and return declared handler results to the

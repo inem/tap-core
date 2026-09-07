@@ -10,7 +10,6 @@ from pathlib import Path
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
 from tap_core.bridge import (  # noqa: E402
     MARKER,
     PREFIX,
@@ -22,7 +21,7 @@ from tap_core.bridge import (  # noqa: E402
     read_scripts,
 )
 
-EXAMPLE = ROOT / 'examples' / 'youtube-copy-links'
+EXAMPLE = ROOT
 UI = EXAMPLE / 'youtube-ui.js'
 BOOTSTRAP = EXAMPLE / 'copy-links.js'
 ORIGINS = ['https://www.youtube.com', 'https://youtube.com']

@@ -1,86 +1,96 @@
-# YouTube copy-links — first site example
+# YouTube Copy Links pack for TAP
 
-Current working feature from the trusted legacy TAP mutator
-(`mutators/youtube-copy-links.py`) plus `youtube-ui.js`, delivered through the
-profile bridge (`page_scripts`) instead of a custom mutator route.
+An independently released example pack for
+[TAP Core](https://github.com/inem/tap-core). It adds a **Copy** action to
+YouTube cards, watch pages and Shorts and writes a `https://youtu.be/<id>` URL
+to the clipboard with visible toast/button feedback. The installed live evidence
+currently covers the watch-page path only; cards and Shorts remain fixture/source
+expectations.
 
-**Action:** Copy → `https://youtu.be/<id>` on cards / watch / Shorts, with toast
-and button flash. Caption fetch remains a page-side side effect for capture; it
-is not required for the visible Copy result.
+The repository is intentionally both a pack and a page-resource provider:
 
-The source now has a `pack.json` for the first installed
-`browser-scripts-v1` binding. It declares `youtube.ui@0.1.0` separately from the
-copy-links feature so later YouTube packs can request the same UI resource and
-the host will inject it only once. Hub auto-start (#11/#32) is not required for
-Copy itself, but the bridge still injects `runtime.js` before the pack scripts.
+- `tap-resource.json` publishes `youtube.ui@0.1.0` under
+  `tap.page-resource/v1`;
+- `pack.json` freezes that provider plus the feature resource and declares an
+  ordered `uses` list;
+- TAP installs the verified bytes into its profile-local shared resource store;
+- when several enabled packs use the same ID, version and hash, TAP injects it
+  once per document. Version or byte conflicts fail before page code runs.
+
+GitHub distributes source and release artifacts; the browser runtime never
+fetches GitHub, npm or a CDN. The `.tap-pack` is self-contained so install and
+rollback continue to work offline.
 
 ## Files
 
 | File | Role |
 | --- | --- |
-| `youtube-ui.js` | Host DOM adapter (`window.YouTubeUI`), copied as-is |
-| `copy-links.js` | Feature bootstrap, extracted from the legacy mutator |
-| `pack.json` | Exact origins, capability and ordered shared/feature script declarations |
-| `bridge.json.example` | Shape only; absolute paths are filled by the seam check |
-| `PROVENANCE.md` | Content hashes, ownership and license review |
+| `youtube-ui.js` | Reusable DOM adapter exposed as `window.YouTubeUI` |
+| `copy-links.js` | Copy-links feature bootstrap |
+| `tap-resource.json` | Standalone `youtube.ui` provider declaration |
+| `pack.json` | Pack identity, access requests, frozen resources and ordered uses |
+| `PROVENANCE.md` | Source hashes, attribution and license review |
+| `tools/check_seams.py` | Offline bridge/injection seam check |
+| `tools/check_live.py` | Fresh-profile public YouTube check |
 
-## Evidence status
+## Install the prerelease
 
-| Evidence | Status | Owner |
-| --- | --- | --- |
-| Fixture seam admit (`tools/check_youtube_copy_links_seams.py`) | Covered by this change | this example |
-| Live installed injection + Copy with visible feedback | Automated pass; [report](../../docs/youtube-installed-live-2026-09-07.json) | #14 / #38 |
-| System CA trust + nonce-bearing live response | Open; test browser bypassed cert errors and this response had no source nonce | #38 |
-| Immutable pack build/install/enable | Covered by the #14 lifecycle slice | #14 |
-| Hub auto-start | Covered separately | #11 / #32 |
-
-This pack slice must not close #38: the live report proves installed injection
-and the Copy interaction, but not system CA trust or nonce reuse.
-
-## Wire to a profile
+Download the `.tap-pack` from
+[v0.1.0](https://github.com/inem/tap-pack-youtube-copy-links/releases/tag/v0.1.0),
+then, with the TAP profile stopped:
 
 ```sh
-# from this repository root, after choosing an isolated profile + backend
-python3 tools/check_youtube_copy_links_seams.py \
-  --proxy-port 19001 --hub-port 19002 --write-config /tmp/yt-bridge.json
-
-./tap --profile /absolute/profile install \
-  --backend /absolute/path/to/mitmdump --port 19001 --routing explicit \
-  --bridge-config /tmp/yt-bridge.json
-
-./tap --profile /absolute/profile bridge explain --origin https://www.youtube.com
+./tap --profile /absolute/profile pack install \
+  /path/to/example.youtube-copy-links-0.1.0.tap-pack
+./tap --profile /absolute/profile pack enable example.youtube-copy-links \
+  --version 0.1.0 \
+  --grant-origin https://www.youtube.com \
+  --grant-origin https://youtube.com \
+  --grant-capability page.inject
 ./tap --profile /absolute/profile on
 ```
 
-Point the browser (or a dedicated profile) at the proxy. Do not use the live
-user capture journal as test state.
+The profile's base bridge must be enabled. It does not need source-checkout
+paths or the pack origins: the installed pack contributes both to the effective
+startup plan.
 
-For the installed path, build the artifact and use `tap pack install` / `enable`
-as documented in [the pack lifecycle](../../docs/pack-lifecycle.md). The profile
-then contains immutable script paths and separate user grants; no bridge config
-needs paths back into this source directory.
+## Validate from source
 
-## Seams this example must prove
+Use a TAP Core checkout that contains `tap.page-resource/v1`:
 
-Fixture checks, live HTTPS and clean-Mac acceptance are different evidence.
+```sh
+PYTHONPATH=/absolute/path/to/tap-core \
+  python3 -B -m tap_core.page_resources .
+PYTHONPATH=/absolute/path/to/tap-core \
+  python3 -B -m tap_core.packs .
+PYTHONPATH=/absolute/path/to/tap-core \
+  python3 -B tools/check_seams.py
+```
 
-1. **Config admit** — `allow_origins` exact `https://www.youtube.com` and
-   `https://youtube.com`; both scripts absolute, ≤256 KiB, UTF-8; `hub_port`
-   ≠ proxy port (seam check takes `--proxy-port` and rejects collisions).
-2. **Script order** — `youtube-ui.js` then `copy-links.js` as `core/0.js` /
-   `core/1.js`. Bootstrap no-ops without `YouTubeUI`.
-3. **Injection vs legacy mutator** — bridge keeps CSP and reuses page nonce;
-   legacy stripped CSP. Nonce/CSP on real YouTube is the first live gate.
-4. **Asset serving** — `core/N.js` from bridge memory with token; `runtime.js`
-   still forwarded to Hub. Copy must work even when Hub is down or ignored,
-   provided classic scripts still execute after a failed runtime load.
-5. **TLS trust** — browser accepts the profile MITM certificate for YouTube
-   HTTPS. Untested by loopback fixtures.
-6. **SPA** — after one HTML inject, `yt-navigate-finish` / card observers keep
-   mounting without reinjecting the document.
-7. **Policy scope** — `bridge explain` allows injection/route only; it does not
-   claim capture, TLS or app-scope policy (#3/#6).
-8. **Visible result** — clipboard + toast/flash on a real watch or card click.
+Builds are deterministic:
 
-Optional later seam (not v0 of this example): caption `/youtubei` + timedtext
-appear in capture → reader projection → page command through Hub.
+```sh
+PYTHONPATH=/absolute/path/to/tap-core \
+  python3 -B -m tap_core.pack_store build . \
+  --output /tmp/example.youtube-copy-links-0.1.0.tap-pack
+```
+
+## Evidence and limits
+
+The [installed-artifact live report](evidence/youtube-installed-live-2026-09-07.json)
+records Chrome 152 loading immutable profile paths on public YouTube and the Copy
+action producing the expected short URL. That run ignored browser certificate
+errors and encountered no source nonce, so it does not establish system CA trust
+or live nonce reuse. The scripts preserve CSP and the fixture covers nonce reuse.
+
+The Copy path supplies SVG DOM nodes to `youtube-ui.js`, so it does not execute
+the library's generic string-icon `innerHTML` branches. Those branches remain
+untested under YouTube Trusted Types and require separate evidence or a provider
+revision before another pack should rely on them.
+
+All injected scripts share the authority of the YouTube document. This contract
+provides deterministic composition and integrity, not a JavaScript sandbox.
+
+## License
+
+MIT. See [PROVENANCE.md](PROVENANCE.md) for the migrated source review.

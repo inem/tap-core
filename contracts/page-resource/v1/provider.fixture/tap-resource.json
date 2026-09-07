@@ -1,0 +1,10 @@
+{
+  "contract": "tap.page-resource/v1",
+  "id": "fixture.shared-ui",
+  "version": "1.0.0",
+  "kind": "browser-classic-script",
+  "file": "shared-ui.js",
+  "sha256": "36b2cda5ce5e89d2f961dacd5fc3a0a196b4e3c29d56a940a210dbce12c05beb",
+  "license": "MIT",
+  "source_revision": "fixture-v1"
+}

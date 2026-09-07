@@ -1,10 +1,13 @@
 # External pack development and lifecycle
 
-This is the first installed slice for #14. It turns the existing YouTube
-copy-links site example into a reproducible artifact and binds its ordered page
-scripts to the proven profile bridge. It does **not** claim that reader, handler
-or mutator entrypoints are installed yet, and it does not complete the linked
-capture → reader → page/handler acceptance example.
+This is the first installed slice for #14. It binds independently distributed
+page packs to the proven profile bridge and defines the separate
+[`tap.page-resource/v1`](../contracts/page-resource/v1/README.md) seam used by
+UI-library providers, pack authors and TAP Core. The reference
+[YouTube Copy Links pack](https://github.com/inem/tap-pack-youtube-copy-links)
+lives in its own repository. Reader, handler and mutator entrypoints are not
+installed yet, and this does not complete the linked capture → reader →
+page/handler acceptance example.
 
 ## The development cycle
 
@@ -41,6 +44,7 @@ that the artifact can be installed or rolled back.
 | Owner | Owns | Does not imply |
 | --- | --- | --- |
 | Core host | capture records, profile lifecycle, pack store, integrity checks, bridge/handler transport and enforcement at those boundaries | same-user code sandboxing or correctness of site parsing |
+| Page-resource provider | stable resource ID, semantic API, immutable versioned bytes, license and source provenance | page access, pack activation or runtime network fetching |
 | Pack | site/domain knowledge, readers, page UI, handlers, config/state migrations and extra dependency delivery | authority merely because it appears in the manifest |
 | Profile/user | exact grants, exclusions, selected version and retained state/data/logs | that every requested transport is observable |
 | Development harness | mutable source bindings and fixture/live evidence | installed artifact or clean-Mac acceptance |
@@ -53,10 +57,14 @@ share the page authority available there.
 ## First installed binding
 
 `browser-scripts-v1` is an ordered list of declarative classic UTF-8 script
-resources. Every declaration names a stable `id`, exact `version` and packaged
-`file`. This matches the actual #31 bridge rather than pretending the existing
-`browser-module-v1` fixture lifecycle has shipped. At startup the addon:
+uses. Every use names a stable `id` and exact `version`; a top-level `resources`
+provider pins its packaged `file`, SHA-256, license and source revision under
+[`tap.page-resource/v1`](../contracts/page-resource/v1/README.md). This matches
+the actual #31 bridge rather than pretending the existing `browser-module-v1`
+fixture lifecycle has shipped. On install and startup the host:
 
+- verifies each provider declaration and copies its bytes to the immutable
+  profile-local store at `resources/page/<id>/<version>/<sha256>.js`;
 - re-reads the pack registry and manifest without importing the checkout as a
   Python package;
 - verifies the installed file set and SHA-256 hash of every declared file;
@@ -70,23 +78,33 @@ resources. Every declaration names a stable `id`, exact `version` and packaged
   existing authenticated route.
 
 Overlapping pack origins are therefore expected, not an ownership conflict. A
-shared library such as `youtube.ui@0.1.0` may be carried and declared by several
-YouTube packs; the first deterministic provider supplies its verified bytes and
-the later declarations become additional uses. Different semantic scripts need
-different IDs even if their current bytes happen to match. A matching ID is an
-author claim of shared identity, not content-addressing by accident.
+shared library such as `youtube.ui@0.1.0` may be vendored by several YouTube
+packs; installation collapses equal provider bytes into one shared profile
+object and activation collapses their matching uses into one injection.
+Different semantic scripts need different IDs even if their current bytes
+happen to match. A matching ID is an author claim of shared identity, not
+content-addressing by accident.
+
+GitHub, a registry or a local checkout may be a build-time source for a provider,
+but never a browser-time dependency. V1 artifacts are self-contained so install,
+rollback and offline startup cannot change when an upstream URL changes. The
+provider publishes the reusable UI/site adapter, each pack declares what it uses,
+and Core implements validation, storage, composition and origin-scoped delivery.
 
 Disable prevents injection after the next `off`/`on`. It cannot revoke JavaScript
 that already ran in an open document; reload that page. Reader, handler and
 mutator manifests still validate, but activation fails clearly until their host
 bindings are added. That limitation keeps the current perimeter honest.
 
-## Build and use the YouTube example
+## Build and use an external pack
 
-From the repository root:
+Clone the reference pack beside a compatible TAP Core checkout, or download its
+[v0.1.0 prerelease](https://github.com/inem/tap-pack-youtube-copy-links/releases/tag/v0.1.0).
+To build from source:
 
 ```sh
-python3 -B -m tap_core.pack_store build examples/youtube-copy-links \
+PYTHONPATH=/absolute/path/to/tap-core \
+python3 -B -m tap_core.pack_store build /absolute/path/to/tap-pack-youtube-copy-links \
   --output /tmp/example.youtube-copy-links-0.1.0.tap-pack
 
 ./tap --profile /absolute/profile off
@@ -119,7 +137,8 @@ For a compatible new artifact while the profile is stopped:
 An update is installed before activation. If its requests, dependencies, config
 or binding are incompatible, the old selected version remains enabled and no
 mixed version is loaded. Rollback selects the previous verified snapshot.
-Uninstall requires disable and removes code only; profile-owned
+Uninstall requires disable and removes pack code only; shared resource objects
+are retained for other installed versions and rollback history. Profile-owned
 `state/packs/<id>`, `data/packs/<id>` and `logs/packs/<id>` remain.
 
 ## Evidence and remaining work
@@ -132,7 +151,8 @@ conflicts and checks that feature resources stay scoped to their declared
 origins. The YouTube seam fixture continues to verify script order, exact
 origins, sizes and injection behavior.
 
-The [2026-09-07 installed-artifact live report](youtube-installed-live-2026-09-07.json)
+The reference repository's
+[2026-09-07 installed-artifact live report](https://github.com/inem/tap-pack-youtube-copy-links/blob/main/evidence/youtube-installed-live-2026-09-07.json)
 records a fresh temporary profile loading only immutable installed paths on
 Chrome 152 and public YouTube: YouTube records were captured, the Copy action
 wrote the expected short URL and its success state was visible. The exact run

@@ -38,7 +38,8 @@ Each pack directory contains UTF-8 `pack.json`, with these required fields:
 | `requires.pack_api` | Exact integer API expected from the future host; fixtures supply `1`. |
 | `requires.dependencies` | Array of `{id, version}` declarations for additional executable/package dependencies, with exact release versions. A pack cannot depend on itself. Host inventory must match before activation. No downloads or dependency resolution here. |
 | `files` | Unique canonical relative file paths. Every file must exist and resolve inside the pack. Absolute paths, traversal, backslashes and escaping symlinks fail. |
-| `entrypoints` | One or more roles from the table below, each `{file, interface}`; the file must be in `files`. |
+| `resources` | Optional provider objects conforming to [`tap.page-resource/v1`](../contracts/page-resource/v1/README.md). Each pins an ID, exact version, kind, packaged file, SHA-256, license and source revision. Installed page uses must have a provider in the same artifact in v1. |
+| `entrypoints` | One or more roles from the table below. File-based roles use `{file, interface}`; `browser-scripts-v1` uses `{interface, uses}`. |
 | `config` | Named settings, each `{type, default}`. Only string, integer and boolean values; unknown overrides and wrong types fail. No expressions or configuration language. |
 | `access.origins` | Nonempty list of exact canonical HTTP(S) origins, including a nondefault port when relevant. No wildcard, credentials, path, query or fragment. ASCII DNS names and IPv4 supported here; IPv6/IDN syntax remains future work. |
 | `access.capabilities` | Explicit requests from `capture.read`, `response.mutate`, `page.inject`, `bridge.handle`; every declared role needs its capability. |
@@ -57,7 +58,7 @@ dependency's provenance or install it.
 | `reader`: `python-jsonl-v1` | Python executable, UTF-8 JSON objects on stdin; EOF stops it. Fixture emits results on stdout and diagnostics on stderr. | Start outside the proxy hook path, supply allowed records and explicit context, own delivery/checkpoint/replay semantics. Stdout is **not** a durable acknowledgement. |
 | `mutator`: `mitmproxy-python` | Import and call the actual `response(flow)` export using small flow fixtures. | Load only after validation and a user grant; pass native backend hooks. Report exceptions and enforce bounded hooks/streaming behavior. In-process code remains trusted. |
 | `page`: `browser-module-v1` | Call exported `start({bridge, document})` and `stop({document})` against a document/bridge fixture. | This remains a fixture interface; an installed module loader has not shipped. |
-| `page`: `browser-scripts-v1` | Ordered `scripts` declarations, each with stable `id`, exact `version` and packaged `file`. | First installed binding: verify declarations, merge all enabled packs per origin, deduplicate identical resources and snapshot the resulting plan at startup. Disable applies after restart; an already-open page must reload. |
+| `page`: `browser-scripts-v1` | Ordered `uses` declarations, each with stable `id` and exact `version`; each resolves to a top-level `resources` provider. | First installed binding: verify provider bytes, materialize the shared profile resource store, merge uses from all enabled packs per origin, deduplicate identical resources and snapshot the resulting plan at startup. Disable applies after restart; an already-open page must reload. |
 | `handler`: `python-jsonl-v1` | Python executable consuming the example's JSON request and returning JSON reply; EOF stops it. | Connect a bounded adapter to the local bridge. The Python fixture does not replace the existing Bun Hub or select its eventual execution topology. |
 
 Roles are independent: a page-only, handler-only or reader-only pack is valid.
@@ -140,7 +141,9 @@ missing/undeclared/escaping files, exact origins, typed overrides, independent
 access grants, fixed dependencies and rejection before code execution.
 
 An external author can copy either fixture directory, change its ID and code,
-and validate it using the same command without a vendor account. The fixture
+and validate it using the same command without a vendor account. A standalone
+page library can additionally publish `tap-resource.json` and validate it with
+`python3 -B -m tap_core.page_resources <provider-directory>`. The fixture
 transport is still not installed execution. Authenticated live WS, installed
 reader/handler/mutator bindings and the combined independently distributed
 example remain #10/#11/#14 integration work. Issue #5 must be assessed against

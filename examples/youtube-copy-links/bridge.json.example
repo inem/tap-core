@@ -8,7 +8,7 @@
   ],
   "exclude_origins": [],
   "page_scripts": [
-    "/ABS/PATH/TO/tap-core/examples/youtube-copy-links/youtube-ui.js",
-    "/ABS/PATH/TO/tap-core/examples/youtube-copy-links/copy-links.js"
+    "/ABS/PATH/TO/tap-pack-youtube-copy-links/youtube-ui.js",
+    "/ABS/PATH/TO/tap-pack-youtube-copy-links/copy-links.js"
   ]
 }

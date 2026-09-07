@@ -19,6 +19,8 @@ MARKER = 'tap-probe-bootstrap'
 SCRIPT_LIMIT = 256 * 1024
 RESOURCE_ID = re.compile(r'[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*\Z')
 RESOURCE_VERSION = re.compile(r'(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\Z')
+RESOURCE_DIGEST = re.compile(r'[0-9a-f]{64}\Z')
+RESOURCE_CONTRACT = 'tap.page-resource/v1'
 
 
 class HTMLScanError(ValueError):
@@ -247,9 +249,11 @@ def effective_configuration(root, base):
             raise ValueError(f'Enabled pack manifest is incompatible: {pack_id}@{version}')
         page = manifest['entrypoints']['page']
         access = manifest.get('access')
-        if (type(page) is not dict or set(page) != {'interface', 'scripts'}
+        resources = manifest.get('resources')
+        if (type(page) is not dict or set(page) != {'interface', 'uses'}
                 or page.get('interface') != 'browser-scripts-v1'
-                or type(page.get('scripts')) is not list or not page['scripts']
+                or type(page.get('uses')) is not list or not page['uses']
+                or type(resources) is not list or not resources
                 or type(access) is not dict or set(access) != {'origins', 'capabilities'}
                 or type(access['origins']) is not list or type(access['capabilities']) is not list
                 or not all(type(value) is str for value in access['origins'] + access['capabilities'])
@@ -257,15 +261,34 @@ def effective_configuration(root, base):
                 or len(access['capabilities']) != len(set(access['capabilities']))
                 or 'page.inject' not in access['capabilities']):
             raise ValueError(f'Enabled pack has no installed page binding: {pack_id}@{version}')
-        script_ids = set()
-        for script in page['scripts']:
-            if (type(script) is not dict or set(script) != {'id', 'version', 'file'}
-                    or type(script['id']) is not str or not RESOURCE_ID.fullmatch(script['id'])
-                    or script['id'] in script_ids or type(script['version']) is not str
-                    or not RESOURCE_VERSION.fullmatch(script['version'])
-                    or type(script['file']) is not str):
+        resource_index = {}
+        for resource in resources:
+            if (type(resource) is not dict
+                    or set(resource) != {'contract', 'id', 'version', 'kind', 'file', 'sha256',
+                                         'license', 'source_revision'}
+                    or resource.get('contract') != RESOURCE_CONTRACT
+                    or type(resource.get('id')) is not str
+                    or not RESOURCE_ID.fullmatch(resource['id'])
+                    or type(resource.get('version')) is not str
+                    or not RESOURCE_VERSION.fullmatch(resource['version'])
+                    or resource.get('kind') != 'browser-classic-script'
+                    or type(resource.get('file')) is not str
+                    or type(resource.get('sha256')) is not str
+                    or not RESOURCE_DIGEST.fullmatch(resource['sha256'])
+                    or not all(type(resource.get(name)) is str and resource[name].strip()
+                               for name in ('license', 'source_revision'))
+                    or (resource['id'], resource['version']) in resource_index):
+                raise ValueError(f'Enabled pack page providers are malformed: {pack_id}@{version}')
+            resource_index[(resource['id'], resource['version'])] = resource
+        use_ids = set()
+        for use in page['uses']:
+            if (type(use) is not dict or set(use) != {'id', 'version'}
+                    or type(use['id']) is not str or not RESOURCE_ID.fullmatch(use['id'])
+                    or use['id'] in use_ids or type(use['version']) is not str
+                    or not RESOURCE_VERSION.fullmatch(use['version'])
+                    or (use['id'], use['version']) not in resource_index):
                 raise ValueError(f'Enabled pack page declarations are malformed: {pack_id}@{version}')
-            script_ids.add(script['id'])
+            use_ids.add(use['id'])
         requested_origins = access['origins']
         requested_capabilities = access['capabilities']
         if (not set(requested_origins) <= set(grants.get('origins', []))
@@ -297,18 +320,26 @@ def effective_configuration(root, base):
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
             if metadata['hashes'].get(name) != digest:
                 raise ValueError(f'Enabled pack integrity check failed: {pack_id}@{version}')
-        for script in page['scripts']:
-            if script['file'] not in expected:
+        for resource in resources:
+            if (resource['file'] not in expected
+                    or metadata['hashes'].get(resource['file']) != resource['sha256']):
                 raise ValueError(f'Enabled pack page script is undeclared: {pack_id}@{version}')
         for origin in requested_origins:
             exact_origin(origin)
             if origin not in result['allow_origins']:
                 result['allow_origins'].append(origin)
-        for script in page['scripts']:
-            resource_id = script['id']
-            declaration = {'version': script['version'],
-                           'digest': metadata['hashes'][script['file']],
-                           'path': str(code / script['file']),
+        for use in page['uses']:
+            resource = resource_index[(use['id'], use['version'])]
+            shared = (root / 'resources' / 'page' / resource['id'] / resource['version']
+                      / (resource['sha256'] + '.js'))
+            if (shared.is_symlink() or not shared.is_file() or shared.resolve() != shared
+                    or hashlib.sha256(shared.read_bytes()).hexdigest() != resource['sha256']):
+                raise ValueError(f"Shared page resource is missing or changed: "
+                                 f"{resource['id']}@{resource['version']}")
+            resource_id = use['id']
+            declaration = {'version': use['version'],
+                           'digest': resource['sha256'],
+                           'path': str(shared),
                            'origins': set(requested_origins),
                            'pack': pack_id}
             current = declarations.get(resource_id)
@@ -319,7 +350,7 @@ def effective_configuration(root, base):
                 raise ValueError(f'Page resource {resource_id} requests conflicting versions: '
                                  f"{current['version']} and {declaration['version']}")
             if current['digest'] != declaration['digest']:
-                raise ValueError(f"Page resource {resource_id}@{script['version']} has conflicting "
+                raise ValueError(f"Page resource {resource_id}@{use['version']} has conflicting "
                                  f"content in {current['pack']} and {pack_id}")
             current['origins'].update(requested_origins)
     if not any_enabled:

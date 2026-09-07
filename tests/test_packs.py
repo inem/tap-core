@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from tap_core.packs import (PackError, check_activation, fixture_context, load_manifest,
                             resolve_config, validate_manifest)
+from tap_core.page_resources import CONTRACT, digest
 from tools.check_pack_fixtures import FIXTURES, prepare, run_page, run_python
 
 
@@ -26,6 +27,12 @@ class PackManifestTests(unittest.TestCase):
         mutate(manifest)
         with self.assertRaisesRegex(PackError, message):
             validate_manifest(manifest, self.root)
+
+    def resource(self, root, resource_id, file):
+        return {"contract": CONTRACT, "id": resource_id, "version": "1.0.0",
+                "kind": "browser-classic-script", "file": file,
+                "sha256": digest(root / file), "license": "MIT",
+                "source_revision": "fixture-v1"}
 
     def test_both_fixture_manifests(self):
         for name in ("reader", "page-bridge"):
@@ -75,34 +82,36 @@ class PackManifestTests(unittest.TestCase):
             validate_manifest(manifest, FIXTURES / "page-bridge")
 
     def test_ordered_classic_page_scripts_are_a_distinct_interface(self):
-        manifest = load_manifest(FIXTURES / "page-bridge")
+        root = FIXTURES / "page-bridge"
+        manifest = load_manifest(root)
+        manifest["resources"] = [self.resource(root, "fixture.ui", "page.js"),
+                                 self.resource(root, "fixture.feature", "handler.py")]
         manifest["entrypoints"] = {"page": {"interface": "browser-scripts-v1",
-                                                   "scripts": [
-                                                       {"id": "fixture.ui", "version": "1.0.0",
-                                                        "file": "page.js"},
-                                                       {"id": "fixture.feature", "version": "1.0.0",
-                                                        "file": "handler.py"}]}}
+                                                   "uses": [
+                                                       {"id": "fixture.ui", "version": "1.0.0"},
+                                                       {"id": "fixture.feature", "version": "1.0.0"}]}}
         manifest["access"]["capabilities"] = ["page.inject"]
-        validate_manifest(manifest, FIXTURES / "page-bridge")
-        manifest["entrypoints"]["page"]["scripts"][1]["file"] = "missing.js"
-        with self.assertRaisesRegex(PackError, "declared"):
-            validate_manifest(manifest, FIXTURES / "page-bridge")
+        validate_manifest(manifest, root)
+        manifest["entrypoints"]["page"]["uses"][1]["version"] = "2.0.0"
+        with self.assertRaisesRegex(PackError, "missing provider"):
+            validate_manifest(manifest, root)
 
     def test_classic_page_resource_identity_and_version_are_explicit(self):
-        manifest = load_manifest(FIXTURES / "page-bridge")
+        root = FIXTURES / "page-bridge"
+        manifest = load_manifest(root)
+        manifest["resources"] = [self.resource(root, "shared.ui", "page.js"),
+                                 self.resource(root, "feature.two", "handler.py")]
         manifest["entrypoints"] = {"page": {"interface": "browser-scripts-v1",
-                                                   "scripts": [
-                                                       {"id": "shared.ui", "version": "1.0.0",
-                                                        "file": "page.js"},
-                                                       {"id": "shared.ui", "version": "1.0.0",
-                                                        "file": "handler.py"}]}}
+                                                   "uses": [
+                                                       {"id": "shared.ui", "version": "1.0.0"},
+                                                       {"id": "shared.ui", "version": "1.0.0"}]}}
         manifest["access"]["capabilities"] = ["page.inject"]
         with self.assertRaisesRegex(PackError, "duplicate resource id"):
-            validate_manifest(manifest, FIXTURES / "page-bridge")
-        manifest["entrypoints"]["page"]["scripts"][1]["id"] = "feature.two"
-        manifest["entrypoints"]["page"]["scripts"][1]["version"] = "latest"
+            validate_manifest(manifest, root)
+        manifest["entrypoints"]["page"]["uses"][1]["id"] = "feature.two"
+        manifest["entrypoints"]["page"]["uses"][1]["version"] = "latest"
         with self.assertRaisesRegex(PackError, "MAJOR.MINOR.PATCH"):
-            validate_manifest(manifest, FIXTURES / "page-bridge")
+            validate_manifest(manifest, root)
 
     def test_typed_configuration(self):
         self.assertEqual(resolve_config(self.manifest), {"prefix": "seen"})

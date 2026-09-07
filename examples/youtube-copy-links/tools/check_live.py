@@ -20,10 +20,10 @@ import threading
 import time
 
 ROOT = Path(__file__).resolve().parent.parent
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
+import tap_core
 from tap_core.pack_store import PackStore, build_artifact
+
+CORE = Path(tap_core.__file__).resolve().parent.parent
 
 
 class Probe(BaseHTTPRequestHandler):
@@ -92,10 +92,10 @@ def main():
                                       'hub_port': hub.getsockname()[1],
                                       'allow_origins': [], 'exclude_origins': [],
                                       'page_scripts': []}))
-        build_artifact(ROOT / 'examples/youtube-copy-links', artifact)
+        build_artifact(ROOT, artifact)
         server = ThreadingHTTPServer(('127.0.0.1', 0), Probe)
         threading.Thread(target=server.serve_forever, daemon=True).start()
-        prefix = [sys.executable, '-B', ROOT / 'tap', '--profile', profile]
+        prefix = [sys.executable, '-B', CORE / 'tap', '--profile', profile]
         proxy_port = proxy.getsockname()[1]
         proxy.close()
         hub.close()
@@ -119,7 +119,7 @@ def main():
                                                    'proxy_port': proxy_port, 'url': args.url,
                                                    'output': str(browser_output)}))
             try:
-                run([args.node, ROOT / 'fixtures/youtube-installed/browser.cjs', browser_config],
+                run([args.node, ROOT / 'fixtures/browser.cjs', browser_config],
                     timeout=120)
             except RuntimeError as error:
                 failure = json.loads(browser_output.read_text()) if browser_output.exists() else {}
@@ -161,6 +161,7 @@ def main():
             if started:
                 subprocess.run(list(map(str, prefix + ['off'])), capture_output=True, text=True, timeout=30)
             server.shutdown()
+            server.server_close()
 
 
 if __name__ == '__main__':

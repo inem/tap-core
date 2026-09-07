@@ -1,0 +1,10 @@
+{
+  "contract": "tap.page-resource/v1",
+  "id": "youtube.ui",
+  "version": "0.1.0",
+  "kind": "browser-classic-script",
+  "file": "youtube-ui.js",
+  "sha256": "77317dfe7a6708eb0d96ce465ce619aefb5a226b4c4ebaa8c16c78540cc467ed",
+  "license": "MIT",
+  "source_revision": "sha256:77317dfe7a6708eb0d96ce465ce619aefb5a226b4c4ebaa8c16c78540cc467ed"
+}

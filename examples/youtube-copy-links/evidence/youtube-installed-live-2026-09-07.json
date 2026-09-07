@@ -9,15 +9,15 @@
   "csp_header_present": true,
   "bootstrap_nonce_present": false,
   "tls": "accepted only with Playwright ignoreHTTPSErrors; CA trust not established",
-  "artifact_sha256": "67626b19c8a24c496d335486dcf0c6e7e6319285d9060cc0dfc1f24e38e76d78",
+  "artifact_sha256": "692557e07039493a612b5986229d58cc0a6a796415ac0a313614bc07f0c7ffb2",
   "installed_version": "0.1.0",
   "installed_code": "packs/example.youtube-copy-links/versions/0.1.0",
   "installed_page_scripts": [
-    "packs/example.youtube-copy-links/versions/0.1.0/youtube-ui.js",
-    "packs/example.youtube-copy-links/versions/0.1.0/copy-links.js"
+    "resources/page/youtube.ui/0.1.0/77317dfe7a6708eb0d96ce465ce619aefb5a226b4c4ebaa8c16c78540cc467ed.js",
+    "resources/page/example.youtube-copy-links.feature/0.1.0/2b3ceae0470ba11023534f49333df29f2540b9319b14e047779c4167bc852daf.js"
   ],
   "source_checkout_not_bound": true,
   "origin_grant_enforced": true,
-  "youtube_records_observed": 39,
+  "youtube_records_observed": 18,
   "evidence": "live installed artifact; CA trust bypassed in fresh browser"
 }

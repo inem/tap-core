@@ -7,24 +7,45 @@
     "dependencies": []
   },
   "files": [
+    "LICENSE",
     "PROVENANCE.md",
     "README.md",
     "youtube-ui.js",
     "copy-links.js"
   ],
+  "resources": [
+    {
+      "contract": "tap.page-resource/v1",
+      "id": "youtube.ui",
+      "version": "0.1.0",
+      "kind": "browser-classic-script",
+      "file": "youtube-ui.js",
+      "sha256": "77317dfe7a6708eb0d96ce465ce619aefb5a226b4c4ebaa8c16c78540cc467ed",
+      "license": "MIT",
+      "source_revision": "sha256:77317dfe7a6708eb0d96ce465ce619aefb5a226b4c4ebaa8c16c78540cc467ed"
+    },
+    {
+      "contract": "tap.page-resource/v1",
+      "id": "example.youtube-copy-links.feature",
+      "version": "0.1.0",
+      "kind": "browser-classic-script",
+      "file": "copy-links.js",
+      "sha256": "2b3ceae0470ba11023534f49333df29f2540b9319b14e047779c4167bc852daf",
+      "license": "MIT",
+      "source_revision": "sha256:2b3ceae0470ba11023534f49333df29f2540b9319b14e047779c4167bc852daf"
+    }
+  ],
   "entrypoints": {
     "page": {
       "interface": "browser-scripts-v1",
-      "scripts": [
+      "uses": [
         {
           "id": "youtube.ui",
-          "version": "0.1.0",
-          "file": "youtube-ui.js"
+          "version": "0.1.0"
         },
         {
           "id": "example.youtube-copy-links.feature",
-          "version": "0.1.0",
-          "file": "copy-links.js"
+          "version": "0.1.0"
         }
       ]
     }

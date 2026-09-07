@@ -271,6 +271,7 @@ def main(argv=None):
                           "data": str(root / "data"), "state": str(root / "state"),
                           "certificates": str(root / "certificates"), "log": str(root / "logs/capture.log"),
                           "packs": str(root / "packs"),
+                          "resources": str(root / "resources"),
                           "pack_registry": str(root / "state/pack-registry.json"),
                           "launch_agent": str(profile.plist), "backend": profile.backend,
                           "checkout": str(Path(__file__).resolve().parent.parent)}

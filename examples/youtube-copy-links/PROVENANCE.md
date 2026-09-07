@@ -16,6 +16,12 @@ replaced with equivalent SVG DOM construction after the installed live check
 showed that YouTube requires TrustedHTML for `innerHTML`. No private traffic,
 credentials, account data or site cookies are included.
 
+The copied UI library still contains generic string-icon branches that assign
+to `innerHTML`. This pack's Copy feature passes SVG DOM nodes, so its proven live
+path does not execute those branches. They remain explicitly untested under
+YouTube Trusted Types and must not be treated as safe for a future string-icon
+consumer without separate evidence or a provider revision.
+
 ## License decision
 
 Both reviewed sources carry no separate third-party LICENSE/COPYING/NOTICE and no
