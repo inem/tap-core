@@ -119,12 +119,14 @@ command. For an owned install, use the in-place updater:
 TAP_REF=<branch-or-commit> bash "$HOME/.tap-core/checkout/instll/update"
 ```
 
-Update stops a running profile when needed, swaps `checkout/` (and refreshes
-managed bindings / pinned runtimes), rewrites the owned `tap` wrapper, and keeps
-`profile/`, pack data and recorded grants (CA / sudoers). Routing mode and the CA
-grant digest must stay unchanged (#6 proxy policy for this slice). Failure retains
-the installation for recovery. Update is **not** purge/reinstall and does not
-claim Local Capture, clean-Mac, or browser HTTPS-without-`-k`.
+Update stops a running profile when needed, stages the new checkout, then swaps
+it under the install-root and profile locks (same family as uninstall). The
+previous checkout remains as `checkout.prev.<pid>` until managed rewrite and
+ownership refresh both succeed; on failure it is restored and bindings are
+repaired. Routing mode and the CA grant digest must stay unchanged (#6 proxy
+policy for this slice). Failure retains the installation for recovery. Update is
+**not** purge/reinstall and does not claim Local Capture, clean-Mac, or browser
+HTTPS-without-`-k`.
 
 Choose a new `TAP_ROOT` and free `TAP_BIN_DIR` only for an independent parallel
 installation. The default command name must be free: an existing file or symlink

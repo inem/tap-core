@@ -319,6 +319,51 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual((self.root / 'checkout/UPDATE_MARKER').read_text().strip(), 'version-b')
         self.assertTrue(self.wrapper.is_file())
         self.assertEqual(hashlib.sha256(self.wrapper.read_bytes()).hexdigest(), after['wrapper_sha256'])
+        leftovers = list(self.root.glob('checkout.prev.*'))
+        self.assertEqual(leftovers, [], leftovers)
+
+    def test_update_refuses_while_root_lock_held(self):
+        self.prepare(configured=True)
+        shutil.copytree(REPO / 'instll', self.root / 'checkout/instll', dirs_exist_ok=True)
+        shutil.copytree(REPO / 'tap_core', self.root / 'checkout/tap_core', dirs_exist_ok=True)
+        (self.root / 'checkout/tap').write_text('#!/bin/sh\n')
+        staging = self.parent / 'next'
+        shutil.copytree(self.root / 'checkout', staging)
+        from tap_core.runtime import profile_lock
+        with profile_lock(self.root):
+            result = subprocess.run(
+                [sys.executable, str(self.root / 'checkout/instll/ownership.py'), 'apply-checkout',
+                 str(self.root), str(staging), sys.executable, '/fixture/backend', sys.executable,
+                 'b' * 40, 'arm64', '19000'],
+                capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('holds this root', result.stderr)
+
+    def test_update_restores_checkout_when_managed_rewrite_fails(self):
+        self.prepare(configured=False)
+        shutil.copytree(REPO / 'instll', self.root / 'checkout/instll', dirs_exist_ok=True)
+        shutil.copytree(REPO / 'tap_core', self.root / 'checkout/tap_core', dirs_exist_ok=True)
+        for name in ('fixtures/managed/page.js', 'fixtures/managed/handler.py',
+                     'fixtures/live-slice/reader.py'):
+            path = self.root / 'checkout' / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('fixture\n')
+        (self.root / 'checkout/tap').write_text('ok-a\n')
+        (self.root / 'checkout/UPDATE_MARKER').write_text('version-a\n')
+        staging = self.parent / 'broken-next'
+        shutil.copytree(self.root / 'checkout', staging)
+        (staging / 'UPDATE_MARKER').write_text('version-b\n')
+        (staging / 'instll/write_managed.py').write_text('raise SystemExit("boom")\n')
+        before = (self.root / 'checkout/UPDATE_MARKER').read_text()
+        result = subprocess.run(
+            [sys.executable, str(self.root / 'checkout/instll/ownership.py'), 'apply-checkout',
+             str(self.root), str(staging), sys.executable, '/fixture/backend', sys.executable,
+             'b' * 40, 'arm64', '19000'],
+            capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('write_managed failed', result.stderr)
+        self.assertEqual((self.root / 'checkout/UPDATE_MARKER').read_text(), before)
+        self.assertEqual(list(self.root.glob('checkout.prev.*')), [])
 
     def test_update_refuses_foreign_wrapper(self):
         self.prepare()

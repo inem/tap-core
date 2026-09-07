@@ -105,6 +105,68 @@ def refresh(root, python, backend, ref, arch):
     return data
 
 
+def apply_checkout(root, new_checkout, python, backend, bun, ref, arch, hub_port):
+    """Swap checkout under install+profile locks; keep backup until refresh succeeds."""
+    import subprocess
+    root = canonical(root)
+    verify_owned(root)
+    new_checkout = canonical(Path(new_checkout))
+    require((new_checkout / 'tap').is_file(), 'New checkout missing tap entrypoint')
+    require(str(hub_port).isdigit(), 'hub_port must be an integer')
+    hub_port = int(hub_port)
+    python = str(Path(python).absolute())
+    bun = str(Path(bun).absolute())
+    require(Path(bun).is_file(), 'Bun executable missing')
+    checkout = root / 'checkout'
+    backup = root / ('checkout.prev.' + str(os.getpid()))
+    profile_root = root / 'profile'
+    require(not backup.exists(), 'Leftover checkout backup present; inspect before update')
+
+    # Locks come from the currently installed checkout (pre-swap).
+    sys.path.insert(0, str(checkout))
+    from tap_core.runtime import profile_lock
+
+    def write_managed(target_checkout):
+        helper = target_checkout / 'instll/write_managed.py'
+        require(helper.is_file(), 'write_managed helper missing in checkout')
+        result = subprocess.run(
+            [python, str(helper), str(root), str(target_checkout), python, bun,
+             str(hub_port), str(profile_root)],
+            capture_output=True, text=True)
+        if result.returncode:
+            raise ValueError('write_managed failed: ' + (result.stderr or result.stdout).strip())
+
+    with profile_lock(root, busy_message='Another install/update holds this root'):
+        configured = (profile_root / 'profile.json').is_file()
+        with (profile_lock(profile_root, busy_message='Another command is changing this profile')
+              if configured else nullcontext()):
+            checkout.rename(backup)
+            try:
+                new_checkout.rename(checkout)
+            except Exception:
+                if not checkout.exists() and backup.exists():
+                    backup.rename(checkout)
+                raise
+            completed = False
+            try:
+                write_managed(checkout)
+                data = refresh(root, python, backend, ref, arch)
+                completed = True
+                shutil.rmtree(backup)
+            except Exception:
+                if checkout.exists():
+                    shutil.rmtree(checkout)
+                if backup.exists():
+                    backup.rename(checkout)
+                    try:
+                        write_managed(checkout)
+                    except Exception:
+                        pass
+                raise
+            require(not backup.exists(), 'Checkout backup survived a successful update')
+    return data
+
+
 def grant_sudoers(root, path, digest, alias):
     root = canonical(root)
     marker, data = _load_mark(root)
@@ -253,6 +315,10 @@ def main():
             data = refresh(*sys.argv[2:7])
             print(json.dumps({'ok': True, 'ref': data['ref'], 'routing': data['routing'],
                               'grants': data.get('grants') or {}}))
+        elif sys.argv[1] == 'apply-checkout':
+            data = apply_checkout(*sys.argv[2:10])
+            print(json.dumps({'ok': True, 'ref': data['ref'], 'routing': data['routing'],
+                              'grants': data.get('grants') or {}, 'backup_retained': False}))
         elif sys.argv[1] == 'grant-sudoers':
             grant_sudoers(*sys.argv[2:])
         elif sys.argv[1] == 'grant-ca':

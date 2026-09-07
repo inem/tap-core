@@ -191,26 +191,11 @@ ensure_bun
 ensure_backend
 stage_checkout
 
-OLD_BACKUP="$ROOT/checkout.prev.$$"
-info "swapping checkout $REF_BEFORE → $RESOLVED_REF"
-mv "$CHECKOUT" "$OLD_BACKUP"
-mv "$NEW_CHECKOUT" "$CHECKOUT"
-rm -rf "$STAGE"
-
-info "rewriting managed bindings from updated checkout"
 HUB_PORT="$("$PY" -c 'import json,sys; print(int(json.load(open(sys.argv[1]))["port"])+1)' "$MARK")"
-if ! "$PYTHON" "$CHECKOUT/instll/write_managed.py" \
-    "$ROOT" "$CHECKOUT" "$PYTHON" "$BUN" "$HUB_PORT" "$PROFILE"; then
-  info "managed rewrite failed; restoring previous checkout"
-  rm -rf "$CHECKOUT"
-  mv "$OLD_BACKUP" "$CHECKOUT"
-  fail "write_managed failed"
-fi
-rm -rf "$OLD_BACKUP"
-
-info "refreshing ownership wrapper and install.json"
-"$PYTHON" "$CHECKOUT/instll/ownership.py" refresh \
-  "$ROOT" "$PYTHON" "$BACKEND" "$RESOLVED_REF" "$arch" >/dev/null
+info "applying checkout $REF_BEFORE → $RESOLVED_REF under install/profile locks"
+"$PYTHON" "$CHECKOUT/instll/ownership.py" apply-checkout \
+  "$ROOT" "$NEW_CHECKOUT" "$PYTHON" "$BACKEND" "$BUN" "$RESOLVED_REF" "$arch" "$HUB_PORT" >/dev/null
+rm -rf "$STAGE"
 
 AFTER="$(cat "$MARK")"
 ROUTING_AFTER="$(printf '%s' "$AFTER" | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["routing"])')"
