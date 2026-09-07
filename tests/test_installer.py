@@ -284,3 +284,53 @@ class InstallerTests(unittest.TestCase):
         command = module.recovery_command(self.root)
         self.assertTrue(command.startswith(sys.executable))
         self.assertIn('ownership.py remove', command)
+
+    def test_harness_emit_survives_cleanup_timeout(self):
+        harness = importlib.util.spec_from_file_location(
+            'check_installer_managed_runtime', REPO / 'tools/check_installer_managed_runtime.py')
+        module = importlib.util.module_from_spec(harness)
+        harness.loader.exec_module(module)
+        self.root.mkdir()
+        (self.root / 'interpreter').write_text(sys.executable + '\n')
+        (self.root / 'checkout/instll').mkdir(parents=True)
+        (self.root / 'checkout/instll/ownership.py').write_text('pass\n')
+        out = self.parent / 'out.json'
+        report = {'ok': False, 'cleanup_verified': False}
+        with patch.object(module, 'attempt_purge',
+                          side_effect=subprocess.TimeoutExpired(cmd='uninstall', timeout=1)):
+            try:
+                module.attempt_purge(self.root, {})
+            except subprocess.TimeoutExpired as error:
+                report['cleanup_error'] = type(error).__name__ + ': ' + str(error)
+                report['retained_root'] = str(self.root)
+                report['recovery'] = module.recovery_command(self.root)
+        module.emit(report, out)
+        data = json.loads(out.read_text())
+        self.assertFalse(data['cleanup_verified'])
+        self.assertEqual(data['retained_root'], str(self.root))
+        self.assertIn('ownership.py remove', data['recovery'])
+        self.assertIn('TimeoutExpired', data['cleanup_error'])
+
+    def test_sudoers_helper_uses_unique_owned_dropin(self):
+        script = (REPO / 'instll/enable-system-proxy-sudo').read_text()
+        self.assertIn('/etc/sudoers.d/tap-core-${tag}', script)
+        self.assertIn('refusing to overwrite foreign sudoers file', script)
+        self.assertIn('grant-sudoers', script)
+        self.assertIn('tap-core-owned root=', script)
+        self.assertNotRegex(script, r'TARGET=.*/etc/sudoers\.d/tap-core"')
+
+    def test_finish_setup_uses_marker_wrapper_and_grants_ca(self):
+        script = (REPO / 'instll/finish-setup').read_text()
+        self.assertIn('data.get("root") == "$ROOT"', script)
+        self.assertIn('WRAPPER=', script)
+        self.assertIn('wrapper_sha256', script)
+        self.assertIn('grant-ca', script)
+        self.assertIn('TAP_ROOT="$ROOT" bash "$HERE/enable-system-proxy-sudo"', script)
+        self.assertNotIn('HOME/.tap-core', script)
+        self.assertNotIn('HOME/.local/bin', script)
+
+    def test_install_hints_avoid_broken_routing_env_on_curl(self):
+        text = (REPO / 'instll/install').read_text()
+        self.assertIn('| TAP_ROUTING=explicit bash', text)
+        self.assertNotIn('TAP_ROUTING=explicit curl', text)
+        self.assertIn('tap routing set explicit', text)

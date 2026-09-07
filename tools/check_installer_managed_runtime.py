@@ -161,6 +161,7 @@ def main(argv=None):
         else:
             report['runtime_modes'][name] = 'download'
 
+    interrupted = None
     try:
         if args.local_checkout:
             archive = parent / 'checkout.tar.gz'
@@ -247,13 +248,22 @@ def main(argv=None):
                     shutil.rmtree(parent, ignore_errors=True)
             elif report.get('cleanup_verified') and parent.exists():
                 shutil.rmtree(parent, ignore_errors=True)
-        except (subprocess.TimeoutExpired, OSError) as error:
+        except KeyboardInterrupt as error:
+            interrupted = error
             report['cleanup_verified'] = False
-            report['cleanup_error'] = str(error)
+            report['cleanup_error'] = 'cleanup interrupted'
+            report['retained_root'] = str(install_root)
+            report['recovery'] = recovery_command(install_root)
+        except Exception as error:
+            # TimeoutExpired/OSError and any other cleanup failure must not skip emit.
+            report['cleanup_verified'] = False
+            report['cleanup_error'] = type(error).__name__ + ': ' + str(error)
             report['retained_root'] = str(install_root)
             report['recovery'] = recovery_command(install_root)
 
     emit(report, args.output)
+    if interrupted is not None:
+        raise interrupted
     return 0 if report.get('ok') and report.get('cleanup_verified') else 1
 
 
