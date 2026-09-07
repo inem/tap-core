@@ -9,8 +9,9 @@ from types import SimpleNamespace
 from unittest.mock import Mock, PropertyMock, patch
 
 from tap_core.capture import (Capture, Writer, capture_limits, decide_body,
-                              mitm_size, DEFAULT_CAPTURE)
+                              fit_record, mitm_size, DEFAULT_CAPTURE)
 from tap_core.journal import Journal
+from tap_core.records import MAX_RECORD_BYTES, decode_record, validate_record
 from tap_core.runtime import MacOS, Profile, TapError
 
 
@@ -22,15 +23,19 @@ class CaptureLimitsTests(unittest.TestCase):
         self.assertEqual(limits["keep_rolls"], 3)
         self.assertEqual(limits["queue_slots"], 64)
         self.assertEqual(limits["queue_bytes"], 16 * 1024 * 1024)
-        self.assertEqual(limits["max_body_bytes"], 16 * 1024 * 1024)
+        self.assertEqual(limits["max_body_bytes"], 12 * 1024 * 1024)
         self.assertEqual(mitm_size(limits["stream_large_bodies"]), "4m")
+        self.assertLessEqual(2 * limits["max_body_bytes"] + 1024 * 1024, MAX_RECORD_BYTES)
 
     def test_invalid_limits_are_rejected(self):
         with self.assertRaisesRegex(ValueError, "positive int"):
             capture_limits({**DEFAULT_CAPTURE, "queue_slots": 0})
         with self.assertRaisesRegex(ValueError, "must not exceed queue_bytes"):
-            capture_limits({**DEFAULT_CAPTURE, "max_body_bytes": 17 * 1024 * 1024,
-                            "queue_bytes": 16 * 1024 * 1024})
+            capture_limits({**DEFAULT_CAPTURE, "max_body_bytes": 13 * 1024 * 1024,
+                            "queue_bytes": 12 * 1024 * 1024})
+        with self.assertRaisesRegex(ValueError, "supported maximum \\(12 MiB\\)"):
+            capture_limits({**DEFAULT_CAPTURE, "max_body_bytes": 13 * 1024 * 1024,
+                            "queue_bytes": 64 * 1024 * 1024})
 
     def test_profile_stores_validated_capture_limits(self):
         root = Path(tempfile.mkdtemp())
@@ -71,7 +76,6 @@ class CaptureLimitsTests(unittest.TestCase):
 
     def test_queue_drop_is_health_counter_not_journal_gap(self):
         root = Path(tempfile.mkdtemp())
-        # Byte budget rejects before write; Journal only sees what was written.
         limits = {**DEFAULT_CAPTURE, "queue_slots": 64, "queue_bytes": 64 * 1024,
                   "max_body_bytes": 1024}
         writer = Writer(root, root, limits=limits)
@@ -83,7 +87,6 @@ class CaptureLimitsTests(unittest.TestCase):
             request=SimpleNamespace(method="GET", url="https://fixture.example/ok", headers={},
                                     stream=False, get_text=lambda **kw: ""),
             response=kept))
-        # Oversized submit estimate trips queue_bytes without a journal entry.
         writer.submit({"pad": "x" * (512 * 1024)})
         writer.close(timeout=2)
         health = json.loads((root / "capture.json").read_text())
@@ -104,24 +107,137 @@ class CaptureLimitsTests(unittest.TestCase):
         self.assertTrue(force_stream)
         self.assertEqual(size, 100)
 
-    def test_decide_body_omits_raw_content_oversize_and_unknown_length(self):
+    def test_decide_body_allows_chunked_until_raw_or_backend_stream(self):
         response = Mock()
-        response.headers = {"content-type": "text/plain"}
+        response.headers = {"content-type": "application/json"}
         response.stream = False
+        response.raw_content = None
+        keep, reason, force_stream, size = decide_body(response, max_body_bytes=50)
+        self.assertTrue(keep)
+        self.assertEqual(reason, "retained")
+        self.assertFalse(force_stream)
+        self.assertEqual(size, 0)
         response.raw_content = b"x" * 200
         keep, reason, force_stream, size = decide_body(response, max_body_bytes=50)
         self.assertFalse(keep)
         self.assertEqual(reason, "oversize")
         self.assertEqual(size, 200)
 
-        response.raw_content = None
-        keep, reason, force_stream, size = decide_body(response, max_body_bytes=50)
-        self.assertFalse(keep)
-        self.assertEqual(reason, "unbounded")
-        self.assertTrue(force_stream)
+    def test_chunked_json_survives_responseheaders_to_response(self):
+        records = []
+        limits = {**DEFAULT_CAPTURE, "max_body_bytes": 1024}
+        capture = Capture(SimpleNamespace(submit=records.append, limits=limits), limits=limits)
+        response = SimpleNamespace(status_code=200,
+                                   headers={"content-type": "application/json"},
+                                   stream=False, raw_content=None,
+                                   get_text=lambda **kw: '{"ok":true}')
+        request = SimpleNamespace(method="GET", url="https://fixture.example/chunked",
+                                  headers={}, stream=False, get_text=lambda **kw: "")
+        flow = SimpleNamespace(request=request, response=response)
+        capture.responseheaders(flow)
+        self.assertFalse(response.stream)
+        response.raw_content = b'{"ok":true}'
+        capture.response(flow)
+        self.assertTrue(records[0]["body_kept"])
+        self.assertEqual(records[0]["body"], '{"ok":true}')
+        validate_record(records[0])
+
+    def test_header_oversize_preserves_reason_and_size_after_forced_stream(self):
+        records = []
+        limits = {**DEFAULT_CAPTURE, "max_body_bytes": 128}
+        capture = Capture(SimpleNamespace(submit=records.append, limits=limits), limits=limits)
+        response = SimpleNamespace(status_code=200,
+                                   headers={"content-type": "application/json",
+                                            "content-length": "202"},
+                                   stream=False, raw_content=None,
+                                   get_text=lambda **kw: (_ for _ in ()).throw(AssertionError("no decode")))
+        request = SimpleNamespace(method="GET", url="https://fixture.example/big",
+                                  headers={}, stream=False, get_text=lambda **kw: "")
+        flow = SimpleNamespace(request=request, response=response)
+        capture.responseheaders(flow)
+        self.assertTrue(response.stream)
+        capture.response(flow)
+        self.assertEqual(records[0]["body_reason"], "oversize")
+        self.assertEqual(records[0]["size"], 202)
+        self.assertTrue(records[0]["streamed"])
+        self.assertFalse(records[0]["body_kept"])
+        validate_record(records[0])
+
+    def test_media_type_preserves_declared_size(self):
+        records = []
+        capture = Capture(SimpleNamespace(submit=records.append))
+        response = SimpleNamespace(status_code=200,
+                                   headers={"content-type": "application/octet-stream",
+                                            "content-length": "9000000"},
+                                   stream=False, raw_content=None,
+                                   get_text=lambda **kw: (_ for _ in ()).throw(AssertionError("no")))
+        request = SimpleNamespace(method="GET", url="https://fixture.example/bin", headers={})
+        flow = SimpleNamespace(request=request, response=response)
+        capture.responseheaders(flow)
+        capture.response(flow)
+        self.assertEqual(records[0]["body_reason"], "media_type")
+        self.assertEqual(records[0]["size"], 9000000)
+        validate_record(records[0])
+
+    def test_new_dispositions_roundtrip_writer_journal_reader(self):
+        root = Path(tempfile.mkdtemp())
+        limits = {**DEFAULT_CAPTURE, "max_body_bytes": 128, "queue_bytes": 10_000_000}
+        writer = Writer(root, root, limits=limits)
+        capture = Capture(writer=writer, limits=limits)
+        for reason, headers, raw, body in (
+            ("oversize", {"content-type": "application/json", "content-length": "500"}, None, None),
+            ("oversize_decoded", {"content-type": "application/json", "content-length": "4"}, b"abcd", "x" * 400),
+            ("media_type", {"content-type": "application/octet-stream", "content-length": "20"}, None, None),
+        ):
+            response = SimpleNamespace(status_code=200, headers=headers, stream=False,
+                                       raw_content=raw, get_text=lambda body=body, **kw: body)
+            request = SimpleNamespace(method="GET", url=f"https://fixture.example/{reason}",
+                                      headers={}, stream=False, get_text=lambda **kw: "")
+            flow = SimpleNamespace(request=request, response=response)
+            capture.responseheaders(flow)
+            capture.response(flow)
+        writer.close(timeout=2)
+        entries = list(Journal(root).scan())
+        reasons = {entry.record["url"].rsplit("/", 1)[-1]: entry.record["body_reason"] for entry in entries}
+        self.assertEqual(reasons["oversize"], "oversize")
+        self.assertEqual(reasons["oversize_decoded"], "oversize_decoded")
+        self.assertEqual(reasons["media_type"], "media_type")
+        for entry in entries:
+            validate_record(entry.record)
+            decode_record((json.dumps(entry.record) + "\n").encode(), allow_legacy=False)
+
+    def test_fit_record_strips_bodies_before_journal_limit(self):
+        body = "r" * (17 * 1024 * 1024)
+        req = "q" * (17 * 1024 * 1024)
+        record = {"record_version": 1, "record_id": "11111111-1111-4111-8111-111111111111",
+                  "ts": 1.0, "method": "POST", "url": "https://fixture.example/pair",
+                  "status": 200, "ctype": "application/json", "size": len(body),
+                  "body_kept": True, "body_reason": "retained", "streamed": False,
+                  "req_body_kept": True, "req_body_reason": "retained", "ua": "",
+                  "body": body, "req_body": req}
+        too_big = (json.dumps(record, ensure_ascii=False) + "\n").encode()
+        self.assertGreater(len(too_big), MAX_RECORD_BYTES)
+        fitted = fit_record(record)
+        line = (json.dumps(fitted, ensure_ascii=False) + "\n").encode()
+        self.assertLessEqual(len(line), MAX_RECORD_BYTES)
+        self.assertFalse(fitted["req_body_kept"])
+        self.assertEqual(fitted["req_body_reason"], "oversize_decoded")
+        validate_record(fitted)
+        # Writer refuses leftover oversized lines as a safety net.
+        root = Path(tempfile.mkdtemp())
+        writer = Writer(root, root, limits={**DEFAULT_CAPTURE, "queue_bytes": 64 * 1024 * 1024})
+        writer.submit({"pad": "x" * (MAX_RECORD_BYTES + 10)})
+        # Force a line that still exceeds after naive submit of raw dict:
+        huge = dict(fitted)
+        huge["body"] = "z" * (MAX_RECORD_BYTES)
+        huge["body_kept"] = True
+        huge["body_reason"] = "retained"
+        writer.submit(huge)
+        writer.close(timeout=2)
+        health = json.loads((root / "capture.json").read_text())
+        self.assertGreaterEqual(health["dropped"], 1)
 
     def test_decoded_body_over_budget_is_omitted(self):
-        """Compressed/wire size can be small while get_text expands past max_body_bytes."""
         records = []
         limits = {**DEFAULT_CAPTURE, "max_body_bytes": 8}
         capture = Capture(SimpleNamespace(submit=records.append, limits=limits), limits=limits)
@@ -134,7 +250,7 @@ class CaptureLimitsTests(unittest.TestCase):
         capture.response(SimpleNamespace(request=request, response=response))
         self.assertFalse(records[0]["body_kept"])
         self.assertEqual(records[0]["body_reason"], "oversize_decoded")
-        self.assertNotIn("body", records[0])
+        validate_record(records[0])
 
     def test_capture_records_oversize_without_body(self):
         root = Path(tempfile.mkdtemp())
@@ -153,10 +269,10 @@ class CaptureLimitsTests(unittest.TestCase):
         flow.response.stream = False
         flow.response.raw_content = None
         flow.response.get_text = Mock(side_effect=AssertionError("must not decode oversize body"))
+        capture.responseheaders(flow)
         capture.response(flow)
         writer.close(timeout=2)
-        lines = (root / "stream.jsonl").read_text().splitlines()
-        record = json.loads(lines[-1])
-        self.assertFalse(record["body_kept"])
+        record = json.loads((root / "stream.jsonl").read_text().splitlines()[-1])
         self.assertEqual(record["body_reason"], "oversize")
-        self.assertNotIn("body", record)
+        self.assertEqual(record["size"], 100)
+        validate_record(record)

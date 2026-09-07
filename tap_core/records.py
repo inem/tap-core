@@ -51,9 +51,10 @@ def validate_record(record, allow_legacy=True):
     if type(record.get("streamed")) is not bool:
         raise RecordError("Missing capture streamed flag")
     for flag, body, reason, allowed in (
-        ("body_kept", "body", "body_reason", {"retained", "media_type", "streamed", "unavailable"}),
+        ("body_kept", "body", "body_reason",
+         {"retained", "media_type", "streamed", "unavailable", "oversize", "unbounded", "oversize_decoded"}),
         ("req_body_kept", "req_body", "req_body_reason",
-         {"retained", "response_not_retained", "streamed", "unavailable"}),
+         {"retained", "response_not_retained", "streamed", "unavailable", "oversize_decoded"}),
     ):
         value = record.get(reason)
         if type(record.get(flag)) is not bool or not isinstance(value, str) or value not in allowed:

@@ -256,7 +256,7 @@ class RuntimeTests(unittest.TestCase):
         capture = json.loads(env["TAP_CORE_CAPTURE"])
         self.assertEqual(capture["version"], 1)
         self.assertEqual(capture["stream_large_bodies"], 4 * 1024 * 1024)
-        self.assertEqual(capture["max_body_bytes"], 16 * 1024 * 1024)
+        self.assertEqual(capture["max_body_bytes"], 12 * 1024 * 1024)
         self.assertIn("stream_large_bodies=4m", argv)
 
     def test_real_start_does_not_touch_foreign_listener(self):

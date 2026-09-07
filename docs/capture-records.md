@@ -23,8 +23,8 @@ examples are `fixtures/capture/v1.jsonl`.
 | `size` | Existing nonnegative size hint: Content-Length if usable, otherwise buffered raw length when available, otherwise zero. Not a measured streamed-body byte count. |
 | `streamed` | Whether the backend streamed this response, including backend size policy. |
 | `body_kept`, `body_reason` | Boolean plus `retained`, `media_type`, `streamed`, `unavailable`, `oversize`, `unbounded` or `oversize_decoded`. |
-| `body` | Text only when retained, including an empty string for a captured empty body. Omitted otherwise. Decoding uses the existing backend `get_text(strict=False)` behavior, not byte-exact storage. Bodies over `max_body_bytes` are omitted before decode (`oversize` / `unbounded`); a decoded body that still exceeds the budget uses `oversize_decoded`. |
-| `req_body_kept`, `req_body_reason` | Boolean plus `retained`, `streamed`, `unavailable` or `response_not_retained`. Request bodies are considered only when the response body is retained, preserving the existing selective-capture policy. |
+| `body` | Text only when retained, including an empty string for a captured empty body. Omitted otherwise. Decoding uses the existing backend `get_text(strict=False)` behavior, not byte-exact storage. Bodies over `max_body_bytes` are omitted before or after decode (`oversize` / `oversize_decoded`). Missing Content-Length alone does not force omission; large unknown lengths rely on backend `stream_large_bodies`. Serialized records that would exceed the journal reader limit omit bodies before append. |
+| `req_body_kept`, `req_body_reason` | Boolean plus `retained`, `streamed`, `unavailable`, `response_not_retained` or `oversize_decoded`. Request bodies are considered only when the response body is retained, preserving the existing selective-capture policy. |
 | `req_body` | Text only when retained; an omitted/streamed request is no longer represented by an empty-string placeholder. |
 
 The current media policy streams binary and SSE without reading their bodies.
