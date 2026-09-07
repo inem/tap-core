@@ -9,9 +9,13 @@ from unittest.mock import patch
 from tap_core.cli import main
 from tap_core.presentation import (
     RENDER_DOCUMENT,
+    assess_routing_summary,
     assess_status_summary,
     lower_status_line,
+    lower_status_lines,
+    normalize_routing_observations,
     normalize_status_observations,
+    project_routing_line,
     project_status_line,
     render_terminal,
     status_terminal,
@@ -27,6 +31,9 @@ def snapshot(**overrides):
         "pid": 123,
         "port_owned": True,
         "port_open": True,
+        "routing": "system",
+        "network_recovery_pending": False,
+        "system_proxy_verified": False,
         "inspection_errors": {},
     }
     value.update(overrides)
@@ -35,10 +42,13 @@ def snapshot(**overrides):
 
 class PresentationTests(unittest.TestCase):
     def test_complete_path_renders_the_old_status_summary_shape(self):
-        self.assertEqual(status_terminal(snapshot()), "tap           ● up · PID 123")
+        self.assertEqual(status_terminal(snapshot()),
+                         "tap           ● up · PID 123\n"
+                         "browser/apps  ○ direct   (tap on)")
         self.assertEqual(status_terminal(snapshot(service_loaded=False, pid=None,
                                                   port_owned=False, port_open=False)),
-                         "tap           ✗ down")
+                         "tap           ✗ down\n"
+                         "browser/apps  ○ direct   (tap on)")
 
     def test_inspection_failure_remains_unknown_instead_of_becoming_down(self):
         raw = snapshot(pid=None, inspection_errors={"pid": "permission denied"})
@@ -49,15 +59,64 @@ class PresentationTests(unittest.TestCase):
         self.assertEqual(summary["runtime"], {
             "state": "unknown", "reason": "inspection_incomplete"})
         self.assertEqual(project_status_line(summary)["row"]["value"], "unknown")
-        self.assertEqual(status_terminal(raw), "tap           ? unknown · inspection incomplete")
+        self.assertEqual(status_terminal(raw),
+                         "tap           ? unknown · inspection incomplete\n"
+                         "browser/apps  ○ direct   (tap on)")
 
     def test_foreign_listener_and_broken_service_are_distinct_claims(self):
         conflict = snapshot(service_loaded=False, pid=None, port_owned=False, port_open=True)
         self.assertEqual(assess_status_summary(normalize_status_observations(conflict))["runtime"], {
             "state": "port_conflict", "reason": "listener_not_owned_by_profile", "port": 18999})
-        self.assertEqual(status_terminal(conflict), "tap           ✗ PORT STOLEN")
+        self.assertTrue(status_terminal(conflict).startswith("tap           ✗ PORT STOLEN\n"))
         broken = snapshot(port_owned=False, port_open=False)
-        self.assertEqual(status_terminal(broken), "tap           ✗ broken · service has no listener")
+        self.assertTrue(status_terminal(broken).startswith(
+            "tap           ✗ broken · service has no listener\n"))
+
+    def test_routing_branch_distinguishes_route_semantics(self):
+        cases = [
+            ({"routing": "system", "network_recovery_pending": False,
+              "system_proxy_verified": False},
+             {"state": "direct", "reason": "system_proxy_disabled"},
+             "browser/apps  ○ direct   (tap on)"),
+            ({"routing": "system", "network_recovery_pending": True,
+              "system_proxy_verified": True},
+             {"state": "capturing", "reason": "owned_system_proxy_verified"},
+             "browser/apps  ● capturing · system proxy"),
+            ({"routing": "explicit", "network_recovery_pending": False,
+              "system_proxy_verified": "not_used"},
+             {"state": "client_opt_in", "reason": "system_proxy_not_managed"},
+             "browser/apps  ○ explicit · clients opt in"),
+            ({"routing": "system", "network_recovery_pending": True,
+              "system_proxy_verified": False},
+             {"state": "recovery_required", "reason": "owned_system_proxy_drifted"},
+             "browser/apps  ⚠ routing drift   (tap off)"),
+        ]
+        for fields, claim, rendered in cases:
+            with self.subTest(fields=fields):
+                observations = normalize_routing_observations(snapshot(**fields))
+                summary = assess_routing_summary(observations)
+                self.assertEqual(summary["traffic"], claim)
+                document = lower_status_line(project_routing_line(summary))
+                self.assertEqual(render_terminal(document), rendered)
+
+    def test_routing_inspection_failure_does_not_claim_direct(self):
+        raw = snapshot(system_proxy_verified=None,
+                       inspection_errors={"system_proxy_verified": "permission denied"})
+        summary = assess_routing_summary(normalize_routing_observations(raw))
+        self.assertEqual(summary["traffic"], {
+            "state": "unknown", "reason": "inspection_incomplete"})
+        self.assertEqual(render_terminal(lower_status_line(project_routing_line(summary))),
+                         "browser/apps  ? unknown · inspection incomplete")
+
+    def test_independent_views_only_converge_in_render_document(self):
+        raw = snapshot()
+        runtime_view = project_status_line(
+            assess_status_summary(normalize_status_observations(raw)))
+        routing_view = project_routing_line(
+            assess_routing_summary(normalize_routing_observations(raw)))
+        document = lower_status_lines([runtime_view, routing_view])
+        self.assertEqual([block["label"] for block in document["blocks"]],
+                         ["tap", "browser/apps"])
 
     def test_renderer_only_understands_document_primitives(self):
         document = {
@@ -93,7 +152,9 @@ class PresentationTests(unittest.TestCase):
                 with contextlib.redirect_stdout(human):
                     self.assertEqual(main(["--profile", directory, "status", "--output", "terminal",
                                            "--color", "never"]), 0)
-                self.assertEqual(human.getvalue(), "tap           ● up · PID 123\n")
+                self.assertEqual(human.getvalue(),
+                                 "tap           ● up · PID 123\n"
+                                 "browser/apps  ○ direct   (tap on)\n")
 
 
 if __name__ == "__main__":

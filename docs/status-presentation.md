@@ -1,14 +1,14 @@
 # First semantic presentation slice
 
-Issue #52 starts with one line from `tap status` rather than a renderer for every
-command. The current JSON remains the default machine output. An explicit
-terminal projection is available with:
+Issue #52 starts with the first two lines from `tap status` rather than a
+renderer for every command. The current JSON remains the default machine
+output. An explicit terminal projection is available with:
 
 ```sh
 tap --profile /absolute/profile status --output terminal
 ```
 
-The line takes five independently testable transformations:
+The runtime line takes five independently testable transformations:
 
 ```text
 current status snapshot
@@ -26,10 +26,25 @@ the normalized observations as evidence for the claim.
 
 The status-line projection chooses the words and importance for this command.
 Lowering removes TAP-specific fields. The terminal renderer sees only generic
-`status_row` blocks, marks, labels, values, details and layout width; it cannot
+`status_row` blocks, marks, labels, values, details, hints and layout width; it cannot
 derive health from process or proxy fields.
 
+The `browser/apps` line repeats the pattern through an independent branch:
+
+```text
+routing configuration + proxy observation + ownership snapshot
+  -> tap.routing-observations/v1
+  -> tap.routing-summary/v1
+  -> tap.status-line/v1
+```
+
+It distinguishes system-proxy capture, confirmed direct traffic, explicit
+client opt-in, incomplete inspection and recovery drift. The runtime and routing
+branches first meet when their completed rows are lowered into one render
+document. This keeps process health out of routing assessment and routing policy
+out of the generic renderer.
+
 This is a narrow executable seam, not the final public result contract. It does
-not yet render the routing line, remediation, verbose detail, `doctor` or
-`where`. The next consumer should test whether the semantic assessment and
+not yet render cross-branch alerts, verbose detail, `doctor` or `where`. The
+next consumer should test whether the semantic assessments and
 render-document vocabulary remain useful before more block types are added.

@@ -1,4 +1,4 @@
-"""First #52 semantic-to-terminal slice for one ``tap status`` row.
+"""First #52 semantic-to-terminal slices for ``tap status`` rows.
 
 Each function owns one transformation and is deliberately pure.  The terminal
 renderer only knows the render-document vocabulary; TAP-specific conclusions
@@ -8,6 +8,8 @@ are complete before lowering reaches it.
 
 STATUS_OBSERVATIONS = "tap.status-observations/v1"
 STATUS_SUMMARY = "tap.status-summary/v1"
+ROUTING_OBSERVATIONS = "tap.routing-observations/v1"
+ROUTING_SUMMARY = "tap.routing-summary/v1"
 STATUS_LINE = "tap.status-line/v1"
 RENDER_DOCUMENT = "tap.render-document/v1"
 
@@ -109,15 +111,112 @@ def project_status_line(summary):
     return {"schema": STATUS_LINE, "row": row}
 
 
-def lower_status_line(view):
-    """Lower the TAP-specific view into a renderer-neutral document."""
-    if view.get("schema") != STATUS_LINE:
+def normalize_routing_observations(snapshot):
+    """Separate routing configuration from observed system state."""
+    errors = snapshot.get("inspection_errors") or {}
+    observations = {}
+    for name in ("routing", "network_recovery_pending", "system_proxy_verified"):
+        if name in errors:
+            observations[name] = {
+                "knowledge": "unknown",
+                "reason": "inspection_failed",
+                "message": str(errors[name]),
+            }
+        elif name not in snapshot:
+            observations[name] = {
+                "knowledge": "unknown",
+                "reason": "not_observed",
+            }
+        else:
+            observations[name] = {
+                "knowledge": "known",
+                "value": snapshot[name],
+            }
+    return {
+        "schema": ROUTING_OBSERVATIONS,
+        "observations": observations,
+    }
+
+
+def assess_routing_summary(normalized):
+    """Derive how browser and GUI-app traffic reaches this profile."""
+    if normalized.get("schema") != ROUTING_OBSERVATIONS:
+        raise ValueError("unsupported routing observations")
+    observations = normalized["observations"]
+
+    def known(name):
+        item = observations[name]
+        return item.get("knowledge") == "known", item.get("value")
+
+    mode_known, mode = known("routing")
+    recovery_known, recovery = known("network_recovery_pending")
+    verified_known, verified = known("system_proxy_verified")
+
+    if not (mode_known and recovery_known and verified_known):
+        state, reason = "unknown", "inspection_incomplete"
+    elif mode == "explicit" and recovery is False and verified == "not_used":
+        state, reason = "client_opt_in", "system_proxy_not_managed"
+    elif mode == "explicit" and recovery is True:
+        state, reason = "recovery_required", "unexpected_recovery_snapshot"
+    elif mode == "system" and verified is True and recovery is True:
+        state, reason = "capturing", "owned_system_proxy_verified"
+    elif mode == "system" and verified is False and recovery is False:
+        state, reason = "direct", "system_proxy_disabled"
+    elif mode == "system" and verified is False and recovery is True:
+        state, reason = "recovery_required", "owned_system_proxy_drifted"
+    elif mode == "system" and verified is True and recovery is False:
+        state, reason = "unowned_route", "recovery_snapshot_missing"
+    else:
+        state, reason = "unknown", "inconsistent_routing_observations"
+
+    return {
+        "schema": ROUTING_SUMMARY,
+        "traffic": {"state": state, "reason": reason},
+        "evidence": observations,
+    }
+
+
+def project_routing_line(summary):
+    """Choose terminal-neutral content for the browser/apps status row."""
+    if summary.get("schema") != ROUTING_SUMMARY:
+        raise ValueError("unsupported routing summary")
+    traffic = summary["traffic"]
+    state = traffic["state"]
+    if state == "client_opt_in":
+        row = {"mark": "neutral", "label": "browser/apps", "value": "explicit",
+               "detail": "clients opt in"}
+    elif state == "capturing":
+        row = {"mark": "success", "label": "browser/apps", "value": "capturing",
+               "detail": "system proxy"}
+    elif state == "direct":
+        row = {"mark": "neutral", "label": "browser/apps", "value": "direct",
+               "hint": "tap on"}
+    elif state == "recovery_required":
+        row = {"mark": "warning", "label": "browser/apps", "value": "routing drift",
+               "hint": "tap off"}
+    elif state == "unowned_route":
+        row = {"mark": "warning", "label": "browser/apps", "value": "capturing",
+               "detail": "recovery snapshot missing"}
+    else:
+        row = {"mark": "unknown", "label": "browser/apps", "value": "unknown",
+               "detail": "inspection incomplete"}
+    return {"schema": STATUS_LINE, "row": row}
+
+
+def lower_status_lines(views):
+    """Combine TAP-specific rows into one renderer-neutral document."""
+    if any(view.get("schema") != STATUS_LINE for view in views):
         raise ValueError("unsupported status line")
     return {
         "schema": RENDER_DOCUMENT,
         "layout": {"label_width": 14},
-        "blocks": [{"type": "status_row", **view["row"]}],
+        "blocks": [{"type": "status_row", **view["row"]} for view in views],
     }
+
+
+def lower_status_line(view):
+    """Backward-compatible convenience for lowering one status row."""
+    return lower_status_lines([view])
 
 
 def render_terminal(document, color=False):
@@ -145,14 +244,19 @@ def render_terminal(document, color=False):
         line = str(block.get("label", "")).ljust(width) + mark + " " + str(block.get("value", ""))
         if block.get("detail"):
             line += " · " + str(block["detail"])
+        if block.get("hint"):
+            line += "   (" + str(block["hint"]) + ")"
         lines.append(line)
     return "\n".join(lines)
 
 
 def status_terminal(snapshot, color=False):
-    """Run the complete first slice while keeping every stage independently testable."""
+    """Run both independent semantic branches and render their shared document."""
     observations = normalize_status_observations(snapshot)
     summary = assess_status_summary(observations)
-    view = project_status_line(summary)
-    document = lower_status_line(view)
+    runtime_view = project_status_line(summary)
+    routing_observations = normalize_routing_observations(snapshot)
+    routing_summary = assess_routing_summary(routing_observations)
+    routing_view = project_routing_line(routing_summary)
+    document = lower_status_lines([runtime_view, routing_view])
     return render_terminal(document, color=color)
