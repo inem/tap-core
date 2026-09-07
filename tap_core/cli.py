@@ -144,7 +144,12 @@ def parser():
     install.add_argument("--bridge-config", type=Path, help="Explicit page bridge configuration JSON")
     install.add_argument("--components-config", type=Path, help="Explicit managed Hub/reader/handler development bindings")
     for name in ("on", "off", "status", "doctor", "where", "uninstall"):
-        commands.add_parser(name)
+        command = commands.add_parser(name)
+        if name == "status":
+            command.add_argument("--output", choices=("json", "terminal"), default="json",
+                                 help="json keeps the current machine output; terminal exercises the #52 summary")
+            command.add_argument("--color", choices=("auto", "always", "never"), default="auto",
+                                 help="color policy for terminal output")
     routing = commands.add_parser(
         "routing",
         help="Switch this profile's routing (explicit/system) in place; install/uninstall never change routing")
@@ -306,7 +311,12 @@ def main(argv=None):
                     result['handler_logs'] = str(root / 'logs/handlers')
             else:
                 result = doctor(profile, adapter) if args.command == "doctor" else status(profile, adapter)
-            print(json.dumps(result, indent=2))
+            if args.command == "status" and args.output == "terminal":
+                from .presentation import status_terminal
+                use_color = args.color == "always" or (args.color == "auto" and sys.stdout.isatty())
+                print(status_terminal(result, color=use_color))
+            else:
+                print(json.dumps(result, indent=2))
             return 1 if args.command == "doctor" and not result["healthy"] else 0
         if args.command == "routing":
             with profile_lock(root):
