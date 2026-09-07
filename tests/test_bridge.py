@@ -205,6 +205,24 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(f.response.content, b'window.fixture = true;')
         self.assertEqual(f.request.host, 'example.test')
 
+    def test_effective_script_plan_is_scoped_per_origin(self):
+        effective = config(allow_origins=['https://example.test', 'https://third.test'],
+                           exclude_origins=[], page_scripts=['/installed/one.js',
+                                                            '/installed/two.js'])
+        effective['page_script_origins'] = [['https://example.test'], ['https://third.test']]
+        bridge = TestBridge(effective, TOKEN, [b'one', b'two'])
+        first = flow(host='example.test', response=Response())
+        bridge.response(first)
+        self.assertIn('core/0.js', first.response.body)
+        self.assertNotIn('core/1.js', first.response.body)
+        second = flow(host='third.test', response=Response())
+        bridge.response(second)
+        self.assertNotIn('core/0.js', second.response.body)
+        self.assertIn('core/1.js', second.response.body)
+        denied_asset = flow('/__tap/probe/core/1.js?token=' + TOKEN, host='example.test')
+        bridge.requestheaders(denied_asset)
+        self.assertEqual(denied_asset.response.status_code, 404)
+
     def test_nonce_bootstrap_order_idempotence_and_cache(self):
         f = flow(response=Response('<body><script nonce="YWJjZA==">0</script></body>'))
         self.bridge.response(f)

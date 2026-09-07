@@ -6,15 +6,20 @@ from pathlib import Path, PurePosixPath
 import re
 from urllib.parse import urlsplit
 
+from .page_resources import ResourceError, validate_resource
+
 
 PACK_API = 1
 ID = re.compile(r"[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*\Z")
 VERSION = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\Z")
 ROLES = {
-    "reader": ("python-jsonl-v1", "capture.read"),
-    "mutator": ("mitmproxy-python", "response.mutate"),
-    "page": ("browser-module-v1", "page.inject"),
-    "handler": ("python-jsonl-v1", "bridge.handle"),
+    "reader": (("python-jsonl-v1",), "capture.read"),
+    "mutator": (("mitmproxy-python",), "response.mutate"),
+    # browser-module-v1 remains the executable fixture interface. The classic
+    # interface matches the proven profile bridge: an ordered, startup-time
+    # snapshot of trusted scripts rather than a pretend module lifecycle.
+    "page": (("browser-module-v1", "browser-scripts-v1"), "page.inject"),
+    "handler": (("python-jsonl-v1",), "bridge.handle"),
 }
 TYPES = {"string": str, "integer": int, "boolean": bool}
 
@@ -80,7 +85,7 @@ def validate_manifest(manifest, root, host_api=PACK_API):
     """Validate declarations and packaged files without importing any pack code."""
     root = Path(root).resolve()
     fields(manifest, ("manifest_version", "id", "version", "requires", "files",
-                      "entrypoints", "config", "access"))
+                      "entrypoints", "config", "access"), optional=("resources",))
     require(type(manifest["manifest_version"]) is int and manifest["manifest_version"] == 1,
             "manifest_version: supported version is 1")
     require(type(manifest["id"]) is str and ID.fullmatch(manifest["id"]), "id: invalid pack id")
@@ -103,16 +108,50 @@ def validate_manifest(manifest, root, host_api=PACK_API):
                 "dependency.version: exact MAJOR.MINOR.PATCH required")
     strings(manifest["files"], "files")
     require(bool(manifest["files"]), "files: at least one file required")
+    require(len(manifest["files"]) <= 256, "files: at most 256 files supported")
     for name in manifest["files"]:
         pack_file(root, name)
+    resources = manifest.get("resources", [])
+    require(type(resources) is list, "resources: expected array")
+    resource_index = {}
+    for resource in resources:
+        try:
+            validate_resource(resource, root, set(manifest["files"]))
+        except ResourceError as error:
+            raise PackError(f"resources: {error}") from error
+        key = (resource["id"], resource["version"])
+        require(key not in resource_index,
+                f"resources: duplicate provider {resource['id']}@{resource['version']}")
+        resource_index[key] = resource
     entries = manifest["entrypoints"]
     require(type(entries) is dict and bool(entries), "entrypoints: expected nonempty object")
     require(not (entries.keys() - ROLES.keys()), "entrypoints: unsupported role")
     for role, entry in entries.items():
-        fields(entry, ("file", "interface"), label=f"entrypoints.{role}")
-        require(type(entry["file"]) is str and entry["file"] in manifest["files"],
-                f"entrypoints.{role}: file must be declared in files")
-        require(entry["interface"] == ROLES[role][0], f"entrypoints.{role}: unsupported interface")
+        require(type(entry) is dict and type(entry.get("interface")) is str,
+                f"entrypoints.{role}: expected object with interface")
+        interface = entry["interface"]
+        require(interface in ROLES[role][0], f"entrypoints.{role}: unsupported interface")
+        if role == "page" and interface == "browser-scripts-v1":
+            fields(entry, ("interface", "uses"), label=f"entrypoints.{role}")
+            require(type(entry["uses"]) is list and bool(entry["uses"]),
+                    f"entrypoints.{role}.uses: expected nonempty array")
+            use_ids = set()
+            for use in entry["uses"]:
+                fields(use, ("id", "version"), label=f"entrypoints.{role}.uses[]")
+                require(type(use["id"]) is str and ID.fullmatch(use["id"]),
+                        f"entrypoints.{role}.uses[].id: invalid resource id")
+                require(use["id"] not in use_ids,
+                        f"entrypoints.{role}.uses: duplicate resource id {use['id']}")
+                use_ids.add(use["id"])
+                require(type(use["version"]) is str and VERSION.fullmatch(use["version"]),
+                        f"entrypoints.{role}.uses[].version: expected MAJOR.MINOR.PATCH")
+                require((use["id"], use["version"]) in resource_index,
+                        f"entrypoints.{role}.uses[]: missing provider "
+                        f"{use['id']}@{use['version']}")
+        else:
+            fields(entry, ("file", "interface"), label=f"entrypoints.{role}")
+            require(type(entry["file"]) is str and entry["file"] in manifest["files"],
+                    f"entrypoints.{role}: file must be declared in files")
     config = manifest["config"]
     require(type(config) is dict, "config: expected object")
     for name, setting in config.items():
