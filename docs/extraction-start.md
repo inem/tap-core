@@ -63,15 +63,22 @@ verify separability through explicit dependencies first.
 
 ## First implementation slice
 
-After the baseline and dependency review, issue #4 should deliver this behavior:
+The [existing CLI lifecycle](legacy-cli-lifecycle.md) is part of the behavior to
+preserve: `install`, `doctor`, `status`, `where`, `on` and `off`. Issue #4 must
+extract that surface with explicit configuration; a new foreground launcher alone
+does not replace it.
+
+After the lifecycle baseline and dependency review, a supporting isolated
+development check should deliver this behavior:
 
 1. Start a core profile with explicit local state and no application packs.
 2. Send a controlled HTTP request through it and obtain a saved record.
 3. Stop the profile without changing the user's existing TAP installation.
 
-It should not require the full Hub, a site account, marketplace or a final pack
-API. Issue #5 supplies the pack contract and fixture declarations; full reader
-and page/WS integration is accepted in #14.
+This check should not require the full Hub, a site account, marketplace or a final
+pack API. It is an early verification step inside the extraction, not the complete
+user-facing runtime milestone. Issue #5 supplies the pack contract and fixture
+declarations; full reader and page/WS integration is accepted in #14.
 
 ## Work still required before closing #2
 
