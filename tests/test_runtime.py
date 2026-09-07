@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch, PropertyMock
 
-from tap_core.capture import Capture, Writer
+from tap_core.capture import Capture, Writer, wants_body
 from tap_core.runtime import Lifecycle, MacOS, Profile, TapError
 
 
@@ -168,6 +168,32 @@ class RuntimeTests(unittest.TestCase):
         self.runtime.off()
         self.assertRestored()
 
+    def test_repeat_on_verifies_all_saved_bypass_lists(self):
+        self.runtime.on()
+        self.os.network["USB Ethernet"]["bypass"] = ["*.internal"]
+        with self.assertRaisesRegex(TapError, "needs recovery"):
+            self.runtime.on()
+        self.assertEqual(self.os.events.count("probe"), 1)
+        self.assertRestored()
+
+    def test_save_tightens_existing_profile_directories(self):
+        paths = [self.profile.root, *(self.profile.root / name for name in ("data", "state", "certificates", "logs"))]
+        for path in paths:
+            path.chmod(0o755)
+        self.profile.save()
+        self.assertTrue(all(path.stat().st_mode & 0o777 == 0o700 for path in paths))
+
+    def test_save_rejects_external_directory_symlinks(self):
+        outside = self.root / "outside"
+        outside.mkdir(mode=0o755)
+        outside.chmod(0o755)
+        data = self.profile.root / "data"
+        data.rmdir()
+        data.symlink_to(outside, target_is_directory=True)
+        with self.assertRaisesRegex(TapError, "must not be a symlink"):
+            self.profile.save()
+        self.assertEqual(outside.stat().st_mode & 0o777, 0o755)
+
     def test_off_refuses_to_overwrite_a_subsequently_changed_proxy(self):
         self.runtime.on()
         self.os.network["Wi-Fi"]["http"]["server"] = "another-proxy.test"
@@ -239,6 +265,25 @@ class RuntimeTests(unittest.TestCase):
 
 
 class CaptureTests(unittest.TestCase):
+    def test_media_types_are_case_insensitive(self):
+        for ctype in ("Application/JSON", "TEXT/HTML; charset=UTF-8", "application/vnd.test+JSON"):
+            self.assertTrue(wants_body(ctype))
+        self.assertFalse(wants_body("Text/Event-Stream"))
+        self.assertFalse(wants_body("Application/Octet-Stream"))
+
+    def test_mixed_case_json_is_captured(self):
+        records = []
+        capture = Capture(SimpleNamespace(submit=records.append))
+        request = SimpleNamespace(method="GET", url="http://example.test/", headers={}, stream=False,
+                                  get_text=lambda **kwargs: "")
+        response = SimpleNamespace(status_code=200, headers={"content-type": "Application/JSON", "content-length": "2"},
+                                   stream=False, get_text=lambda **kwargs: "{}")
+        flow = SimpleNamespace(request=request, response=response)
+        capture.responseheaders(flow)
+        capture.response(flow)
+        self.assertFalse(response.stream)
+        self.assertEqual(records[0]["body"], "{}")
+
     def test_binary_sse_and_large_streamed_json_do_not_read_bodies(self):
         class Response:
             status_code = 200

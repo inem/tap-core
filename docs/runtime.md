@@ -150,7 +150,7 @@ python3 -m unittest discover -s tests -v
 python3 tools/check_runtime.py --backend /absolute/path/to/mitmdump
 ```
 
-The 24 controlled tests cover real arm/disarm methods through substituted OS
+The 29 controlled tests cover real arm/disarm methods through substituted OS
 operations, lifecycle ordering, partial failures, crash recovery, foreign
 listeners, profile/argument isolation, capture streaming, retention and visible
 write failures. The opt-in live check creates two temporary user LaunchAgents,

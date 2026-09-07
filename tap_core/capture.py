@@ -117,6 +117,7 @@ class Writer:
 
 
 def wants_body(ctype):
+    ctype = ctype.lower()
     return "event-stream" not in ctype and ("json" in ctype or ctype.startswith("text/"))
 
 

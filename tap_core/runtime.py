@@ -71,8 +71,14 @@ class Profile:
         return self.root / "state/proxy-before.json"
 
     def save(self):
+        self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.root.chmod(0o700)
         for directory in ("data", "state", "certificates", "logs"):
-            (self.root / directory).mkdir(mode=0o700, parents=True, exist_ok=True)
+            path = self.root / directory
+            if path.is_symlink():
+                raise TapError(f"Profile-owned directory must not be a symlink: {directory}")
+            path.mkdir(mode=0o700, parents=True, exist_ok=True)
+            path.chmod(0o700)
         data = asdict(self)
         del data["root"]
         atomic_json(self.root / "profile.json", data)
@@ -260,9 +266,16 @@ class MacOS:
         return all(self.matches(self.proxy(service, secure), expected)
                    for service in self.services() for secure in (False, True))
 
+    def bypasses_match(self, before):
+        if set(self.services()) != set(before):
+            return False
+        return all(self.bypass(service) == list(dict.fromkeys([*state["bypass"], "localhost", "127.0.0.1", "*.local"]))
+                   for service, state in before.items())
+
     def arm(self, profile):
         if profile.snapshot.exists():
-            if self.armed(profile):
+            before = json.loads(profile.snapshot.read_text())
+            if self.armed(profile) and self.bypasses_match(before):
                 return
             raise TapError("Saved network state needs recovery; run off before enabling again")
         before = self.network_state()
@@ -276,10 +289,8 @@ class MacOS:
             self.set_bypass(service, list(dict.fromkeys([*state["bypass"], "localhost", "127.0.0.1", "*.local"])))
         if not self.armed(profile):
             raise TapError("Could not verify both proxies on every network service")
-        for service, state in before.items():
-            expected_bypass = list(dict.fromkeys([*state["bypass"], "localhost", "127.0.0.1", "*.local"]))
-            if self.bypass(service) != expected_bypass:
-                raise TapError(f"Could not verify bypass domains: {service}")
+        if not self.bypasses_match(before):
+            raise TapError("Could not verify bypass domains on every service")
 
     def disarm(self, profile):
         if not profile.snapshot.exists():
