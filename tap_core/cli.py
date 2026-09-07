@@ -1,5 +1,6 @@
 """Six existing TAP commands, with profile-scoped configuration and diagnostics."""
 import argparse
+from contextlib import nullcontext
 import json
 import math
 import os
@@ -10,7 +11,7 @@ import sys
 import time
 
 from .runtime import Lifecycle, MacOS, Profile, TapError, profile_lock
-from .routing import select_routing
+from .routing import select_routing, SystemProxyRouting
 
 
 def health(profile, adapter):
@@ -130,6 +131,17 @@ def parser():
     install.add_argument("--components-config", type=Path, help="Explicit managed Hub/reader/handler development bindings")
     for name in ("on", "off", "status", "doctor", "where", "uninstall"):
         commands.add_parser(name)
+    routing = commands.add_parser(
+        "routing",
+        help="Switch this profile's routing (explicit/system) in place; install/uninstall never change routing")
+    routing_actions = routing.add_subparsers(dest="routing_action", required=True)
+    set_routing = routing_actions.add_parser(
+        "set",
+        help="Change routing to explicit or system without editing JSON, deleting the profile or reinstalling; "
+             "preserves capture, reader checkpoints, certificates, tokens, bridge/component settings and grants. "
+             "A running profile is returned to running, a stopped one stays stopped; managed components restart and "
+             "open connections may drop.")
+    set_routing.add_argument("mode", choices=["explicit", "system"])
     components = commands.add_parser('components', help='Configure explicit development component bindings')
     component_actions = components.add_subparsers(dest='component_action', required=True)
     configure_components = component_actions.add_parser('configure')
@@ -227,6 +239,17 @@ def main(argv=None):
                 result = doctor(profile, adapter) if args.command == "doctor" else status(profile, adapter)
             print(json.dumps(result, indent=2))
             return 1 if args.command == "doctor" and not result["healthy"] else 0
+        if args.command == "routing":
+            # Leaving OR entering system mutates shared network settings, so take
+            # the shared network lock whenever either side is system — not only
+            # when the current mode is system (that would miss explicit -> system).
+            needs_network_lock = profile.routing == "system" or args.mode == "system"
+            with profile_lock(root):
+                with (SystemProxyRouting(profile, adapter).mutation_lock()
+                      if needs_network_lock else nullcontext()):
+                    output = routing_set(profile, adapter, args.mode)
+            print(output)
+            return 0
         # Serialize system-routing commands across profiles as well as per-profile.
         with profile_lock(root):
             with select_routing(profile, adapter).mutation_lock():
@@ -236,6 +259,39 @@ def main(argv=None):
     except (TapError, OSError, ValueError) as error:
         print(f"tap: {error}", file=sys.stderr)
         return 1
+
+
+def routing_set(profile, adapter, target):
+    """Switch an existing profile between explicit and system routing in place.
+
+    Safety order: the OLD routing releases the network (restore) BEFORE the new
+    mode is committed, so a failed recovery leaves both the network and the saved
+    mode untouched — no silent success. Running state is preserved: a running
+    profile is stopped under its old routing and restarted under the new one; a
+    stopped one is only reconfigured. The caller holds the profile lock and, when
+    either side is system, the shared network lock.
+    """
+    if target not in ("explicit", "system"):
+        raise TapError(f"Unsupported routing mode: {target}; no change was made")
+    if profile.routing == target:
+        # Idempotent: never duplicate services or overwrite the recovery snapshot.
+        return f"Routing already {target} for this profile; nothing changed"
+    lifecycle = Lifecycle(profile, adapter)
+    running = adapter.service_loaded(profile)
+    if running:
+        # off() restores the network via the OLD routing and stops the service;
+        # if recovery fails it raises here, before the new mode is committed.
+        lifecycle.off()
+    else:
+        old_route = select_routing(profile, adapter)
+        if old_route.recovery_pending():
+            # Stopped but the old routing left a snapshot to restore first.
+            old_route.restore()
+    profile.routing = target
+    profile.save()
+    if running:
+        return f"Routing set to {target}; {lifecycle.on()}"
+    return f"Routing set to {target}; profile remains stopped — run on to start it"
 
 
 def mutate(command, profile, adapter):
