@@ -125,6 +125,9 @@ def parser():
     install.add_argument("--bridge-config", type=Path, help="Explicit page bridge configuration JSON")
     for name in ("on", "off", "status", "doctor", "where", "uninstall"):
         commands.add_parser(name)
+    routing = commands.add_parser("routing", help="Show or change profile routing mode")
+    routing.add_argument("mode", nargs="?", choices=["explicit", "system"],
+                         help="Set mode; omit to show the current value")
     bridge = commands.add_parser('bridge', help='Configure or explain page injection and local routes')
     bridge_actions = bridge.add_subparsers(dest='bridge_action', required=True)
     configure = bridge_actions.add_parser('configure')
@@ -160,6 +163,17 @@ def main(argv=None):
                 profile.bridge = configuration(read_json(args.bridge_config))
         else:
             profile = Profile.load(root)
+        if args.command == "routing":
+            if args.mode is None:
+                print(json.dumps({"routing": profile.routing}, indent=2))
+                return 0
+            with profile_lock(root):
+                if adapter.service_loaded(profile):
+                    raise TapError("Stop this profile with off before changing routing")
+                profile.routing = args.mode
+                profile.save()
+            print(json.dumps({"routing": profile.routing, "applies": "next on"}, indent=2))
+            return 0
         if args.command == 'bridge':
             from .bridge import configuration, read_json, decision
             if args.bridge_action == 'configure':

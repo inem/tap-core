@@ -37,8 +37,8 @@ What it does:
 3. Downloads pinned mitmproxy **12.2.3** for that CPU into `~/.tap-core/backend`.
 4. Fetches this repository at `TAP_REF` into `~/.tap-core/checkout`.
 5. Writes `~/.local/bin/tap`.
-6. Runs `install` + `on` for an **explicit** profile on port `18999`
-   (no system proxy mutation, no keychain trust).
+6. Runs `install` + `on` for a **system**-routing profile on port `18999`
+   (arms macOS proxy on `on`; `off` restores). Override with `TAP_ROUTING=explicit`.
 
 ## Uninstall
 
@@ -54,7 +54,7 @@ TAP_PURGE=1 curl -fsSL instll.sh/inem/tap-core/uninstall | sh   # also delete ~/
 | `TAP_ROOT` | `~/.tap-core` | Install root |
 | `TAP_REF` | `main` | GitHub ref for the checkout archive |
 | `TAP_PORT` | `18999` | Profile proxy port |
-| `TAP_ROUTING` | `explicit` | `explicit` or `system` |
+| `TAP_ROUTING` | `system` | `explicit` or `system` |
 | `TAP_SKIP_START` | `0` | `1` = place files only |
 | `TAP_BIN_DIR` | `~/.local/bin` | Where the `tap` wrapper is written |
 | `TAP_BACKEND_VERSION` | `12.2.3` | Required mitmproxy version |
@@ -81,7 +81,16 @@ Trust the CA manually:
 open "$HOME/.tap-core/profile/certificates/mitmproxy-ca-cert.pem"
 ```
 
-Point a browser user-data-dir at `http://127.0.0.1:18999`.
+Point a browser at the proxy only if you used `TAP_ROUTING=explicit`. With the
+default `system` mode, Safari/Chrome pick up the macOS proxy after `on`.
+
+To switch an already-installed profile without reinstall:
+
+```sh
+tap off
+tap routing system
+tap on
+```
 
 ## Still open for #7 / #15
 
