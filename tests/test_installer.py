@@ -213,3 +213,29 @@ class InstallerTests(unittest.TestCase):
         profile = Profile(root / 'profile', '/fixture/backend', 18999, 'explicit',
                           'http://example.com/', [], bridge=bridge)
         components_configuration(components, profile)
+
+    def test_managed_harness_requires_runtime_overrides_for_local_checkout(self):
+        harness = importlib.util.spec_from_file_location(
+            'check_installer_managed_runtime', REPO / 'tools/check_installer_managed_runtime.py')
+        module = importlib.util.module_from_spec(harness)
+        harness.loader.exec_module(module)
+        with self.assertRaisesRegex(SystemExit, 'requires --python'):
+            module.main(['--local-checkout', '--output', str(self.parent / 'out.json')])
+
+    def test_managed_harness_retains_root_when_purge_is_unverified(self):
+        harness = importlib.util.spec_from_file_location(
+            'check_installer_managed_runtime', REPO / 'tools/check_installer_managed_runtime.py')
+        module = importlib.util.module_from_spec(harness)
+        harness.loader.exec_module(module)
+        recovery = self.root / 'profile/state/proxy-before.json'
+        self.root.mkdir()
+        recovery.parent.mkdir(parents=True)
+        recovery.write_text('{"fixture":true}')
+        (self.root / 'checkout/instll').mkdir(parents=True)
+        (self.root / 'checkout/instll/uninstall').write_text('#!/bin/sh\nexit 1\n')
+        (self.root / 'checkout/instll/uninstall').chmod(0o700)
+        env = {'TAP_ROOT': str(self.root), 'TAP_PURGE': '1'}
+        verified, error = module.attempt_purge(self.root, env, timeout=5)
+        self.assertFalse(verified)
+        self.assertTrue(recovery.is_file())
+        self.assertTrue(error)

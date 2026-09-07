@@ -1,19 +1,24 @@
 #!/usr/bin/env python3
 """Opt-in live check: empty-root install → managed components → restart → purge.
 
-Uses the existing installer. Supply absolute TAP_PYTHON / TAP_BACKEND / TAP_BUN to
-avoid re-downloading when those pins are already on the machine; omit them to
-exercise the installer's own downloads. Pass --local-checkout to feed this
-working tree through the installer's archive path (needed before the branch is
-pushed). Not a signed-release or CA-trust claim.
+Uses the existing installer. Default path fetches the current HEAD commit archive
+from GitHub (branch must be pushed). Omit --bun / --python / --backend to exercise
+the installer's own downloads for those runtimes.
+
+--local-checkout feeds this working tree as the Core archive only. It requires
+explicit --python/--backend/--bun overrides so fake curl never substitutes runtime
+downloads. Not a signed-release, CA-trust, or clean-Mac matrix claim.
 """
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
+import platform
 import shutil
 import shlex
 import subprocess
+import sys
 import tarfile
 import tempfile
 
@@ -21,55 +26,153 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def run(command, env, timeout=300):
-    result = subprocess.run(command, env=env, text=True, capture_output=True, timeout=timeout)
+    return subprocess.run(command, env=env, text=True, capture_output=True, timeout=timeout)
+
+
+def require_ok(result, command):
     if result.returncode != 0:
         raise SystemExit(f'command failed ({result.returncode}): {command}\n{result.stderr}\n{result.stdout}')
     return result
 
 
-def main():
+def version_of(command, env=None):
+    result = subprocess.run(command, env=env, text=True, capture_output=True, timeout=30)
+    return (result.stdout or result.stderr).strip().splitlines()[0] if result.returncode == 0 else None
+
+
+def tree_digest(paths):
+    digest = hashlib.sha256()
+    for path in paths:
+        for file in sorted(path.rglob('*')):
+            if file.is_file():
+                digest.update(str(file.relative_to(ROOT)).encode())
+                digest.update(file.read_bytes())
+    return digest.hexdigest()
+
+
+def write_selective_curl(fake_bin, archive, real_curl):
+    """Intercept only Core commit/archive URLs; forward everything else."""
+    fake_bin.mkdir(parents=True, exist_ok=True)
+    curl = fake_bin / 'curl'
+    curl.write_text(f'''#!/bin/bash
+set -euo pipefail
+args=("$@")
+joined="${{args[*]}}"
+case "$joined" in
+  *api.github.com/repos/*/commits*)
+    printf '%s' '{"a" * 40}'
+    exit 0
+    ;;
+  *codeload.github.com/*|*github.com/*/archive/*|*github.com/*/tarball/*)
+    exec /bin/cat {shlex.quote(str(archive))}
+    ;;
+esac
+exec {shlex.quote(str(real_curl))} "$@"
+''')
+    curl.chmod(0o700)
+    return curl
+
+
+def attempt_purge(install_root, env, timeout=120):
+    uninstaller = install_root / 'checkout/instll/uninstall'
+    if not uninstaller.is_file():
+        return False, 'installed uninstaller missing'
+    result = run(['/bin/bash', str(uninstaller)], {**env, 'TAP_PURGE': '1'}, timeout=timeout)
+    if result.returncode != 0:
+        return False, (result.stderr or result.stdout or 'uninstall failed').strip()
+    if install_root.exists():
+        return False, 'install root still present after purge'
+    return True, None
+
+
+def emit(report, output):
+    text = json.dumps(report, indent=2)
+    print(text)
+    if output:
+        output.write_text(text + '\n')
+    if report.get('retained_root'):
+        print('tap-core: retained ' + report['retained_root'] + ' for inspection/recovery', file=sys.stderr)
+
+
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--python', type=Path)
     parser.add_argument('--backend', type=Path)
     parser.add_argument('--bun', type=Path)
     parser.add_argument('--output', type=Path)
     parser.add_argument('--local-checkout', action='store_true',
-                        help='Serve this working tree as the installer checkout archive')
-    args = parser.parse_args()
-    report = {'scope': 'installer managed runtime; empty root; not clean-Mac matrix or CA trust',
-              'source_commit': subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True).strip(),
-              'local_checkout': args.local_checkout}
+                        help='Serve this working tree as the Core archive; requires all runtime overrides')
+    args = parser.parse_args(argv)
+
+    dirty = subprocess.check_output(['git', '-C', str(ROOT), 'status', '--porcelain'], text=True)
+    head = subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True).strip()
+    report = {
+        'scope': 'installer managed runtime; empty root; not clean-Mac matrix or CA trust',
+        'base_commit': head,
+        'worktree_dirty': bool(dirty.strip()),
+        'archived_tree_sha256': None,
+        'local_checkout': args.local_checkout,
+        'architecture': platform.machine(),
+        'macos': platform.mac_ver()[0],
+        'routing': 'explicit',
+        'runtime_modes': {},
+        'cleanup_verified': False,
+        'ok': False,
+    }
+    if args.local_checkout and not all((args.python, args.backend, args.bun)):
+        raise SystemExit('--local-checkout requires --python, --backend and --bun '
+                         '(fake curl must not substitute runtime downloads)')
+
     parent = Path(tempfile.mkdtemp(prefix='tap-installer-managed-')).resolve()
-    install_root = (parent / 'root')
+    install_root = parent / 'root'
     bin_dir = parent / 'bin'
     bin_dir.mkdir()
-    # ownership.remove refuses non-canonical roots (/var → /private/var on macOS).
-    env = {**os.environ, 'TAP_ROOT': str(install_root), 'TAP_BIN_DIR': str(bin_dir),
-           'TAP_REF': report['source_commit'], 'TAP_PORT': '19191', 'TAP_HUB_PORT': '19192',
-           'TAP_SKIP_START': '0', 'PATH': str(bin_dir) + os.pathsep + os.environ.get('PATH', '')}
+    report['harness_parent'] = str(parent)
+    env = {**os.environ,
+           'TAP_ROOT': str(install_root),
+           'TAP_BIN_DIR': str(bin_dir),
+           'TAP_REF': head if not args.local_checkout else 'local-checkout-fixture',
+           'TAP_PORT': '19191',
+           'TAP_HUB_PORT': '19192',
+           'TAP_ROUTING': 'explicit',
+           'TAP_SKIP_START': '0',
+           'PATH': str(bin_dir) + os.pathsep + os.environ.get('PATH', '')}
     for name, value in (('TAP_PYTHON', args.python), ('TAP_BACKEND', args.backend), ('TAP_BUN', args.bun)):
         if value is not None:
             env[name] = str(value.resolve(strict=True))
+            report['runtime_modes'][name] = 'reuse:' + env[name]
+        else:
+            report['runtime_modes'][name] = 'download'
+
     try:
         if args.local_checkout:
             archive = parent / 'checkout.tar.gz'
+            members = [ROOT / name for name in ('tap', 'tap_core', 'instll', 'fixtures')]
+            report['archived_tree_sha256'] = tree_digest(members)
             with tarfile.open(archive, 'w:gz') as out:
-                for name in ('tap', 'tap_core', 'instll', 'fixtures'):
-                    out.add(ROOT / name, arcname='tap-core-local/' + name)
+                for path in members:
+                    out.add(path, arcname='tap-core-local/' + path.name)
+            real_curl = shutil.which('curl')
+            if not real_curl:
+                raise SystemExit('curl required to forward non-Core downloads')
             fake_bin = parent / 'download-bin'
-            fake_bin.mkdir()
-            curl = fake_bin / 'curl'
-            curl.write_text(
-                '#!/bin/sh\n'
-                'case "$*" in *api.github.com*) echo ' + 'a' * 40 + '; exit 0;; esac\n'
-                'exec /bin/cat ' + shlex.quote(str(archive)) + '\n'
-            )
-            curl.chmod(0o700)
+            write_selective_curl(fake_bin, archive, real_curl)
             env['PATH'] = str(fake_bin) + os.pathsep + env['PATH']
-        installed = run(['/bin/bash', str(ROOT / 'instll/install')], env, timeout=600)
+
+        installed = require_ok(run(['/bin/bash', str(ROOT / 'instll/install')], env, timeout=600),
+                               'installer')
         report['install_ok'] = True
-        report['install_log_tail'] = installed.stdout.strip().splitlines()[-12:]
-        doctor = json.loads(run([str(bin_dir / 'tap'), 'doctor'], env).stdout)
+        report['install_log_tail'] = installed.stdout.strip().splitlines()[-16:]
+        marker = json.loads((install_root / 'install.json').read_text())
+        report['install_ref_recorded'] = marker.get('ref')
+        components = json.loads((install_root / 'managed/components.json').read_text())
+        report['installed_versions'] = {
+            'python': version_of([components['python'], '--version']),
+            'bun': version_of([components['bun'], '--version']),
+            'backend': version_of([marker['backend'], '--version']),
+        }
+
+        doctor = json.loads(require_ok(run([str(bin_dir / 'tap'), 'doctor'], env), 'doctor').stdout)
         report['doctor_after_install'] = {
             'healthy': doctor.get('healthy'),
             'components': doctor.get('components', {}).get('healthy'),
@@ -77,45 +180,62 @@ def main():
         }
         if not doctor.get('healthy'):
             raise SystemExit('doctor not healthy after install: ' + json.dumps(doctor, indent=2))
-        components = json.loads((install_root / 'managed/components.json').read_text())
-        if not all(str(p).startswith(str(install_root / 'checkout'))
-                   for p in components['readers']['projection']['command'][1:]):
+
+        if not all(str(path).startswith(str(install_root / 'checkout'))
+                   for path in components['readers']['projection']['command'][1:]):
             raise SystemExit('reader script is outside installed checkout')
-        run([str(bin_dir / 'tap'), 'off'], env)
-        run([str(bin_dir / 'tap'), 'on'], env)
-        doctor2 = json.loads(run([str(bin_dir / 'tap'), 'doctor'], env).stdout)
+        if report['runtime_modes']['TAP_BUN'] == 'download':
+            if not str(components['bun']).startswith(str(install_root / 'bun')):
+                raise SystemExit('downloaded Bun path is outside install root')
+            report['bun_download_verified'] = True
+
+        require_ok(run([str(bin_dir / 'tap'), 'off'], env), 'off')
+        require_ok(run([str(bin_dir / 'tap'), 'on'], env), 'on')
+        doctor2 = json.loads(require_ok(run([str(bin_dir / 'tap'), 'doctor'], env), 'doctor').stdout)
         report['doctor_after_restart'] = {
             'healthy': doctor2.get('healthy'),
             'components': doctor2.get('components', {}).get('healthy'),
         }
         if not doctor2.get('healthy'):
             raise SystemExit('doctor not healthy after restart')
-        smoke = run([components['bun'], str(install_root / 'checkout/instll/smoke_hub.mjs'),
-                     str(install_root / 'profile')], env)
+
+        smoke = require_ok(run([components['bun'], str(install_root / 'checkout/instll/smoke_hub.mjs'),
+                                str(install_root / 'profile')], env), 'hub smoke')
         report['hub_smoke'] = json.loads(smoke.stdout.strip().splitlines()[-1])
-        run(['/bin/bash', str(install_root / 'checkout/instll/uninstall')],
-            {**env, 'TAP_PURGE': '1'})
-        report['purged'] = not install_root.exists() and not (bin_dir / 'tap').exists()
-        if not report['purged']:
-            raise SystemExit('purge left install root or command behind')
+
+        verified, error = attempt_purge(install_root, env)
+        report['cleanup_verified'] = verified
+        if not verified:
+            raise SystemExit('purge did not verify cleanup: ' + str(error))
+        report['purged'] = True
         report['ok'] = True
+    except KeyboardInterrupt:
+        report['error'] = 'interrupted'
+    except SystemExit as error:
+        report['error'] = str(error)
+    except subprocess.TimeoutExpired as error:
+        report['error'] = f'timeout: {error}'
+    except Exception as error:
+        report['error'] = type(error).__name__ + ': ' + str(error)
     finally:
         if install_root.exists():
-            try:
-                run(['/bin/bash', str(install_root / 'checkout/instll/uninstall')],
-                    {**env, 'TAP_PURGE': '1'}, timeout=120)
-            except Exception:
-                pass
-        shutil.rmtree(parent, ignore_errors=True)
-    text = json.dumps(report, indent=2)
-    print(text)
-    if args.output:
-        args.output.write_text(text + '\n')
-    return 0 if report.get('ok') else 1
+            verified, error = attempt_purge(install_root, env)
+            report['cleanup_verified'] = verified
+            if not verified:
+                report['cleanup_error'] = error
+                report['retained_root'] = str(install_root)
+                report['recovery'] = (
+                    f'{install_root}/python/bin/python3 '
+                    f'{install_root}/checkout/instll/ownership.py remove {install_root} 0'
+                )
+            elif parent.exists():
+                shutil.rmtree(parent, ignore_errors=True)
+        elif report.get('cleanup_verified') and parent.exists():
+            shutil.rmtree(parent, ignore_errors=True)
+
+    emit(report, args.output)
+    return 0 if report.get('ok') and report.get('cleanup_verified') else 1
 
 
 if __name__ == '__main__':
-    try:
-        raise SystemExit(main())
-    except KeyboardInterrupt:
-        raise SystemExit(130)
+    raise SystemExit(main())

@@ -113,15 +113,16 @@ pins when provided:
 
 ```sh
 python3 tools/check_installer_managed_runtime.py \
-  --local-checkout \
   --python "$(command -v python3)" \
   --backend "$(command -v mitmdump)" \
-  --bun "$(command -v bun)" \
-  --output /tmp/installer-managed.json
+  --output docs/results/installer-managed-runtime.json
 ```
 
-Omit `--local-checkout` after the branch is published to fetch the commit archive.
-Omit the runtime overrides to force the installer's own downloads.
+Omit `--bun` to force the installer's Bun download/extract/version path.  
+`--local-checkout` is only for pre-push Core archive substitution and requires
+all three runtime overrides so fake curl cannot replace Bun/Python/backend
+downloads. The harness always forces `TAP_ROUTING=explicit` and retains the
+install root unless uninstall cleanup is verified.
 
 ## Still open for #7 / #15
 
