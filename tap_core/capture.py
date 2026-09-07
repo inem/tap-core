@@ -2,6 +2,7 @@
 
 No readers, site declarations, global paths or consumer offset mutations.
 Loaded by mitmdump with explicit TAP_CORE_DATA and TAP_CORE_STATE directories.
+Optional TAP_CORE_CAPTURE JSON supplies profile storage limits (#8).
 """
 import json
 import os
@@ -11,17 +12,95 @@ import threading
 import time
 import uuid
 
-MAX_BYTES = 128 * 1024 * 1024
-KEEP_ROLLS = 3
-QUEUE_BYTES = 16 * 1024 * 1024
+# Defaults match previously hardcoded writer/backend bounds.
+# Distinct owners: backend stream cutoff ≠ retained body ≠ queue ≠ disk rolls.
+DEFAULT_CAPTURE = {
+    "version": 1,
+    "stream_large_bodies": 4 * 1024 * 1024,
+    "segment_bytes": 128 * 1024 * 1024,
+    "keep_rolls": 3,
+    "queue_slots": 64,
+    "queue_bytes": 16 * 1024 * 1024,
+    "max_body_bytes": 16 * 1024 * 1024,
+}
+
+# Backward-compatible aliases used by older tests/docs.
+MAX_BYTES = DEFAULT_CAPTURE["segment_bytes"]
+KEEP_ROLLS = DEFAULT_CAPTURE["keep_rolls"]
+QUEUE_BYTES = DEFAULT_CAPTURE["queue_bytes"]
+
+
+def mitm_size(nbytes):
+    """Format bytes for mitmproxy --set size options (k/m/b)."""
+    if type(nbytes) is not int or nbytes < 1:
+        raise ValueError("size must be a positive int")
+    if nbytes % (1024 * 1024) == 0:
+        return f"{nbytes // (1024 * 1024)}m"
+    if nbytes % 1024 == 0:
+        return f"{nbytes // 1024}k"
+    return f"{nbytes}b"
+
+
+def capture_limits(value=None):
+    """Validate profile capture limits; None → defaults."""
+    if value is None:
+        return dict(DEFAULT_CAPTURE)
+    if type(value) is not dict or value.get("version") != 1:
+        raise ValueError("capture limits require version 1 object")
+    required = set(DEFAULT_CAPTURE)
+    if set(value) != required:
+        raise ValueError("capture limits keys must be exactly: " + ", ".join(sorted(required)))
+    for name in ("stream_large_bodies", "segment_bytes", "queue_slots", "queue_bytes", "max_body_bytes"):
+        number = value[name]
+        if type(number) is not int or number < 1:
+            raise ValueError(f"capture.{name} must be a positive int")
+    if type(value["keep_rolls"]) is not int or value["keep_rolls"] < 0:
+        raise ValueError("capture.keep_rolls must be a nonnegative int")
+    if value["stream_large_bodies"] > 64 * 1024 * 1024:
+        raise ValueError("capture.stream_large_bodies exceeds supported maximum (64 MiB)")
+    if value["segment_bytes"] > 512 * 1024 * 1024:
+        raise ValueError("capture.segment_bytes exceeds supported maximum (512 MiB)")
+    if value["queue_bytes"] > 256 * 1024 * 1024:
+        raise ValueError("capture.queue_bytes exceeds supported maximum (256 MiB)")
+    if value["queue_slots"] > 4096:
+        raise ValueError("capture.queue_slots exceeds supported maximum (4096)")
+    if value["max_body_bytes"] > value["queue_bytes"]:
+        raise ValueError("capture.max_body_bytes must not exceed queue_bytes")
+    if value["max_body_bytes"] > 32 * 1024 * 1024:
+        raise ValueError("capture.max_body_bytes exceeds supported maximum (32 MiB)")
+    return dict(value)
+
+
+def limits_from_env():
+    raw = os.environ.get("TAP_CORE_CAPTURE")
+    if not raw:
+        return capture_limits()
+    try:
+        return capture_limits(json.loads(raw))
+    except (ValueError, json.JSONDecodeError) as error:
+        raise SystemExit(f"tap-core: invalid TAP_CORE_CAPTURE: {error}") from error
 
 
 class Writer:
-    def __init__(self, data, state, max_bytes=MAX_BYTES, keep_rolls=KEEP_ROLLS):
+    def __init__(self, data, state, max_bytes=None, keep_rolls=None, *,
+                 queue_slots=None, queue_bytes=None, limits=None):
+        limits = dict(limits or capture_limits())
+        if max_bytes is not None:
+            limits["segment_bytes"] = max_bytes
+        if keep_rolls is not None:
+            limits["keep_rolls"] = keep_rolls
+        if queue_slots is not None:
+            limits["queue_slots"] = queue_slots
+        if queue_bytes is not None:
+            limits["queue_bytes"] = queue_bytes
+        limits = capture_limits(limits)
+        self.limits = limits
         self.stream = Path(data) / "stream.jsonl"
         self.health = Path(state) / "capture.json"
-        self.max_bytes, self.keep_rolls = max_bytes, keep_rolls
-        self.queue = queue.Queue(maxsize=64)
+        self.max_bytes = limits["segment_bytes"]
+        self.keep_rolls = limits["keep_rolls"]
+        self.queue_bytes_limit = limits["queue_bytes"]
+        self.queue = queue.Queue(maxsize=limits["queue_slots"])
         self.lock = threading.Lock()
         self.queued_bytes = self.dropped = self.written = self.errors = 0
         self.last_error = None
@@ -37,7 +116,7 @@ class Writer:
         # Conservative estimate without JSON serialization or encoding in hooks.
         size = sum(len(value) * 6 if isinstance(value, str) else 64 for value in record.values()) + 1024
         with self.lock:
-            if self.closed or self.stopping.is_set() or self.queued_bytes + size > QUEUE_BYTES:
+            if self.closed or self.stopping.is_set() or self.queued_bytes + size > self.queue_bytes_limit:
                 self.dropped += 1
                 return
             try:
@@ -245,40 +324,86 @@ def wants_body(ctype):
     return "event-stream" not in ctype and ("json" in ctype or ctype.startswith("text/"))
 
 
+def decide_body(response, max_body_bytes):
+    """Choose whether to retain a response body before decoding/accumulation."""
+    ctype = response.headers.get("content-type", "")
+    if not wants_body(ctype):
+        return False, "media_type", True, 0
+    if response.stream:
+        return False, "streamed", False, 0
+    try:
+        declared = int(response.headers.get("content-length") or -1)
+    except ValueError:
+        declared = -1
+    if declared > max_body_bytes:
+        return False, "oversize", True, declared
+    raw = getattr(response, "raw_content", None)
+    if raw is not None and len(raw) > max_body_bytes:
+        return False, "oversize", False, len(raw)
+    if declared < 0 and raw is None:
+        # Unknown length and body not yet buffered: do not open an unbounded read.
+        return False, "unbounded", True, 0
+    # Content-Length <= 0 is unusable as a size hint; prefer buffered raw length.
+    if declared > 0:
+        size = declared
+    elif raw is not None:
+        size = len(raw)
+    else:
+        size = 0
+    return True, "retained", False, size
+
+
 class Capture:
-    def __init__(self, writer=None):
+    def __init__(self, writer=None, limits=None):
         self.writer = writer
+        self.limits = limits
 
     def load(self, loader):
         # Fail closed rather than falling back to the existing user's journal.
+        if self.limits is None:
+            self.limits = limits_from_env()
         if self.writer is None:
-            self.writer = Writer(os.environ["TAP_CORE_DATA"], os.environ["TAP_CORE_STATE"])
+            self.writer = Writer(os.environ["TAP_CORE_DATA"], os.environ["TAP_CORE_STATE"],
+                                 limits=self.limits)
 
     def responseheaders(self, flow):
-        if flow.response and not wants_body(flow.response.headers.get("content-type", "")):
-            flow.response.stream = True
+        response = flow.response
+        if response is None:
+            return
+        limits = self.limits or limits_from_env()
+        keep, _reason, force_stream, _size = decide_body(response, limits["max_body_bytes"])
+        if not keep and (force_stream or not wants_body(response.headers.get("content-type", ""))):
+            response.stream = True
 
     def response(self, flow):
         response = flow.response
         if response is None:
             return
-        ctype = response.headers.get("content-type", "")
+        limits = self.limits
+        if limits is None and self.writer is not None:
+            limits = getattr(self.writer, "limits", None)
+        if limits is None:
+            limits = limits_from_env()
+        keep, reason, _force_stream, size = decide_body(response, limits["max_body_bytes"])
         streamed = bool(response.stream)
-        keep = wants_body(ctype) and not streamed
-        try:
-            size = int(response.headers.get("content-length") or 0)
-        except ValueError:
-            size = 0
-        if keep and size <= 0:
-            size = len(response.raw_content or b"")
-        reason = "media_type" if not wants_body(ctype) else "streamed" if streamed else "retained"
-        body = response.get_text(strict=False) if keep else None
-        if keep and body is None:
-            keep, reason = False, "unavailable"
+        if streamed and reason == "retained":
+            keep, reason = False, "streamed"
+        body = None
+        if keep:
+            body = response.get_text(strict=False)
+            if body is None:
+                keep, reason = False, "unavailable"
+            else:
+                encoded = len(body.encode("utf-8"))
+                if encoded > limits["max_body_bytes"]:
+                    keep, reason, body = False, "oversize_decoded", None
+                    size = encoded
+                elif size <= 0:
+                    size = encoded
         record = {"record_version": 1, "record_id": str(uuid.uuid4()),
                   "ts": time.time(), "method": flow.request.method, "url": flow.request.url,
-                  "status": response.status_code, "ctype": ctype, "size": max(0, size),
-                  "body_kept": keep, "body_reason": reason, "streamed": streamed,
+                  "status": response.status_code, "ctype": response.headers.get("content-type", ""),
+                  "size": max(0, size), "body_kept": keep, "body_reason": reason, "streamed": streamed,
                   "req_body_kept": False, "req_body_reason": "response_not_retained",
                   "ua": flow.request.headers.get("user-agent", "")}
         if keep:
@@ -286,6 +411,8 @@ class Capture:
             request_body = None if request_streamed else flow.request.get_text(strict=False)
             request_kept = request_body is not None
             request_reason = "streamed" if request_streamed else "retained" if request_kept else "unavailable"
+            if request_kept and len(request_body.encode("utf-8")) > limits["max_body_bytes"]:
+                request_kept, request_reason, request_body = False, "oversize_decoded", None
             record.update(body=body, req_body_kept=request_kept, req_body_reason=request_reason)
             if request_kept:
                 record["req_body"] = request_body

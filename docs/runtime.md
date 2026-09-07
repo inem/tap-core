@@ -121,20 +121,30 @@ controlled adapter tests.
 
 ## Capture and diagnostics
 
-The generic capture retains JSON/text and streams binary/SSE. The backend's
-[`stream_large_bodies`](https://docs.mitmproxy.org/stable/overview/features/#streaming)
-cutoff is 4 MiB, including large JSON. Streamed responses produce metadata without
-body access. The writer retains up to three 128 MiB archives plus the current
-file; the queue has 64 slots and a conservative 16 MiB payload budget. Oversized
-queue submissions drop with a visible counter. Serialization/storage occur on
-the writer thread. Write errors are logged and included in health output;
-shutdown attempts to drain queued records with a bounded wait.
+The generic capture retains JSON/text and streams binary/SSE. Capture/storage
+limits live in `profile.capture` (and `TAP_CORE_CAPTURE` for the launchd job).
+Defaults preserve the previous hardcoded bounds; each limit has a distinct owner:
 
-This does not establish a global process-memory cap, a bound on decompression,
-lossless power-failure storage or finalized retention/replay semantics. Those
-belong to #8/#9. New HTTP records use [capture record v1](capture-records.md), retaining the main
-legacy fields and adding identity and explicit body dispositions. Old JSONL is
-read-compatible; reader scheduling/acknowledgement remains #9 work.
+| Limit | Default | Owner / effect at the boundary |
+| --- | --- | --- |
+| `stream_large_bodies` | 4 MiB | mitmproxy backend: larger bodies are streamed; Capture sees `streamed`, not a buffered body. Not a process-memory cap. |
+| `max_body_bytes` | 16 MiB | Capture: omit retained/decoded text before or after `get_text` (`oversize` / `unbounded` / `oversize_decoded`). Does not replace the backend stream cutoff. |
+| `queue_slots` / `queue_bytes` | 64 / 16 MiB | Writer submit queue only; overflow increments `dropped` and does not invent a journal gap. |
+| `segment_bytes` / `keep_rolls` | 128 MiB / 3 | On-disk rotation of `stream.jsonl` archives; not a total disk quota. |
+
+[`stream_large_bodies`](https://docs.mitmproxy.org/stable/overview/features/#streaming)
+is passed through from the profile into `write_plist`. Streamed responses produce
+metadata without body access. Oversized queue submissions drop with a visible
+counter. Serialization/storage occur on the writer thread. Write errors are
+logged and included in health output; shutdown attempts to drain queued records
+with a bounded wait.
+
+This does not establish a global process-memory cap, a bound on decompression
+cost before `max_body_bytes` is checked, lossless power-failure storage or
+finalized retention/replay semantics. Delivery consequences of gaps belong to
+#9. New HTTP records use [capture record v1](capture-records.md), retaining the
+main legacy fields and adding identity and explicit body dispositions. Old JSONL
+is read-compatible; reader scheduling/acknowledgement remains #9 work.
 
 `status` reports service identity, listener ownership and writer health without
 issuing an HTTP request. `doctor` additionally checks the pinned backend and

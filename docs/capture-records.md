@@ -22,8 +22,8 @@ examples are `fixtures/capture/v1.jsonl`.
 | `method`, `url`, `status`, `ctype`, `ua` | Existing request method/URL, response status/content type and observed User-Agent. User-Agent does not establish source application identity. |
 | `size` | Existing nonnegative size hint: Content-Length if usable, otherwise buffered raw length when available, otherwise zero. Not a measured streamed-body byte count. |
 | `streamed` | Whether the backend streamed this response, including backend size policy. |
-| `body_kept`, `body_reason` | Boolean plus `retained`, `media_type`, `streamed` or `unavailable`. |
-| `body` | Text only when retained, including an empty string for a captured empty body. Omitted otherwise. Decoding uses the existing backend `get_text(strict=False)` behavior, not byte-exact storage. |
+| `body_kept`, `body_reason` | Boolean plus `retained`, `media_type`, `streamed`, `unavailable`, `oversize`, `unbounded` or `oversize_decoded`. |
+| `body` | Text only when retained, including an empty string for a captured empty body. Omitted otherwise. Decoding uses the existing backend `get_text(strict=False)` behavior, not byte-exact storage. Bodies over `max_body_bytes` are omitted before decode (`oversize` / `unbounded`); a decoded body that still exceeds the budget uses `oversize_decoded`. |
 | `req_body_kept`, `req_body_reason` | Boolean plus `retained`, `streamed`, `unavailable` or `response_not_retained`. Request bodies are considered only when the response body is retained, preserving the existing selective-capture policy. |
 | `req_body` | Text only when retained; an omitted/streamed request is no longer represented by an empty-string placeholder. |
 
@@ -126,10 +126,15 @@ bounded; processing costs scale with retained segments and the acknowledged
 position within its segment. There is no seek index or performance claim yet.
 The scanner runs outside capture hooks and should not be busy-polled.
 
-Writer limits, archive naming and error counters remain unchanged. Configurable
-profile-level storage limits, long-running independent readers, backlog/retention
-policy and end-to-end recovery remain #8/#9/#13 work. This change therefore does
-not close #8.
+Writer limits, archive naming and error counters are profile-configurable via
+`profile.capture` / `TAP_CORE_CAPTURE` (#8). Keys: `stream_large_bodies` (backend
+cutoff, default 4 MiB), `segment_bytes`, `keep_rolls`, `queue_slots`,
+`queue_bytes` and `max_body_bytes` (retained/decoded text budget). Defaults match
+the previous hardcoded plist/writer. Bodies over `max_body_bytes` are omitted
+before decode with `body_reason=oversize` / `unbounded` / `oversize_decoded`;
+backend streaming above `stream_large_bodies` stays `streamed`. Queue drops are
+writer health counters, not JournalGap. Long-running independent readers,
+delivery parity and end-to-end recovery remain #9/#13 work.
 
 ## Verification
 

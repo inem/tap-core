@@ -249,6 +249,15 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(argv[0], self.profile.backend)
         self.assertIn("confdir=" + str(self.profile.root / "certificates"), argv)
         self.assertIn("127.0.0.1", argv)
+        env = plist["EnvironmentVariables"]
+        self.assertEqual(env["TAP_CORE_DATA"], str(self.profile.root / "data"))
+        self.assertEqual(env["TAP_CORE_STATE"], str(self.profile.root / "state"))
+        self.assertEqual(env["TAP_CORE_PROFILE"], str(self.profile.root))
+        capture = json.loads(env["TAP_CORE_CAPTURE"])
+        self.assertEqual(capture["version"], 1)
+        self.assertEqual(capture["stream_large_bodies"], 4 * 1024 * 1024)
+        self.assertEqual(capture["max_body_bytes"], 16 * 1024 * 1024)
+        self.assertIn("stream_large_bodies=4m", argv)
 
     def test_real_start_does_not_touch_foreign_listener(self):
         adapter = MacOS()
