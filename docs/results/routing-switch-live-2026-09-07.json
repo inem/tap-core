@@ -1,0 +1,41 @@
+{
+  "source_commit": "a36b4d5827935f3327aeb8f5d06232464b614816",
+  "code_sha256": {
+    "tap": "6d9ba9b0f62da1a69d17381afdcf4d6f7b8d7becc716c8e918d66e03d8437913",
+    "tap_core/__init__.py": "98252260473394f14e826522fee7a3fb4658013c00730303c01d31511daf8919",
+    "tap_core/bridge.py": "e35268b504e6b971c1fd5a7bd00503c25844089160edeab9af7077c839583ee5",
+    "tap_core/capture.py": "3c7e3b5efcedeb2a80a25e0dfef7350075e4bad1f638836a67a02d22d5e1f142",
+    "tap_core/cli.py": "743d6c3fa5e2c0129c70e2403b2402919fc1476e41fa538b82cec79356fa16f4",
+    "tap_core/components.py": "abc1475991201e1c3f889799fc4f93767a348acb5279b6ae14e16bad36aa23b1",
+    "tap_core/guardian.py": "35b5f3d208fbdcd759cbb17246100f1b2a24b2213e28a7463f75847c94de9af1",
+    "tap_core/hub.mjs": "9261b00e590f346bb7e3a57ae434d8b12d04e638b02ec589ad11fefedf6330fa",
+    "tap_core/journal.py": "ea3a0945caf8e404c20fb95546fcfc1607ccab37ef2df069bcc8f178f032705e",
+    "tap_core/packs.py": "49fc194bf726d27dcf4682c0bac5a2eac0f4f3f4c8245a536675c44bb95aea54",
+    "tap_core/page-runtime.js": "501853aa97742bc3112f75d79ba599358fae2b5f98bbdf1839c90e22702605ca",
+    "tap_core/readers.py": "0ab861c6ba74d166dbf17cd9853d870e65f48e9b37884ceb0b2bdc8e869e6576",
+    "tap_core/records.py": "0ba4765821176d8cfacff82cab8404dabf7a988d943ff4f9b9fef3ff43916734",
+    "tap_core/routing.py": "944ce4541a3c3ae2c3f2f87cdab75e4c5be8d142d492f12989fcd593c69dae6c",
+    "tap_core/runtime.py": "b9e78a0825144259c257bc051058cb797836cb64002615cc2ab945361efd842c",
+    "tap_core/service.py": "13a63a4ba5f17fe8a34d92893a3b15f696dacc0f86fd929872623bb8d0274274"
+  },
+  "macOS": "15.6.1",
+  "architecture": "arm64",
+  "python": "3.9.6",
+  "backend": "mitmproxy 12.2.3",
+  "scope": "real system preference switch + explicit loopback HTTP probe; no CA/browser/managed-component acceptance",
+  "checks": [
+    "explicit started",
+    "running explicit to system applied to all services",
+    "same-mode retains recovery snapshot",
+    "running system to explicit restores routing and bypasses",
+    "profile returns to explicit",
+    "stopped switch does not start or arm proxy",
+    "on applies saved system mode",
+    "system off restores before stopping",
+    "stopped system to explicit",
+    "owned service removed",
+    "final routing and bypasses restored"
+  ],
+  "success": true,
+  "cleanup_verified": true
+}

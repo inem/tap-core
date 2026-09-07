@@ -81,3 +81,18 @@ The live check uses explicit loopback HTTP, no system proxy mutations or CA trus
 System-routing failure/restore is fixture-verified, not newly accepted against
 live network settings. Native routing, HTTPS trust and clean-Mac packaging are
 not established by these results. No production TAP or account traffic is used.
+
+## Live in-place switching acceptance (2026-09-07)
+
+The owner-run report in `docs/results/routing-switch-live-2026-09-07.json`
+records source commit `a36b4d5` and hashes of every executed Core file. All hashes
+were independently compared with that commit after the run. On macOS 15.6.1
+arm64 with Python 3.9.6 / mitmproxy 12.2.3, both running and stopped
+explicit/system transitions passed, same-mode retained its recovery snapshot,
+and final service cleanup plus routing/bypass restoration were verified.
+
+This is real system-preference acceptance with an explicit loopback HTTP probe.
+It does not establish browser proxy discovery, trusted HTTPS, clean-Mac delivery
+or managed-component switching coverage. Disabled endpoint preferences may stay
+cached; the check verifies effective routing and bypass restoration. The report
+contains no captured traffic or the owner's network-service/bypass configuration.
