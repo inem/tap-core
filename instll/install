@@ -6,10 +6,11 @@
 # Usage (after main):
 #   curl -fsSL instll.sh/inem/tap-core | sh
 # Branch test (after instll.sh @ref is deployed):
-#   curl -fsSL instll.sh/inem/tap-core@issue-7-installer | sh
+#   curl -fsSL instll.sh/inem/tap-core@issue-49-installer-managed-runtime | sh
 # Fallback:
 #   curl -fsSL \
-#     https://raw.githubusercontent.com/inem/tap-core/issue-7-installer/instll/install | TAP_REF=issue-7-installer bash
+#     https://raw.githubusercontent.com/inem/tap-core/issue-49-installer-managed-runtime/instll/install \
+#     | TAP_REF=issue-49-installer-managed-runtime bash
 #
 # Explicit by default; system routing is opt-in. Never changes keychain trust.
 # Delivers portable Python, mitmproxy and Bun, then wires managed Hub/readers
@@ -18,8 +19,9 @@
 set -euo pipefail
 
 REPO="${TAP_REPO:-inem/tap-core}"
-# Default delivery channel. Override with an exact commit for reproducibility.
-REF="${TAP_REF:-main}"
+# Default to this PR branch so @ref one-liners fetch matching checkout code.
+# Flip back to main when this lands.
+REF="${TAP_REF:-issue-49-installer-managed-runtime}"
 ROOT="${TAP_ROOT:-$HOME/.tap-core}"
 BIN_DIR="${TAP_BIN_DIR:-$HOME/.local/bin}"
 PORT="${TAP_PORT:-18999}"
