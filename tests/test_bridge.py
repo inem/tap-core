@@ -4,12 +4,13 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 import tempfile
+import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from tap_core.bridge import Bridge, configuration, decision, read_json, read_scripts, read_token
 from tap_core.runtime import Profile, MacOS, TapError
-from tap_core.cli import main, bridge_status
+from tap_core.cli import main, bridge_status, doctor
 
 TOKEN = 'a' * 48
 
@@ -160,6 +161,84 @@ class BridgeTests(unittest.TestCase):
         self.assertLess(once.index('runtime.js?'), once.index('core/0.js?'))
         self.assertNotIn('etag', f.response.headers)
         self.assertEqual(f.response.headers['cache-control'], 'no-store')
+
+    def test_valid_nonce_attribute_forms_and_fake_script_text(self):
+        for attr, value in (('nonce = "YWJjZA=="', 'YWJjZA=='), ("nonce = 'YWJjZA=='", 'YWJjZA=='),
+                            ('nonce=YWJjZA', 'YWJjZA'), ('NONCE = YWJjZA', 'YWJjZA'),
+                            ('nonce="YWJjZA&#61;&#61;"', 'YWJjZA==')):
+            with self.subTest(attr=attr):
+                f = flow(response=Response('<body><!-- <script nonce="wrong"> -->'
+                                           '<script ' + attr + '>0</script></body>'))
+                self.bridge.response(f)
+                self.assertIn('id="tap-probe-bootstrap" nonce="' + value + '"', f.response.body)
+                self.assertNotIn('nonce="wrong" data-tap-token', f.response.body)
+
+    def test_foreign_base_cannot_redirect_bootstrap_or_page_asset_urls(self):
+        from html.parser import HTMLParser
+        from urllib.parse import urljoin, urlsplit
+        class Sources(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.sources = []
+            def handle_starttag(self, tag, attrs):
+                if tag == 'script' and 'src' in dict(attrs):
+                    self.sources.append(dict(attrs)['src'])
+        foreign = 'https://elsewhere.test/assets/'
+        f = flow(response=Response('<head><base href="' + foreign + '"></head><body></body>'))
+        self.bridge.response(f)
+        parsed = Sources()
+        parsed.feed(f.response.body)
+        self.assertEqual(len(parsed.sources), 2)
+        for source in parsed.sources:
+            self.assertEqual(urlsplit(urljoin(foreign, source)).netloc, 'example.test')
+            self.assertTrue(source.startswith('https://example.test/__tap/probe/'))
+
+    def observation_adapter(self):
+        adapter = Mock(spec=MacOS)
+        adapter.service_loaded.return_value = True
+        adapter.service_pid.return_value = os.getpid()
+        adapter.owns_port.return_value = adapter.port_open.return_value = adapter.flows.return_value = True
+        adapter.backend_version.return_value = '12.2.3'
+        self.profile.save()
+        (self.root / 'state/capture.json').write_text(json.dumps({
+            'pid': os.getpid(), 'updated_at': time.time(), 'writer_alive': True,
+            'written': 0, 'dropped': 0, 'write_errors': 0, 'last_error': None, 'queued_bytes': 0}))
+        return adapter
+
+    def test_bridge_read_error_is_unknown_and_preserves_other_observations(self):
+        adapter = self.observation_adapter()
+        read = Path.read_text
+        def denied(path, *args, **kwargs):
+            if path == self.profile.root / 'state/bridge.json':
+                raise PermissionError('synthetic denied bridge observation')
+            return read(path, *args, **kwargs)
+        with patch.object(Path, 'read_text', denied):
+            result = doctor(self.profile, adapter)
+        self.assertIsNone(result['bridge']['healthy'])
+        self.assertIn('bridge', result['inspection_errors'])
+        self.assertTrue(result['capture']['healthy'])
+        self.assertTrue(result['port_owned'])
+        self.assertFalse(result['healthy'])
+
+    def test_malformed_bridge_observations_are_unknown(self):
+        adapter = self.observation_adapter()
+        path = self.root / 'state/bridge.json'
+        for raw in (b'{', b'\xff', b'null', b'[]', b'{}',
+                    b'{"pid":true,"configuration":"bad","enabled":1}'):
+            with self.subTest(raw=raw):
+                path.write_bytes(raw)
+                result = doctor(self.profile, adapter)
+                self.assertIsNone(result['bridge']['healthy'])
+                self.assertIn('bridge', result['inspection_errors'])
+                self.assertTrue(result['capture']['healthy'])
+                self.assertFalse(result['healthy'])
+
+    def test_missing_bridge_state_is_known_absence(self):
+        result = doctor(self.profile, self.observation_adapter())
+        self.assertIs(result['bridge']['healthy'], False)
+        self.assertNotIn('bridge', result['inspection_errors'])
+        self.assertTrue(result['capture']['healthy'])
+        self.assertFalse(result['healthy'])
 
     def test_stream_denied_and_subframe_bodies_remain_untouched(self):
         for f in (flow(response=Response(streamed=True)),

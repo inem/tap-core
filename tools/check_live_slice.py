@@ -35,14 +35,19 @@ class Origin(BaseHTTPRequestHandler):
         if self.path == '/record':
             body, ctype = json.dumps({'value': self.server.fixture_value}).encode(), 'application/json'
         elif self.path == '/':
-            body, ctype = (b'<!doctype html><html><head><title>TAP live slice</title></head><body>'
-                           b'<h1>TAP live slice</h1><button id="load">Read captured result</button>'
-                           b'<pre id="result">waiting</pre><span id="confirmed">pending</span>'
-                           b'</body></html>'), 'text/html'
+            body = ('<!doctype html><html><head><title>TAP live slice</title>'
+                    '<base href="' + self.server.foreign_base + '/assets/">'
+                    '<script ' + self.server.nonce_attribute + '>window.fixtureCSP=true;</script>'
+                    '</head><body><h1>TAP live slice</h1><button id="load">Read captured result</button>'
+                    '<pre id="result">waiting</pre><span id="confirmed">pending</span>'
+                    '</body></html>').encode()
+            ctype = 'text/html'
         else:
             body, ctype = b'not found', 'text/plain'
         self.send_response(200 if self.path in ('/', '/record') else 404)
         self.send_header('Content-Type', ctype)
+        if self.path == '/':
+            self.send_header('Content-Security-Policy', "script-src 'nonce-dGFwLWZpeHR1cmU'")
         self.send_header('Content-Length', str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -117,6 +122,9 @@ def main():
                 origins.append(server)
                 threading.Thread(target=server.serve_forever, daemon=True).start()
             origin, second_origin, denied = [f'http://127.0.0.1:{server.server_port}' for server in origins]
+            for index, server in enumerate(origins):
+                server.foreign_base = denied
+                server.nonce_attribute = 'nonce = "dGFwLWZpeHR1cmU"' if index == 0 else 'nonce=dGFwLWZpeHR1cmU'
             for name in ('empty-adapters', 'empty-flows', 'probe'):
                 (root / name).mkdir(mode=0o700)
             config = {'root': str(root), 'source': str(args.source), 'hub_port': free_port(),
@@ -214,7 +222,10 @@ def main():
             assert json.loads((root / 'disabled-result.json').read_text())['not_injected']
             report['profile_bridge'] = {'two_allowed_origins': True, 'user_exclusion_overrides_allow': True,
                                         'live_reconfigure_rejected': True, 'off_configure_on_disables': True,
-                                        'legacy_injector_or_generated_addon_needed': False}
+                                        'legacy_injector_or_generated_addon_needed': False,
+                                        'spaced_and_unquoted_nonce_with_csp': True,
+                                        'foreign_base_asset_origin_preserved': True,
+                                        'foreign_origin_token_requests': browser_result['foreign_origin_token_requests']}
             assert hashes == {name: hashlib.sha256((args.source / name).read_bytes()).hexdigest() for name in SOURCE_FILES}
             report.update({'capture_reader_projection_page_match': True, 'controller_received_page_result': True,
                            'reader_records_processed': progress['completed_this_run'],

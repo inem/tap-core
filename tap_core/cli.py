@@ -5,6 +5,7 @@ import math
 import os
 from pathlib import Path
 import platform
+import re
 import sys
 import time
 
@@ -46,12 +47,20 @@ def bridge_status(profile, adapter):
     from .bridge import fingerprint
     try:
         state = json.loads((profile.root / 'state/bridge.json').read_text())
+        if state is None:
+            raise TapError('Invalid bridge startup record')
     except FileNotFoundError:
-        state = {}
-    healthy = (type(state) is dict and type(state.get('pid')) is int
-               and state['pid'] == adapter.service_pid(profile)
-               and state.get('configuration') == fingerprint(profile.bridge)
-               and state.get('enabled') is profile.bridge['enabled'])
+        state = None
+    if state is not None and (
+            type(state) is not dict or set(state) != {'pid', 'configuration', 'enabled'}
+            or type(state['pid']) is not int or state['pid'] < 1
+            or type(state['enabled']) is not bool
+            or not isinstance(state['configuration'], str)
+            or not re.fullmatch('[0-9a-f]{64}', state['configuration'])):
+        raise TapError('Invalid bridge startup record')
+    healthy = (state is not None and state['pid'] == adapter.service_pid(profile)
+               and state['configuration'] == fingerprint(profile.bridge)
+               and state['enabled'] is profile.bridge['enabled'])
     return {"configured": True, "healthy": healthy, "enabled": profile.bridge['enabled'],
             "hub_port": profile.bridge['hub_port'], "applies": "startup snapshot",
             "hub_liveness": "not_checked"}
@@ -75,7 +84,7 @@ def status(profile, adapter):
               "capture": observe("capture", lambda: health(profile, adapter),
                                  {"available": None, "healthy": None, "current_process": None})}
     result['bridge'] = observe('bridge', lambda: bridge_status(profile, adapter),
-                               {'configured': profile.bridge is not None, 'healthy': False})
+                               {'configured': profile.bridge is not None, 'healthy': None})
     result["inspection_errors"] = errors
     return result
 

@@ -16,8 +16,10 @@ process.once('SIGTERM', async () => {
   activeBrowser = browser;
   try {
     const context = await browser.newContext();
+    let foreignOriginTokenRequests = 0;
     await context.route('**/*', route => {
       const url = new URL(route.request().url());
+      if (url.searchParams.has('token') && ![config.origin, config.second_origin].includes(url.origin)) foreignOriginTokenRequests++;
       return [config.origin, config.second_origin, config.denied_origin].includes(url.origin)
         ? route.continue() : route.abort();
     });
@@ -45,6 +47,8 @@ process.once('SIGTERM', async () => {
     const second = await context.newPage();
     await second.goto(config.second_origin, { waitUntil: 'domcontentloaded' });
     await second.waitForFunction(() => window.TapProbe?.isReady(), null, { timeout: 15000 });
+    if (!await second.evaluate(() => window.fixtureCSP === true)) throw new Error('unquoted nonce CSP');
+    if (!await page.evaluate(() => window.fixtureCSP === true)) throw new Error('spaced nonce CSP');
     const denied = await context.newPage();
     await denied.goto(config.denied_origin, { waitUntil: 'domcontentloaded' });
     if (await denied.locator('#tap-probe-bootstrap').count() !== 0) throw new Error('denied injection');
@@ -57,8 +61,10 @@ process.once('SIGTERM', async () => {
     if (await second.locator('#result').textContent() !== 'waiting') throw new Error('wrong tab received result');
     // Keep the page alive until its command Result reaches the local controller.
     await page.waitForFunction(() => document.querySelector('#confirmed').textContent === 'confirmed', null, { timeout: 15000 });
+    if (foreignOriginTokenRequests) throw new Error('token request followed foreign base');
     fs.writeFileSync(config.root + '/browser-result.json', JSON.stringify({
       browser: browser.version(), displayed, sockets, frames,
+      foreign_origin_token_requests: foreignOriginTokenRequests,
       injected: true, denied_origin_unchanged: true, other_tab_unchanged: true,
     }, null, 2));
   } finally { await browser.close(); }

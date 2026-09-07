@@ -6,6 +6,7 @@ This file also loads directly as a mitmproxy addon, so imports are stdlib only.
 import hashlib
 import hmac
 import html
+from html.parser import HTMLParser
 import json
 import os
 from pathlib import Path
@@ -16,6 +17,26 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 PREFIX = '/__tap/probe/'
 MARKER = 'tap-probe-bootstrap'
 SCRIPT_LIMIT = 256 * 1024
+
+
+class DocumentScripts(HTMLParser):
+    """Read actual HTML attributes, including valid spacing/unquoted forms."""
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.nonce = ''
+        self.has_bootstrap = False
+
+    def handle_starttag(self, tag, attrs):
+        # First duplicate wins, matching HTML attribute parsing in browsers.
+        values = {}
+        for name, value in attrs:
+            values.setdefault(name, value)
+        if values.get('id') == MARKER:
+            self.has_bootstrap = True
+        nonce = values.get('nonce')
+        if (tag == 'script' and not self.nonce and isinstance(nonce, str)
+                and re.fullmatch(r'[A-Za-z0-9_+/-]{1,256}={0,2}', nonce)):
+            self.nonce = nonce
 
 
 def unique_object(pairs):
@@ -198,13 +219,17 @@ class Bridge:
         if body is None:
             print('[tap bridge] HTML unavailable; injection skipped', flush=True)
             return
-        if re.search(r'\bid\s*=\s*[\"\']' + MARKER + r'[\"\']', body):
+        parsed = DocumentScripts()
+        parsed.feed(body)
+        parsed.close()
+        if parsed.has_bootstrap:
             return
-        nonce = re.search(r'<script\b[^>]*\bnonce=[\"\']([A-Za-z0-9_+/-]{1,256}={0,2})[\"\']', body, re.I)
-        nonce_attr = ' nonce="' + html.escape(nonce.group(1), quote=True) + '"' if nonce else ''
+        nonce_attr = ' nonce="' + html.escape(parsed.nonce, quote=True) + '"' if parsed.nonce else ''
+        # Document <base> must never redirect token-bearing bootstrap/assets.
+        asset_root = html.escape(self.origin(flow.request) + PREFIX, quote=True)
         scripts = [f'<script id="{MARKER}"{nonce_attr} data-tap-token="{self.token}" '
-                   f'src="{PREFIX}runtime.js?token={self.token}"></script>']
-        scripts += [f'<script{nonce_attr} src="{PREFIX}core/{index}.js?token={self.token}"></script>'
+                   f'src="{asset_root}runtime.js?token={self.token}"></script>']
+        scripts += [f'<script{nonce_attr} src="{asset_root}core/{index}.js?token={self.token}"></script>'
                     for index in range(len(self.scripts))]
         closing = re.search(r'</body\s*>', body, re.I)
         position = closing.start() if closing else len(body)

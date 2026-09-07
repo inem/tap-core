@@ -67,7 +67,10 @@ concrete subset of #6, not its host/TLS/app policy completion.
 
 For allowed top-level HTML, the addon inserts the existing runtime bootstrap
 followed by configured scripts served from memory under `/__tap/probe/core/`.
-It copies a valid existing script nonce, leaves CSP intact, prevents another
+It parses actual script attributes (including whitespace, unquoted values and
+HTML entities) to retain an existing nonce. Token-bearing bootstrap and script
+URLs are absolute URLs from the intercepted request origin, independent of the
+document base URL. It leaves CSP intact and prevents another
 bootstrap when the marker is present, and invalidates response validators/cache.
 Streamed bodies are not read or injected. Capture runs before response injection;
 additional trusted addons run afterward. Only this order is defined; arbitrary
@@ -92,7 +95,9 @@ files are snapshot inputs for each startup, not immutable installed artifacts.
 ## Diagnostics and verification
 
 Status/doctor check that `state/bridge.json` belongs to the current service PID
-and matches the configured bridge fingerprint/enabled flag. This verifies addon
+and matches the configured bridge fingerprint/enabled flag. A missing record is
+known absence (`healthy: false`); read failures and malformed records produce
+`healthy: null` plus `inspection_errors.bridge`, and doctor remains unhealthy. This verifies addon
 startup, not live Hub availability; `hub_liveness` is explicitly `not_checked`.
 Hook/runtime errors remain in the profile capture log. End-to-end diagnostics,
 per-pack error isolation and failed Hub supervision remain #11/#13/#14.
@@ -111,6 +116,7 @@ page runtime and adapter runtime are read from that source. Test tools remain
 optional development dependencies, not mandatory core runtimes.
 
 Unit tests cover credentials/origins, unsupported authorities, policy precedence,
+valid nonce syntax, foreign base URLs and unavailable diagnostic observations,
 streaming, nonce/order, duplicate injection, private token persistence, bounded
 script loading, compatibility and startup diagnostics. Live evidence uses
 loopback HTTP with synthetic data on macOS 15.6.1 arm64. HTTPS trust/CSP behavior,
