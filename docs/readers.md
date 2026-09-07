@@ -134,8 +134,9 @@ effects are not promised.
 Each reader has its own lock, checkpoint and generation. The host does not hold
 the profile mutation lock while processing records, so different readers can run
 independently of each other and of network commands. Concurrent runs/replay for
-the same name fail before processing. The lock descriptor is inherited by the
-child (`TAP_READER_LOCK_FD`) so a controller crash does not immediately allow an
+the same name fail before processing with an error naming the busy reader. Other
+readers and profile commands keep their independent locks. The lock descriptor
+is inherited by the child (`TAP_READER_LOCK_FD`) so a controller crash does not immediately allow an
 overlapping invocation. A trusted reader must keep it open until completion.
 Children must remain finite workers and must not daemonize or escape their
 invocation's process group.
