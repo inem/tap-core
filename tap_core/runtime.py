@@ -162,10 +162,10 @@ class MacOS:
         if not pid:
             return False
         result = self.run(["/usr/sbin/lsof", "-nP", f"-iTCP:{profile.port}", "-sTCP:LISTEN", "-t"], check=False)
-        if result.stderr or result.returncode not in (0, 1):
-            raise TapError(f"Cannot inspect listener ownership: {result.stderr.strip() or result.returncode}")
-        if result.returncode == 1 and not result.stdout.strip():
+        if result.returncode == 1 and not result.stdout and not result.stderr:
             return False
+        if result.stderr or result.returncode != 0:
+            raise TapError(f"Cannot inspect listener ownership: {result.stderr.strip() or result.stdout.strip() or result.returncode}")
         owners = result.stdout.split()
         if not owners or not all(owner.isdigit() for owner in owners):
             raise TapError("Unrecognized listener ownership output")

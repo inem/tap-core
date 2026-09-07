@@ -1,6 +1,7 @@
 """Six existing TAP commands, with profile-scoped configuration and diagnostics."""
 import argparse
 import json
+import math
 import os
 from pathlib import Path
 import platform
@@ -12,15 +13,31 @@ from .runtime import Lifecycle, MacOS, Profile, TapError, profile_lock
 
 def health(profile, adapter):
     try:
-        state = json.loads((profile.root / "state/capture.json").read_text())
-    except (OSError, ValueError):
-        return {"available": False, "healthy": False}
-    if (not isinstance(state, dict) or not isinstance(state.get("updated_at"), (int, float))
-            or type(state.get("pid")) is not int or state["pid"] <= 0):
-        raise TapError("Invalid capture health record")
-    current = state.get("pid") == adapter.service_pid(profile) and 0 <= time.time() - state["updated_at"] < 5
-    return {**state, "current_process": current,
-            "healthy": current and state.get("writer_alive", False) and state.get("write_errors") == 0}
+        state = json.loads((profile.root / "state/capture.json").read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {"available": False, "healthy": False, "current_process": False}
+    except OSError as error:
+        raise TapError(f"Cannot read capture health record: {error}") from error
+    except ValueError as error:
+        raise TapError(f"Invalid capture health JSON: {error}") from error
+    if not isinstance(state, dict):
+        raise TapError("Invalid capture health record: expected an object")
+    for name in ("pid", "written", "dropped", "write_errors", "queued_bytes"):
+        value = state.get(name)
+        if type(value) is not int or value < (1 if name == "pid" else 0):
+            raise TapError(f"Invalid capture health metric: {name}")
+    timestamp = state.get("updated_at")
+    if (type(timestamp) not in (int, float) or timestamp <= 0
+            or (type(timestamp) is float and not math.isfinite(timestamp))):
+        raise TapError("Invalid capture health metric: updated_at")
+    if type(state.get("writer_alive")) is not bool:
+        raise TapError("Invalid capture health metric: writer_alive")
+    if "last_error" not in state or (state["last_error"] is not None and not isinstance(state["last_error"], str)):
+        raise TapError("Invalid capture health metric: last_error")
+    now = time.time()
+    current = state["pid"] == adapter.service_pid(profile) and now - 5 < timestamp <= now
+    return {**state, "available": True, "current_process": current,
+            "healthy": current and state["writer_alive"] and state["write_errors"] == 0}
 
 
 def status(profile, adapter):
@@ -38,7 +55,8 @@ def status(profile, adapter):
               "port_open": observe("port_open", lambda: adapter.port_open(profile)),
               "network_recovery_pending": observe("network_recovery_pending", profile.snapshot.exists),
               "system_proxy_verified": observe("system_proxy_verified", lambda: adapter.armed(profile)) if profile.routing == "system" else "not_used",
-              "capture": observe("capture", lambda: health(profile, adapter), {"available": False, "healthy": False})}
+              "capture": observe("capture", lambda: health(profile, adapter),
+                                 {"available": None, "healthy": None, "current_process": None})}
     result["inspection_errors"] = errors
     return result
 
