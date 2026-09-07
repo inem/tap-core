@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Direct vs runner delivery parity on a fixed A→B→A corpus (#9).
 
-Uses the SQLite projection fixture. Direct path invokes the same one-record
-child contract as Reader.execute without advancing a host checkpoint. Runner
-path uses the real CLI. Compares projection order/latest and records wall-clock
-cost. Does not claim byte-for-byte stdout identity or batch-stdin pack parity.
+Uses the SQLite projection fixture. The direct baseline is an independent
+subprocess host: it does not import or call Reader.execute, so shared delivery
+bugs in the runner path remain visible. Runner path uses the real CLI.
+Compares projection order/latest and records wall-clock cost with commit,
+reader/corpus digests and measurement environment. Does not claim
+byte-for-byte stdout identity or batch-stdin pack parity.
 """
 import argparse
 from contextlib import closing
@@ -12,6 +14,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import platform
 import sqlite3
 import subprocess
 import sys
@@ -23,11 +26,39 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from tap_core.capture import Writer
 from tap_core.journal import Journal
-from tap_core.readers import Reader, fingerprint
-from tap_core.runtime import Profile, profile_lock
+from tap_core.readers import fingerprint
+from tap_core.runtime import Profile
 
 FIXTURE = ROOT / 'fixtures/readers/sqlite_projection.py'
 CORPUS = ('A', 'B', 'A')
+
+
+def sha256_file(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def sha256_text(text):
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def git_commit():
+    result = subprocess.run(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'],
+                            text=True, capture_output=True, check=False)
+    if result.returncode:
+        return None
+    return result.stdout.strip()
+
+
+def measurement_environment():
+    return {
+        'python': sys.version.split()[0],
+        'executable': sys.executable,
+        'platform': platform.platform(),
+        'system': platform.system(),
+        'release': platform.release(),
+        'machine': platform.machine(),
+        'mac_ver': platform.mac_ver()[0] or None,
+    }
 
 
 def projection(path):
@@ -39,20 +70,40 @@ def projection(path):
     return {'deliveries': deliveries, 'latest': latest, 'receipts': receipts}
 
 
-def direct_deliver(profile, spec, name='direct'):
-    """One child per journal record; same IDs as the runner, no checkpoint."""
-    reader = Reader(profile, name)
-    reader.prepare()
+def invoke_independent(command, record, context, delivery_id, invocation_id, cwd):
+    """Minimal one-record host: stdin JSONL + env; no Reader.execute / lock / killpg."""
+    environment = {**os.environ,
+                   'TAP_PACK_CONTEXT': json.dumps(context, allow_nan=False),
+                   'TAP_READER_DELIVERY_ID': delivery_id,
+                   'TAP_READER_INVOCATION_ID': invocation_id}
+    payload = (json.dumps(record, ensure_ascii=False) + '\n').encode()
+    result = subprocess.run(command, input=payload, cwd=cwd, env=environment,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+    if result.returncode != 0:
+        raise RuntimeError(f'direct child exited {result.returncode}: '
+                           f'{(result.stderr or result.stdout).decode(errors="replace")}')
+
+
+def direct_deliver(profile, command, name='direct'):
+    """Independent baseline: Journal.scan + raw subprocess, never Reader.execute."""
+    root = profile.root
+    state = root / 'state/readers' / name / 'work'
+    output = root / 'data/readers' / name
+    logs = root / 'logs/readers' / name
+    for path in (state, output, logs):
+        path.mkdir(parents=True, exist_ok=True)
+        path.chmod(0o700)
     generation = 1
     started = time.perf_counter()
-    with profile_lock(reader.state) as lock:
-        with closing(Journal(profile.root / 'data').scan(after=None)) as entries:
-            for entry in entries:
-                delivery_id = hashlib.sha256(entry.cursor.encode()).hexdigest()
-                invocation_id = fingerprint([name, generation, delivery_id])
-                reader.execute(spec, entry.record, delivery_id, invocation_id, generation, 30, lock)
+    with closing(Journal(root / 'data').scan(after=None)) as entries:
+        for entry in entries:
+            delivery_id = hashlib.sha256(entry.cursor.encode()).hexdigest()
+            invocation_id = fingerprint([name, generation, delivery_id])
+            context = {'reader_id': name, 'reader_generation': generation, 'config': {},
+                       'state_dir': str(state), 'output_dir': str(output), 'log_dir': str(logs)}
+            invoke_independent(command, entry.record, context, delivery_id, invocation_id, root)
     elapsed_ms = (time.perf_counter() - started) * 1000
-    return projection(reader.output / 'projection.sqlite3'), elapsed_ms
+    return projection(output / 'projection.sqlite3'), elapsed_ms
 
 
 def runner_deliver(profile, definition, name='runner'):
@@ -83,13 +134,18 @@ def main():
             writer.submit(dict(base, record_id=str(uuid.uuid4()), body=json.dumps({'value': value})))
         writer.close()
         assert writer.written == len(CORPUS)
+        stream_bytes = (profile.root / 'data/stream.jsonl').read_bytes()
+        corpus_values = []
+        for line in stream_bytes.splitlines():
+            corpus_values.append(json.loads(json.loads(line)['body'])['value'])
+        assert tuple(corpus_values) == CORPUS
 
-        spec = {'version': 1, 'revision': 'parity-1',
-                'command': [sys.executable, str(FIXTURE)], 'config': {}}
+        command = [sys.executable, str(FIXTURE)]
+        spec = {'version': 1, 'revision': 'parity-1', 'command': command, 'config': {}}
         definition = profile.root / 'reader.json'
         definition.write_text(json.dumps(spec))
 
-        direct, direct_ms = direct_deliver(profile, spec)
+        direct, direct_ms = direct_deliver(profile, command)
         via_runner, runner_ms, summary = runner_deliver(profile, definition)
 
         order_equal = direct['deliveries'] == via_runner['deliveries'] == list(CORPUS)
@@ -101,9 +157,22 @@ def main():
         per_record = runner_ms / len(CORPUS)
         report = {
             'scope': 'synthetic Writer + SQLite fixture; no network or launchd',
+            'commit': git_commit(),
             'corpus': 'a_b_a_n3',
             'records': len(CORPUS),
             'reader': str(FIXTURE.relative_to(ROOT)),
+            'digests': {
+                'reader_sha256': sha256_file(FIXTURE),
+                'corpus_stream_sha256': hashlib.sha256(stream_bytes).hexdigest(),
+                'corpus_values_sha256': sha256_text(json.dumps(list(CORPUS), separators=(',', ':'))),
+                'capture_template_sha256': sha256_file(ROOT / 'fixtures/capture/v1.jsonl'),
+            },
+            'environment': measurement_environment(),
+            'baseline': {
+                'direct': 'independent_subprocess',
+                'runner': 'tap_reader_cli',
+                'shares_reader_execute': False,
+            },
             'projection_equal': True,
             'order_equal': True,
             'latest_equal': True,
@@ -111,10 +180,11 @@ def main():
             'runner': via_runner,
             'runner_completed_this_run': summary['completed_this_run'],
             'intentional_differences': [
-                'Direct path here uses the same one-JSONL-per-process contract as Reader.execute; it does not exercise pack batch-stdin EOF over many lines.',
-                'Only the runner persists checkpoint/cursor/generation, status phases, and TAP_READER_LOCK_FD lifecycle across a finite CLI run.',
-                'Runner cwd is the profile root; pack fixture checks may use state_dir as cwd.',
-                'JSON serialization of records is structural equality of the projection, not byte-for-byte stdout identity.',
+                'Direct baseline is an independent subprocess host and does not call Reader.execute, so runner delivery bugs are not masked.',
+                'Direct does not set TAP_READER_LOCK_FD, OUTPUT_LIMIT, killpg, guardian, or persist a checkpoint.',
+                'Delivery/invocation IDs still follow the documented cursor hash + name/generation formula so projection keys are comparable.',
+                'Neither path exercises pack batch-stdin EOF over many lines in one process.',
+                'JSON projection equality is structural (order/latest/receipts), not byte-for-byte stdout identity.',
                 'Append-only pack readers may duplicate on retry; this SQLite fixture uses generation-scoped receipts.',
             ],
             'invocation_cost': {

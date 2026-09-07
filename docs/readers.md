@@ -181,11 +181,12 @@ python3 tools/check_reader_parity.py --output docs/results/reader-delivery-parit
 python3 tools/check_pack_fixtures.py --bun /absolute/path/to/bun
 ```
 
-`check_reader_parity.py` runs the same fixed A → B → A corpus through a direct
-one-record-per-process path and through `reader run`, compares the SQLite
-projection (order + latest), lists intentional differences, and records
-one-process-per-record wall time. It does not claim batch-stdin pack identity or
-a throughput SLA. See
+`check_reader_parity.py` runs the same fixed A → B → A corpus through an
+independent one-record subprocess baseline (not `Reader.execute`) and through
+`reader run`, compares the SQLite projection (order + latest), lists intentional
+differences, and records one-process-per-record wall time plus commit, reader /
+corpus digests and measurement environment. It does not claim batch-stdin pack
+identity or a throughput SLA. See
 [reader-delivery-parity-2026-09-07.json](results/reader-delivery-parity-2026-09-07.json).
 
 The fixtures cover separate progress, restart, new-reader history, child failure
