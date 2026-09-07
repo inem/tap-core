@@ -126,29 +126,46 @@ class MacOS:
     def target(self, profile):
         return f"gui/{os.getuid()}/{profile.label}"
 
-    def service_pid(self, profile):
+    def service_info(self, profile):
         result = self.run(["/bin/launchctl", "print", self.target(profile)], check=False)
-        if result.returncode:
+        if result.returncode == 0:
+            return result.stdout
+        if result.returncode == 113 and f'Could not find service "{profile.label}"' in result.stderr:
             return None
-        match = re.search(r"^\s*pid = (\d+)\s*$", result.stdout, re.M)
+        raise TapError(f"Cannot inspect profile service: {result.stderr.strip() or result.stdout.strip() or result.returncode}")
+
+    def service_pid(self, profile):
+        info = self.service_info(profile)
+        if info is None:
+            return None
+        match = re.search(r"^\s*pid = (\d+)\s*$", info, re.M)
         return int(match[1]) if match else None
 
     def service_loaded(self, profile):
-        return self.run(["/bin/launchctl", "print", self.target(profile)], check=False).returncode == 0
+        return self.service_info(profile) is not None
 
     def port_open(self, profile):
         try:
             with socket.create_connection(("127.0.0.1", profile.port), timeout=0.3):
                 return True
-        except OSError:
+        except ConnectionRefusedError:
             return False
+        except OSError as error:
+            raise TapError(f"Cannot inspect listener: {error}") from error
 
     def owns_port(self, profile):
         pid = self.service_pid(profile)
         if not pid:
             return False
         result = self.run(["/usr/sbin/lsof", "-nP", f"-iTCP:{profile.port}", "-sTCP:LISTEN", "-t"], check=False)
-        return result.returncode == 0 and set(result.stdout.split()) == {str(pid)}
+        if result.stderr or result.returncode not in (0, 1):
+            raise TapError(f"Cannot inspect listener ownership: {result.stderr.strip() or result.returncode}")
+        if result.returncode == 1 and not result.stdout.strip():
+            return False
+        owners = result.stdout.split()
+        if not owners or not all(owner.isdigit() for owner in owners):
+            raise TapError("Unrecognized listener ownership output")
+        return set(owners) == {str(pid)}
 
     def write_plist(self, profile):
         args = [profile.backend, "--listen-host", "127.0.0.1", "-p", str(profile.port),

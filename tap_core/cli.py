@@ -15,18 +15,32 @@ def health(profile, adapter):
         state = json.loads((profile.root / "state/capture.json").read_text())
     except (OSError, ValueError):
         return {"available": False, "healthy": False}
-    current = state.get("pid") == adapter.service_pid(profile) and time.time() - state.get("updated_at", 0) < 5
+    if (not isinstance(state, dict) or not isinstance(state.get("updated_at"), (int, float))
+            or type(state.get("pid")) is not int or state["pid"] <= 0):
+        raise TapError("Invalid capture health record")
+    current = state.get("pid") == adapter.service_pid(profile) and 0 <= time.time() - state["updated_at"] < 5
     return {**state, "current_process": current,
             "healthy": current and state.get("writer_alive", False) and state.get("write_errors") == 0}
 
 
 def status(profile, adapter):
-    return {"profile": str(profile.root), "routing": profile.routing, "port": profile.port,
-            "service_loaded": adapter.service_loaded(profile), "pid": adapter.service_pid(profile),
-            "port_owned": adapter.owns_port(profile), "port_open": adapter.port_open(profile),
-            "network_recovery_pending": profile.snapshot.exists(),
-            "system_proxy_verified": adapter.armed(profile) if profile.routing == "system" else "not_used",
-            "capture": health(profile, adapter)}
+    errors = {}
+    def observe(name, operation, unavailable=None):
+        try:
+            return operation()
+        except (TapError, OSError, ValueError) as error:
+            errors[name] = str(error)
+            return unavailable
+    result = {"profile": str(profile.root), "routing": profile.routing, "port": profile.port,
+              "service_loaded": observe("service_loaded", lambda: adapter.service_loaded(profile)),
+              "pid": observe("pid", lambda: adapter.service_pid(profile)),
+              "port_owned": observe("port_owned", lambda: adapter.owns_port(profile)),
+              "port_open": observe("port_open", lambda: adapter.port_open(profile)),
+              "network_recovery_pending": observe("network_recovery_pending", profile.snapshot.exists),
+              "system_proxy_verified": observe("system_proxy_verified", lambda: adapter.armed(profile)) if profile.routing == "system" else "not_used",
+              "capture": observe("capture", lambda: health(profile, adapter), {"available": False, "healthy": False})}
+    result["inspection_errors"] = errors
+    return result
 
 
 def doctor(profile, adapter):
@@ -37,8 +51,13 @@ def doctor(profile, adapter):
         result["backend_error"] = str(error)
     result["ca_file_present"] = (profile.root / "certificates/mitmproxy-ca-cert.pem").is_file()
     result["ca_trust"] = "not_verified; HTTPS clients must trust this profile CA explicitly"
-    result["traffic_probe"] = result["port_owned"] and adapter.flows(profile)
-    result["healthy"] = ("backend_error" not in result and result["port_owned"]
+    result["traffic_probe"] = None
+    if result["port_owned"] is True:
+        try:
+            result["traffic_probe"] = adapter.flows(profile)
+        except TapError as error:
+            result["inspection_errors"]["traffic_probe"] = str(error)
+    result["healthy"] = bool("backend_error" not in result and not result["inspection_errors"] and result["port_owned"]
                          and result["capture"]["healthy"] and result["traffic_probe"]
                          and (profile.routing == "explicit" or result["system_proxy_verified"]))
     return result
