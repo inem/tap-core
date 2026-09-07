@@ -1,7 +1,7 @@
 # Experimental pack contract, version 1
 
 Preparatory result for #5, based on runtime commit
-`c3006777bd79e2253097133b0623457d651524a4`. **That runtime does not load packs or
+`56094c0`. **That runtime does not load packs or
 advertise pack API support.** `pack_api: 1` below names the experimental fixture
 contract. It is not a claim that installed-pack integration has shipped.
 
