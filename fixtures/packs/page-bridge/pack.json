@@ -1,0 +1,17 @@
+{
+  "manifest_version": 1,
+  "id": "example.page-bridge",
+  "version": "0.1.0",
+  "requires": {"pack_api": 1, "dependencies": []},
+  "files": ["mutator.py", "page.js", "handler.py"],
+  "entrypoints": {
+    "mutator": {"file": "mutator.py", "interface": "mitmproxy-python"},
+    "page": {"file": "page.js", "interface": "browser-module-v1"},
+    "handler": {"file": "handler.py", "interface": "python-jsonl-v1"}
+  },
+  "config": {"reply-prefix": {"type": "string", "default": "local:"}},
+  "access": {
+    "origins": ["https://fixture.example"],
+    "capabilities": ["response.mutate", "page.inject", "bridge.handle"]
+  }
+}
