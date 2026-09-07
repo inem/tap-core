@@ -28,7 +28,11 @@ BOOTSTRAP = EXAMPLE / 'copy-links.js'
 ORIGINS = ['https://www.youtube.com', 'https://youtube.com']
 
 
-def bridge_config(hub_port=19002):
+def bridge_config(hub_port=19002, proxy_port=19001):
+    if type(proxy_port) is not int or not 1024 <= proxy_port <= 65535:
+        raise ValueError('Proxy port must be an integer in 1024..65535')
+    if hub_port == proxy_port:
+        raise ValueError('Bridge Hub and proxy must use different ports')
     return configuration({
         'version': 1,
         'enabled': True,
@@ -51,7 +55,27 @@ def check_files():
     # Delivery changed: no custom mutator asset path and no CSP strip in this package.
     assert '/__tap/youtube-copy-links.js' not in boot
     assert 'content-security-policy' not in boot.lower()
+    import hashlib
+    assert hashlib.sha256(UI.read_bytes()).hexdigest() == (
+        '77317dfe7a6708eb0d96ce465ce619aefb5a226b4c4ebaa8c16c78540cc467ed')
+    assert hashlib.sha256(BOOTSTRAP.read_bytes()).hexdigest() == (
+        '2465181b3fb85ceeb4ca22fa678cbac31c97cfc2f5a394c259baa99089786acf')
     return ui, boot
+
+
+def check_port_collision():
+    try:
+        bridge_config(19001, 19001)
+    except ValueError as error:
+        assert 'different ports' in str(error)
+    else:
+        raise AssertionError('hub_port equal to proxy_port must be rejected')
+    try:
+        bridge_config(19002, 80)
+    except ValueError as error:
+        assert '1024' in str(error)
+    else:
+        raise AssertionError('proxy_port below 1024 must be rejected')
 
 
 def check_admit(config):
@@ -189,10 +213,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--write-config', type=Path, help='Write admitted bridge JSON with absolute script paths')
     parser.add_argument('--hub-port', type=int, default=19002)
+    parser.add_argument('--proxy-port', type=int, default=19001,
+                        help='Profile proxy port; must differ from --hub-port (Profile rejects equality)')
     args = parser.parse_args()
 
     check_files()
-    config = bridge_config(args.hub_port)
+    check_port_collision()
+    config = bridge_config(args.hub_port, args.proxy_port)
     scripts = check_admit(config)
     check_injection(config, scripts)
     check_asset_routes(config, scripts)
@@ -200,6 +227,8 @@ def main():
         'ok': True,
         'example': str(EXAMPLE),
         'fingerprint': fingerprint(config),
+        'proxy_port': args.proxy_port,
+        'hub_port': config['hub_port'],
         'scripts': [
             {'path': config['page_scripts'][0], 'bytes': len(scripts[0])},
             {'path': config['page_scripts'][1], 'bytes': len(scripts[1])},
