@@ -2,6 +2,8 @@
 import json
 import plistlib
 import shlex
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,6 +18,40 @@ from tap_core.runtime import MacOS, Profile, TapError
 
 
 class CaptureLimitsTests(unittest.TestCase):
+    def test_addon_loads_by_path_outside_package(self):
+        addon = Path(__file__).resolve().parents[1] / "tap_core/capture.py"
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(
+                [sys.executable, "-I", "-c",
+                 "import runpy,sys; m=runpy.run_path(sys.argv[1]); assert m['addons']", str(addon)],
+                cwd=directory, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_response_hook_does_not_serialize_record(self):
+        records = []
+        capture = Capture(SimpleNamespace(submit=records.append))
+        response = SimpleNamespace(status_code=200, headers={"content-type": "application/json"},
+                                   stream=False, raw_content=b"{}", get_text=lambda **kw: "{}")
+        request = SimpleNamespace(method="GET", url="https://fixture.example/ok", headers={},
+                                  stream=False, get_text=lambda **kw: "")
+        with patch("tap_core.capture.encode_record", side_effect=AssertionError("serialization in hook")):
+            capture.response(SimpleNamespace(request=request, response=response))
+        self.assertEqual(len(records), 1)
+
+    def test_writer_fits_json_expansion_before_append(self):
+        # Each decoded body is below the allowed 12 MiB, but JSON escaping can
+        # expand a body sixfold and exceed the journal's serialized-line cap.
+        root = Path(tempfile.mkdtemp())
+        limits = {**DEFAULT_CAPTURE, "queue_bytes": 256 * 1024 * 1024}
+        writer = Writer(root, root, limits=limits)
+        base = json.loads((Path(__file__).resolve().parents[1] / "fixtures/capture/v1.jsonl").read_text().splitlines()[0])
+        writer.submit(dict(base, body="\x00" * (6 * 1024 * 1024)))
+        writer.close()
+        self.assertEqual(writer.written, 1)
+        entry, = list(Journal(root).scan())
+        self.assertFalse(entry.record["body_kept"])
+        self.assertEqual(entry.record["body_reason"], "oversize_decoded")
+
     def test_defaults_match_previous_hardcoded_bounds(self):
         limits = capture_limits()
         self.assertEqual(limits["stream_large_bodies"], 4 * 1024 * 1024)

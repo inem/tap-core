@@ -12,7 +12,10 @@ import threading
 import time
 import uuid
 
-from .records import MAX_RECORD_BYTES
+# mitmproxy loads this file by absolute path outside the tap_core package.
+# Load the adjacent stdlib-only contract without relying on cwd or PYTHONPATH.
+import runpy
+MAX_RECORD_BYTES = runpy.run_path(str(Path(__file__).with_name("records.py")))["MAX_RECORD_BYTES"]
 
 # Defaults match previously hardcoded writer/backend bounds.
 # Distinct owners: backend stream cutoff ≠ retained body ≠ queue ≠ disk rolls.
@@ -283,7 +286,7 @@ class Writer:
                         with self.lock:
                             self.dropped += 1
                         continue
-                    line = (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8")
+                    line = encode_record(fit_record(record))
                     if len(line) > MAX_RECORD_BYTES:
                         self.error("capture record exceeds journal reader limit", dropped=1)
                         continue
@@ -476,7 +479,7 @@ class Capture:
             record.update(body=body, req_body_kept=request_kept, req_body_reason=request_reason)
             if request_kept:
                 record["req_body"] = request_body
-        self.writer.submit(fit_record(record))
+        self.writer.submit(record)
 
     def done(self):
         if self.writer:

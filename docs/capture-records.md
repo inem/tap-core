@@ -20,7 +20,7 @@ examples are `fixtures/capture/v1.jsonl`.
 | `record_id` | UUID identifying this capture observation. Stable when saved, unique for repeated identical responses; not an HTTP request ID or an exactly-once key. |
 | `ts` | Nonnegative Unix capture time in seconds. Does not establish ordering across clock changes. |
 | `method`, `url`, `status`, `ctype`, `ua` | Existing request method/URL, response status/content type and observed User-Agent. User-Agent does not establish source application identity. |
-| `size` | Existing nonnegative size hint: Content-Length if usable, otherwise buffered raw length when available, otherwise zero. Not a measured streamed-body byte count. |
+| `size` | Existing nonnegative size hint: Content-Length if usable, otherwise buffered raw length when available, otherwise zero; decoded-size omission reports decoded UTF-8 length. Not a measured streamed-body byte count. |
 | `streamed` | Whether the backend streamed this response, including backend size policy. |
 | `body_kept`, `body_reason` | Boolean plus `retained`, `media_type`, `streamed`, `unavailable`, `oversize`, `unbounded` or `oversize_decoded`. |
 | `body` | Text only when retained, including an empty string for a captured empty body. Omitted otherwise. Decoding uses the existing backend `get_text(strict=False)` behavior, not byte-exact storage. Bodies over `max_body_bytes` are omitted before or after decode (`oversize` / `oversize_decoded`). Missing Content-Length alone does not force omission; large unknown lengths rely on backend `stream_large_bodies`. Serialized records that would exceed the journal reader limit omit bodies before append. |
@@ -129,12 +129,17 @@ The scanner runs outside capture hooks and should not be busy-polled.
 Writer limits, archive naming and error counters are profile-configurable via
 `profile.capture` / `TAP_CORE_CAPTURE` (#8). Keys: `stream_large_bodies` (backend
 cutoff, default 4 MiB), `segment_bytes`, `keep_rolls`, `queue_slots`,
-`queue_bytes` and `max_body_bytes` (retained/decoded text budget). Defaults match
-the previous hardcoded plist/writer. Bodies over `max_body_bytes` are omitted
-before decode with `body_reason=oversize` / `unbounded` / `oversize_decoded`;
-backend streaming above `stream_large_bodies` stays `streamed`. Queue drops are
-writer health counters, not JournalGap. Long-running independent readers,
-delivery parity and end-to-end recovery remain #9/#13 work.
+`queue_bytes` and `max_body_bytes` (retained/decoded text budget). The existing
+backend/queue/disk defaults are preserved; the new retained-text limit is 12 MiB.
+Bodies are omitted before decode for a known oversized length (`oversize`), or
+after decoding when retained UTF-8 text exceeds the limit (`oversize_decoded`).
+This does not bound decompression work. Unknown Content-Length alone is allowed;
+backend streaming above `stream_large_bodies` stays `streamed`. The writer thread
+fits serialized records by omitting bodies and rejects any still-oversized line
+before append. Queue drops are writer health counters, not JournalGap.
+Independent readers and managed scheduling already exist (#28/#43); the remaining
+storage work is profile-restart and delivery-visible failure acceptance (#8/#13).
+
 
 ## Verification
 

@@ -141,10 +141,10 @@ with a bounded wait.
 
 This does not establish a global process-memory cap, a bound on decompression
 cost before `max_body_bytes` is checked, lossless power-failure storage or
-finalized retention/replay semantics. Delivery consequences of gaps belong to
-#9. New HTTP records use [capture record v1](capture-records.md), retaining the
+complete end-to-end storage failure acceptance (#8). Reader gap/replay
+semantics are documented in #9. New HTTP records use [capture record v1](capture-records.md), retaining the
 main legacy fields and adding identity and explicit body dispositions. Old JSONL
-is read-compatible; reader scheduling/acknowledgement remains #9 work.
+is read-compatible; acknowledgement and scheduling are implemented in #28/#43.
 
 `status` reports service identity, listener ownership and writer health without
 issuing an HTTP request. `doctor` additionally checks the pinned backend and
