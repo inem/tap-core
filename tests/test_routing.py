@@ -156,6 +156,31 @@ class RoutingTests(unittest.TestCase):
         # New mode was NOT committed; the profile stays system for a retry.
         self.assertEqual(Profile.load(profile.root).routing, 'system')
 
+    def test_generic_command_reloads_saved_mode_under_lock(self):
+        # off/on/uninstall select the network lock and restore/enable from routing;
+        # a mode saved between the pre-lock read and the lock must win. Model the
+        # race: in-memory says explicit, but the saved profile is system.
+        system_profile = self.profile('p', 'system')
+        stale = Profile(system_profile.root, '/fixture/mitmdump', 18999, 'explicit', 'http://fixture.test', [])
+        loads = []
+        real_load = Profile.load.__func__
+        def loader(root):
+            loads.append(root)
+            return stale if len(loads) == 1 else real_load(Profile, root)
+        seen = {}
+        def fake_mutate(command, profile, adapter):
+            seen['routing'] = profile.routing
+            return 'fixture'
+        with patch('tap_core.cli.Profile.load', side_effect=loader), \
+                patch('tap_core.cli.mutate', side_effect=fake_mutate), \
+                patch('pathlib.Path.home', return_value=self.home), \
+                patch('tap_core.cli.platform.system', return_value='Darwin'), \
+                redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.assertEqual(main(['--profile', str(system_profile.root), 'off']), 0)
+        # off acted on the reloaded system mode, not the stale explicit copy.
+        self.assertEqual(seen['routing'], 'system')
+        self.assertGreaterEqual(len(loads), 2)  # once before the lock, once under it
+
     def test_switch_into_system_from_explicit_takes_shared_network_lock(self):
         explicit = self.profile('x', 'explicit')
         with patch('pathlib.Path.home', return_value=self.home), \

@@ -257,6 +257,15 @@ def main(argv=None):
             return 0
         # Serialize system-routing commands across profiles as well as per-profile.
         with profile_lock(root):
+            if args.command != "install":
+                # Reload under the lock. routing selects both the shared network
+                # lock and the restore/enable behavior, so on/off/uninstall must
+                # act on the saved mode — not a copy read before locking, which a
+                # concurrent `routing set` could have changed (e.g. off would then
+                # skip the network lock and no-op the restore, leaving the system
+                # proxy armed at a stopped service). install builds a new profile
+                # and keeps its own semantics.
+                profile = Profile.load(root)
             with select_routing(profile, adapter).mutation_lock():
                 output = mutate(args.command, profile, adapter)
         print(output)
