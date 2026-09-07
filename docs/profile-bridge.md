@@ -83,7 +83,8 @@ mutator priorities/conflict resolution remain #10 work.
 
 Reserved `/__tap/probe/` requests require both an allowed destination origin and
 an exact token; duplicate tokens fail. Requests with a mismatching Origin fail,
-and WS requires an Origin. Caller-supplied TAP authority headers are removed.
+and WS requires an Origin. Caller-supplied TAP authority headers are removed
+only for reserved requests; ordinary site traffic retains these headers.
 Cookie, Authorization and Proxy-Authorization and the URL token are removed
 before forwarding to the loopback Hub; rejected reserved requests are also
 sanitized. User-excluded and disabled routes get 403 rather than reaching the

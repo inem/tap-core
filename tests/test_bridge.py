@@ -123,6 +123,21 @@ class BridgeTests(unittest.TestCase):
         self.bridge.request(f)
         self.assertEqual(f.request.headers['x-tap-probe-token'], TOKEN)
 
+    def test_ordinary_site_headers_survive_but_denied_reserved_authority_is_removed(self):
+        headers = {'x-tap-probe-token': 'site-value', 'x-tap-probe-origin': 'site-origin',
+                   'authorization': 'site-auth', 'cookie': 'site-cookie'}
+        for host in ('example.test', 'second.test', 'other.test'):
+            with self.subTest(host=host):
+                ordinary = flow('/ordinary', host, dict(headers))
+                self.bridge.requestheaders(ordinary)
+                self.bridge.request(ordinary)
+                self.assertEqual(ordinary.request.headers, headers)
+                reserved = flow('/__tap/probe/ws?token=wrong', host, dict(headers))
+                self.bridge.requestheaders(reserved)
+                self.assertEqual(reserved.response.status_code, 403)
+                for name in headers:
+                    self.assertNotIn(name, reserved.request.headers)
+
     def test_denied_bad_duplicate_token_or_wrong_ws_origin_never_routes(self):
         for host, token, origin in [('second.test', TOKEN, 'https://second.test'),
                                      ('example.test', 'wrong', 'https://example.test'),

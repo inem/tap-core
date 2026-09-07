@@ -257,9 +257,6 @@ class Bridge:
         if flow.metadata.get('tap_core_bridge_handled'):
             return
         request = flow.request
-        # Never accept caller-supplied routing authority for a local Hub.
-        for name in ('x-tap-probe-token', 'x-tap-probe-origin'):
-            request.headers.pop(name, None)
         origin = self.origin(request)
         allowed = self.allowed(origin)
         path = urlsplit(request.path)
@@ -268,6 +265,10 @@ class Bridge:
                 request.headers.pop('if-none-match', None)
                 request.headers.pop('if-modified-since', None)
             return
+        # Only the reserved route interprets these as local Hub authority.
+        # Ordinary site traffic retains its own headers unchanged.
+        for name in ('x-tap-probe-token', 'x-tap-probe-origin'):
+            request.headers.pop(name, None)
         flow.metadata['tap_core_bridge_handled'] = True
         pairs = parse_qsl(path.query, keep_blank_values=True)
         supplied = [value for key, value in pairs if key == 'token']
