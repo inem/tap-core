@@ -1,0 +1,28 @@
+{
+  "scope": "synthetic fixtures against unmodified legacy source; no live WS or clean-Mac acceptance",
+  "source_sha256": {
+    "capture.py": "6a465a50a9276c8432319d7f2c9b616369506a08e55d5487e49172fc31841631",
+    "readers/chatgpt": "bcda657d02c235df005d989197549c6a6cd2b12ff5c67d08b3b854bb58e540c5",
+    "mutators/site-probe.py": "a2f85cf20e05e20b3067afcc42e25da9daa069cd9e7b473c42a93db1c7557a85"
+  },
+  "capture": {
+    "status": "verified_fixture",
+    "records": 4,
+    "body_access_for_streamed_responses": false
+  },
+  "reader": {
+    "status": "verified_fixture",
+    "first_store_and_new_version": true,
+    "repeat_a_after_b": "known_gap",
+    "expected_latest": "Fixture A",
+    "observed_latest": "Fixture B"
+  },
+  "injection": {
+    "status": "verified_fixture",
+    "allowed_origins": 2,
+    "denied_origin_unchanged": true,
+    "duplicate_bootstrap_prevented": true,
+    "route_credentials_scrubbed": true,
+    "live_websocket": "not_tested"
+  }
+}
