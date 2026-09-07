@@ -118,11 +118,22 @@ def validate_manifest(manifest, root, host_api=PACK_API):
         interface = entry["interface"]
         require(interface in ROLES[role][0], f"entrypoints.{role}: unsupported interface")
         if role == "page" and interface == "browser-scripts-v1":
-            fields(entry, ("files", "interface"), label=f"entrypoints.{role}")
-            strings(entry["files"], f"entrypoints.{role}.files")
-            require(bool(entry["files"]), f"entrypoints.{role}.files: at least one script required")
-            require(not (set(entry["files"]) - set(manifest["files"])),
-                    f"entrypoints.{role}: files must be declared in files")
+            fields(entry, ("interface", "scripts"), label=f"entrypoints.{role}")
+            require(type(entry["scripts"]) is list and bool(entry["scripts"]),
+                    f"entrypoints.{role}.scripts: expected nonempty array")
+            script_ids = set()
+            for script in entry["scripts"]:
+                fields(script, ("id", "version", "file"),
+                       label=f"entrypoints.{role}.scripts[]")
+                require(type(script["id"]) is str and ID.fullmatch(script["id"]),
+                        f"entrypoints.{role}.scripts[].id: invalid resource id")
+                require(script["id"] not in script_ids,
+                        f"entrypoints.{role}.scripts: duplicate resource id {script['id']}")
+                script_ids.add(script["id"])
+                require(type(script["version"]) is str and VERSION.fullmatch(script["version"]),
+                        f"entrypoints.{role}.scripts[].version: expected MAJOR.MINOR.PATCH")
+                require(type(script["file"]) is str and script["file"] in manifest["files"],
+                        f"entrypoints.{role}.scripts[].file: must be declared in files")
         else:
             fields(entry, ("file", "interface"), label=f"entrypoints.{role}")
             require(type(entry["file"]) is str and entry["file"] in manifest["files"],

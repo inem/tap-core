@@ -15,9 +15,17 @@
   "entrypoints": {
     "page": {
       "interface": "browser-scripts-v1",
-      "files": [
-        "youtube-ui.js",
-        "copy-links.js"
+      "scripts": [
+        {
+          "id": "youtube.ui",
+          "version": "0.1.0",
+          "file": "youtube-ui.js"
+        },
+        {
+          "id": "example.youtube-copy-links.feature",
+          "version": "0.1.0",
+          "file": "copy-links.js"
+        }
       ]
     }
   },

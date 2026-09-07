@@ -20,9 +20,10 @@ different evidence and authority:
 3. **Verify live** — record the browser/site versions, TLS trust, CSP/nonce result,
    SPA navigation behavior and one visible user action. Fixtures remain separate
    evidence.
-4. **Freeze the seam** — select concrete entrypoint interfaces, requested exact
-   origins/capabilities, config, dependencies and state migration. The manifest
-   requests authority; it never grants itself authority.
+4. **Freeze the seam** — select concrete entrypoint interfaces, stable page
+   resource IDs and versions, requested exact origins/capabilities, config,
+   dependencies and state migration. The manifest requests authority; it never
+   grants itself authority.
 5. **Build** — create a deterministic `.tap-pack` containing only `pack.json` and
    its declared files. No source checkout path is retained.
 6. **Install and grant** — copy an immutable version snapshot under the profile,
@@ -51,16 +52,29 @@ share the page authority available there.
 
 ## First installed binding
 
-`browser-scripts-v1` is an ordered list of classic UTF-8 scripts. This matches the
-actual #31 bridge rather than pretending the existing `browser-module-v1`
-fixture lifecycle has shipped. At startup the addon:
+`browser-scripts-v1` is an ordered list of declarative classic UTF-8 script
+resources. Every declaration names a stable `id`, exact `version` and packaged
+`file`. This matches the actual #31 bridge rather than pretending the existing
+`browser-module-v1` fixture lifecycle has shipped. At startup the addon:
 
 - re-reads the pack registry and manifest without importing the checkout as a
   Python package;
 - verifies the installed file set and SHA-256 hash of every declared file;
 - checks that requested origins/capabilities remain covered by separate grants;
-- rejects overlapping page-pack ownership of an origin;
-- snapshots scripts into bridge memory under the existing authenticated route.
+- collects declarations from every enabled pack for each exact origin;
+- collapses the same resource `id` when version and bytes match, unions its
+  origins and injects it once per document;
+- rejects conflicting versions or bytes under one resource ID before changing
+  the active registry;
+- snapshots the deterministic per-origin plan into bridge memory under the
+  existing authenticated route.
+
+Overlapping pack origins are therefore expected, not an ownership conflict. A
+shared library such as `youtube.ui@0.1.0` may be carried and declared by several
+YouTube packs; the first deterministic provider supplies its verified bytes and
+the later declarations become additional uses. Different semantic scripts need
+different IDs even if their current bytes happen to match. A matching ID is an
+author claim of shared identity, not content-addressing by accident.
 
 Disable prevents injection after the next `off`/`on`. It cannot revoke JavaScript
 that already ran in an open document; reload that page. Reader, handler and
@@ -112,15 +126,19 @@ Uninstall requires disable and removes code only; profile-owned
 
 Unit coverage verifies deterministic artifacts, path traversal rejection,
 separate grants, installed-path binding, tamper rejection, atomic update failure,
-rollback and retained state/data/logs. The YouTube seam fixture continues to
-verify script order, exact origins, sizes and injection behavior.
+rollback and retained state/data/logs. It also enables two packs on the same
+origin, verifies one shared UI injection, rejects shared-ID version/content
+conflicts and checks that feature resources stay scoped to their declared
+origins. The YouTube seam fixture continues to verify script order, exact
+origins, sizes and injection behavior.
 
 The [2026-09-07 installed-artifact live report](youtube-installed-live-2026-09-07.json)
 records a fresh temporary profile loading only immutable installed paths on
-Chrome 152 and public YouTube: 40 YouTube records were captured, the Copy action
-wrote the expected short URL and its success state was visible. The response had
-a CSP header but no source nonce to reuse. Playwright ignored certificate errors,
-so this is not the clean CA-trust result.
+Chrome 152 and public YouTube: YouTube records were captured, the Copy action
+wrote the expected short URL and its success state was visible. The exact run
+count remains in the report because background request volume varies. The
+response had a CSP header but no source nonce to reuse. Playwright ignored
+certificate errors, so this is not the clean CA-trust result.
 
 Still required for #14: installed reader/handler/mutator bindings, the combined
 capture → reader → page/handler example, migration hooks and independent

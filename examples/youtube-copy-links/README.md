@@ -9,8 +9,10 @@ and button flash. Caption fetch remains a page-side side effect for capture; it
 is not required for the visible Copy result.
 
 The source now has a `pack.json` for the first installed
-`browser-scripts-v1` binding. Hub auto-start (#11/#32) is not required for Copy
-itself, but the bridge still injects `runtime.js` before the pack scripts.
+`browser-scripts-v1` binding. It declares `youtube.ui@0.1.0` separately from the
+copy-links feature so later YouTube packs can request the same UI resource and
+the host will inject it only once. Hub auto-start (#11/#32) is not required for
+Copy itself, but the bridge still injects `runtime.js` before the pack scripts.
 
 ## Files
 
@@ -18,6 +20,7 @@ itself, but the bridge still injects `runtime.js` before the pack scripts.
 | --- | --- |
 | `youtube-ui.js` | Host DOM adapter (`window.YouTubeUI`), copied as-is |
 | `copy-links.js` | Feature bootstrap, extracted from the legacy mutator |
+| `pack.json` | Exact origins, capability and ordered shared/feature script declarations |
 | `bridge.json.example` | Shape only; absolute paths are filled by the seam check |
 | `PROVENANCE.md` | Content hashes, ownership and license review |
 

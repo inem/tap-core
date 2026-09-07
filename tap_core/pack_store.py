@@ -249,6 +249,76 @@ class PackStore:
                 f"installed pack integrity check failed: {pack_id}@{version}")
         return root, manifest
 
+    def _profile_bridge(self):
+        try:
+            profile = json.loads((self.root / "profile.json").read_text(encoding="utf-8"),
+                                 object_pairs_hook=no_duplicate_keys)
+            base = profile.get("bridge")
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise PackError(f"profile configuration: {error}") from error
+        from .bridge import configuration
+        return configuration(base)
+
+    def _effective_bridge(self, registry, base):
+        enabled = []
+        for pack_id in sorted(registry["packs"]):
+            record = registry["packs"][pack_id]
+            if not record["enabled"]:
+                continue
+            root, manifest = self.verify(registry, pack_id, record["selected"])
+            grants = record["grants"]
+            check_activation(manifest, grants["origins"], grants["capabilities"],
+                             grants["dependencies"])
+            resolve_config(manifest, record["config"])
+            page = manifest["entrypoints"].get("page")
+            require(set(manifest["entrypoints"]) == {"page"} and page is not None
+                    and page["interface"] == "browser-scripts-v1",
+                    "enabled pack has no installed host binding")
+            enabled.append((pack_id, root, manifest, page, record))
+        if not enabled:
+            return base
+        require(base is not None and base.get("enabled") is True,
+                "enabled page packs require an enabled profile bridge")
+
+        result = json.loads(json.dumps(base))
+        base_origins = list(result["allow_origins"])
+        script_origins = [list(base_origins) for _ in result["page_scripts"]]
+        declarations = {}
+        for pack_id, root, manifest, page, record in enabled:
+            origins = manifest["access"]["origins"]
+            for origin in origins:
+                if origin not in result["allow_origins"]:
+                    result["allow_origins"].append(origin)
+            hashes = record["versions"][record["selected"]]["hashes"]
+            for script in page["scripts"]:
+                resource_id = script["id"]
+                declaration = {"version": script["version"],
+                               "digest": hashes[script["file"]],
+                               "path": str(root / script["file"]),
+                               "origins": set(origins),
+                               "pack": pack_id}
+                current = declarations.get(resource_id)
+                if current is None:
+                    declarations[resource_id] = declaration
+                    continue
+                require(current["version"] == declaration["version"],
+                        f"page resource {resource_id} requests conflicting versions: "
+                        f"{current['version']} and {declaration['version']}")
+                require(current["digest"] == declaration["digest"],
+                        f"page resource {resource_id}@{script['version']} has conflicting content "
+                        f"in {current['pack']} and {pack_id}")
+                current["origins"].update(origins)
+        for declaration in declarations.values():
+            result["page_scripts"].append(declaration["path"])
+            script_origins.append(sorted(declaration["origins"]))
+        from .bridge import configuration
+        configuration(result)
+        require(len(script_origins) == len(result["page_scripts"])
+                and all(bool(origins) and len(origins) <= 64 for origins in script_origins),
+                "effective page script origins are malformed")
+        result["page_script_origins"] = script_origins
+        return result
+
     def enable(self, pack_id, version=None, *, origins=(), capabilities=(), dependencies=None,
                config=None):
         registry = self.load()
@@ -264,42 +334,18 @@ class PackStore:
                 and page["interface"] == "browser-scripts-v1",
                 "installed host currently binds only page/browser-scripts-v1 packs")
         overrides = resolve_config(manifest, config)
-        try:
-            profile = json.loads((self.root / "profile.json").read_text(encoding="utf-8"),
-                                 object_pairs_hook=no_duplicate_keys)
-            base = profile.get("bridge")
-        except (OSError, UnicodeError, json.JSONDecodeError) as error:
-            raise PackError(f"profile configuration: {error}") from error
-        from .bridge import configuration
-        base = configuration(base)
-        require(base["enabled"], "installed page packs require an enabled profile bridge")
-        claimed = {}
-        page_count = len(base["page_scripts"]) + len(page["files"])
-        origins_count = len(set(base["allow_origins"]) | set(manifest["access"]["origins"]))
-        for other_id, other in registry["packs"].items():
-            if other_id == pack_id or not other["enabled"]:
-                continue
-            _, other_manifest = self.verify(registry, other_id, other["selected"])
-            other_page = other_manifest["entrypoints"].get("page")
-            if other_page and other_page["interface"] == "browser-scripts-v1":
-                page_count += len(other_page["files"])
-                origins_count += len(set(other_manifest["access"]["origins"]) - set(base["allow_origins"]))
-                for origin in other_manifest["access"]["origins"]:
-                    claimed[origin] = other_id
-        conflict = set(manifest["access"]["origins"]) & set(claimed)
-        require(not conflict,
-                f"page origins already claimed by another pack: {sorted(conflict)}")
-        require(page_count <= 64 and origins_count <= 64,
-                "enabled packs exceed the bridge limit of 64 origins/scripts")
-        old = record["selected"] if record["enabled"] else None
+        candidate = json.loads(json.dumps(registry))
+        candidate_record = self._record(candidate, pack_id)
+        old = candidate_record["selected"] if candidate_record["enabled"] else None
         if old and old != version:
-            record["history"].append(old)
-        record.update(selected=version, enabled=True,
-                      grants={"origins": sorted(set(origins)),
-                              "capabilities": sorted(set(capabilities)),
-                              "dependencies": dict(dependencies or {})},
-                      config=overrides)
-        self.save(registry)
+            candidate_record["history"].append(old)
+        candidate_record.update(selected=version, enabled=True,
+                                grants={"origins": sorted(set(origins)),
+                                        "capabilities": sorted(set(capabilities)),
+                                        "dependencies": dict(dependencies or {})},
+                                config=overrides)
+        self._effective_bridge(candidate, self._profile_bridge())
+        self.save(candidate)
         return {"id": pack_id, "version": version, "enabled": True,
                 "code": str(root), "applies": "next profile on"}
 
@@ -320,14 +366,16 @@ class PackStore:
         require(record["enabled"], "rollback requires an enabled pack")
         require(bool(record["history"]), "rollback has no previous active version")
         version = record["history"][-1]
-        self.verify(registry, pack_id, version)
-        grants = record["grants"]
         root, manifest = self.verify(registry, pack_id, version)
+        grants = record["grants"]
         check_activation(manifest, grants["origins"], grants["capabilities"], grants["dependencies"])
         resolve_config(manifest, record["config"])
-        record["history"].pop()
-        record["selected"] = version
-        self.save(registry)
+        candidate = json.loads(json.dumps(registry))
+        candidate_record = self._record(candidate, pack_id)
+        candidate_record["history"].pop()
+        candidate_record["selected"] = version
+        self._effective_bridge(candidate, self._profile_bridge())
+        self.save(candidate)
         return {"id": pack_id, "version": version, "enabled": True,
                 "code": str(root), "applies": "next profile on"}
 
@@ -365,36 +413,7 @@ class PackStore:
         return self.load()
 
     def effective_bridge(self, base):
-        registry = self.load()
-        enabled = []
-        claimed = {}
-        for pack_id in sorted(registry["packs"]):
-            record = registry["packs"][pack_id]
-            if not record["enabled"]:
-                continue
-            root, manifest = self.verify(registry, pack_id, record["selected"])
-            grants = record["grants"]
-            check_activation(manifest, grants["origins"], grants["capabilities"], grants["dependencies"])
-            page = manifest["entrypoints"].get("page")
-            require(set(manifest["entrypoints"]) == {"page"} and page["interface"] == "browser-scripts-v1",
-                    "enabled pack has no installed host binding")
-            for origin in manifest["access"]["origins"]:
-                require(origin not in claimed,
-                        f"page origin {origin} is claimed by both {claimed.get(origin)} and {pack_id}")
-                claimed[origin] = pack_id
-            enabled.append((pack_id, root, manifest, page))
-        if not enabled:
-            return base
-        require(base is not None and base.get("enabled") is True,
-                "enabled page packs require an enabled profile bridge")
-        result = json.loads(json.dumps(base))
-        for _, root, manifest, page in enabled:
-            for origin in manifest["access"]["origins"]:
-                if origin not in result["allow_origins"]:
-                    result["allow_origins"].append(origin)
-            result["page_scripts"].extend(str(root / name) for name in page["files"])
-        from .bridge import configuration
-        return configuration(result)
+        return self._effective_bridge(self.load(), base)
 
 
 def _parse_dependency(values):

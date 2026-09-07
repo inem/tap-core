@@ -52,6 +52,26 @@ class PackStoreTests(unittest.TestCase):
         build_artifact(source, output)
         return output
 
+    def sibling_source(self, pack_id="example.youtube-second", *, shared_version="0.1.0",
+                       shared_suffix="", origins=None):
+        source = self.root / pack_id
+        shutil.copytree(SOURCE, source)
+        manifest = json.loads((source / "pack.json").read_text())
+        manifest["id"] = pack_id
+        manifest["files"].append("second.js")
+        manifest["entrypoints"]["page"]["scripts"] = [
+            {"id": "youtube.ui", "version": shared_version, "file": "youtube-ui.js"},
+            {"id": pack_id + ".feature", "version": "0.1.0", "file": "second.js"},
+        ]
+        if origins is not None:
+            manifest["access"]["origins"] = origins
+        (source / "pack.json").write_text(json.dumps(manifest, indent=2) + "\n")
+        (source / "second.js").write_text("window.secondPack = true;\n")
+        if shared_suffix:
+            with (source / "youtube-ui.js").open("a") as handle:
+                handle.write("\n// " + shared_suffix + "\n")
+        return source
+
     def test_artifact_is_reproducible_and_installed_binding_uses_snapshot(self):
         first = self.artifact(SOURCE, "first.tap-pack")
         second = self.artifact(SOURCE, "second.tap-pack")
@@ -119,6 +139,45 @@ class PackStoreTests(unittest.TestCase):
         self.assertEqual(record["selected"], "0.1.0")
         self.assertTrue(record["enabled"])
         self.assertIn("0.2.0", record["versions"])
+
+    def test_same_origin_packs_merge_declarations_and_inject_shared_resource_once(self):
+        first = self.artifact(SOURCE, "first.tap-pack")
+        second = self.artifact(self.sibling_source(), "second.tap-pack")
+        self.store.install(first)
+        self.store.install(second)
+        self.store.enable("example.youtube-copy-links", "0.1.0",
+                          origins=ORIGINS, capabilities=CAPABILITIES)
+        self.store.enable("example.youtube-second", "0.1.0",
+                          origins=ORIGINS, capabilities=CAPABILITIES)
+
+        effective = self.store.effective_bridge(bridge())
+        names = [Path(path).name for path in effective["page_scripts"]]
+        self.assertEqual(names, ["youtube-ui.js", "copy-links.js", "second.js"])
+        self.assertEqual(names.count("youtube-ui.js"), 1)
+        self.assertEqual(effective["page_script_origins"], [ORIGINS, ORIGINS, ORIGINS])
+        self.assertEqual(effective_configuration(self.profile, bridge()), effective)
+
+    def test_shared_resource_version_or_content_conflict_fails_before_activation(self):
+        first = self.artifact(SOURCE, "first.tap-pack")
+        wrong_version = self.artifact(
+            self.sibling_source("example.version-conflict", shared_version="0.2.0"),
+            "wrong-version.tap-pack")
+        wrong_content = self.artifact(
+            self.sibling_source("example.content-conflict", shared_suffix="different bytes"),
+            "wrong-content.tap-pack")
+        for artifact in (first, wrong_version, wrong_content):
+            self.store.install(artifact)
+        self.store.enable("example.youtube-copy-links", "0.1.0",
+                          origins=ORIGINS, capabilities=CAPABILITIES)
+        with self.assertRaisesRegex(PackError, "conflicting versions"):
+            self.store.enable("example.version-conflict", "0.1.0",
+                              origins=ORIGINS, capabilities=CAPABILITIES)
+        with self.assertRaisesRegex(PackError, "conflicting content"):
+            self.store.enable("example.content-conflict", "0.1.0",
+                              origins=ORIGINS, capabilities=CAPABILITIES)
+        registry = self.store.status()["packs"]
+        self.assertFalse(registry["example.version-conflict"]["enabled"])
+        self.assertFalse(registry["example.content-conflict"]["enabled"])
 
     def test_archive_traversal_is_rejected_before_install(self):
         artifact = self.root / "bad.tap-pack"

@@ -77,11 +77,31 @@ class PackManifestTests(unittest.TestCase):
     def test_ordered_classic_page_scripts_are_a_distinct_interface(self):
         manifest = load_manifest(FIXTURES / "page-bridge")
         manifest["entrypoints"] = {"page": {"interface": "browser-scripts-v1",
-                                                   "files": ["page.js", "handler.py"]}}
+                                                   "scripts": [
+                                                       {"id": "fixture.ui", "version": "1.0.0",
+                                                        "file": "page.js"},
+                                                       {"id": "fixture.feature", "version": "1.0.0",
+                                                        "file": "handler.py"}]}}
         manifest["access"]["capabilities"] = ["page.inject"]
         validate_manifest(manifest, FIXTURES / "page-bridge")
-        manifest["entrypoints"]["page"]["files"].append("missing.js")
+        manifest["entrypoints"]["page"]["scripts"][1]["file"] = "missing.js"
         with self.assertRaisesRegex(PackError, "declared"):
+            validate_manifest(manifest, FIXTURES / "page-bridge")
+
+    def test_classic_page_resource_identity_and_version_are_explicit(self):
+        manifest = load_manifest(FIXTURES / "page-bridge")
+        manifest["entrypoints"] = {"page": {"interface": "browser-scripts-v1",
+                                                   "scripts": [
+                                                       {"id": "shared.ui", "version": "1.0.0",
+                                                        "file": "page.js"},
+                                                       {"id": "shared.ui", "version": "1.0.0",
+                                                        "file": "handler.py"}]}}
+        manifest["access"]["capabilities"] = ["page.inject"]
+        with self.assertRaisesRegex(PackError, "duplicate resource id"):
+            validate_manifest(manifest, FIXTURES / "page-bridge")
+        manifest["entrypoints"]["page"]["scripts"][1]["id"] = "feature.two"
+        manifest["entrypoints"]["page"]["scripts"][1]["version"] = "latest"
+        with self.assertRaisesRegex(PackError, "MAJOR.MINOR.PATCH"):
             validate_manifest(manifest, FIXTURES / "page-bridge")
 
     def test_typed_configuration(self):

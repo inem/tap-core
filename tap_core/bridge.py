@@ -17,6 +17,8 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 PREFIX = '/__tap/probe/'
 MARKER = 'tap-probe-bootstrap'
 SCRIPT_LIMIT = 256 * 1024
+RESOURCE_ID = re.compile(r'[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*\Z')
+RESOURCE_VERSION = re.compile(r'(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\Z')
 
 
 class HTMLScanError(ValueError):
@@ -213,13 +215,17 @@ def effective_configuration(root, base):
             or registry['version'] != 1 or type(registry['packs']) is not dict):
         raise ValueError('Pack registry is malformed or incompatible')
     result = json.loads(json.dumps(base))
-    claimed = {}
+    base_origins = list(result['allow_origins'])
+    script_origins = [list(base_origins) for _ in result['page_scripts']]
+    declarations = {}
+    any_enabled = False
     for pack_id in sorted(registry['packs']):
         record = registry['packs'][pack_id]
         if type(record) is not dict or type(record.get('enabled')) is not bool:
             raise ValueError(f'Pack registry entry is malformed: {pack_id}')
         if not record['enabled']:
             continue
+        any_enabled = True
         version = record.get('selected')
         versions = record.get('versions')
         if type(version) is not str or type(versions) is not dict:
@@ -241,15 +247,25 @@ def effective_configuration(root, base):
             raise ValueError(f'Enabled pack manifest is incompatible: {pack_id}@{version}')
         page = manifest['entrypoints']['page']
         access = manifest.get('access')
-        if (type(page) is not dict or set(page) != {'interface', 'files'}
+        if (type(page) is not dict or set(page) != {'interface', 'scripts'}
                 or page.get('interface') != 'browser-scripts-v1'
-                or type(page.get('files')) is not list or not page['files']
-                or not all(type(name) is str for name in page['files'])
-                or len(page['files']) != len(set(page['files']))
+                or type(page.get('scripts')) is not list or not page['scripts']
                 or type(access) is not dict or set(access) != {'origins', 'capabilities'}
                 or type(access['origins']) is not list or type(access['capabilities']) is not list
-                or not all(type(value) is str for value in access['origins'] + access['capabilities'])):
+                or not all(type(value) is str for value in access['origins'] + access['capabilities'])
+                or not access['origins'] or len(access['origins']) != len(set(access['origins']))
+                or len(access['capabilities']) != len(set(access['capabilities']))
+                or 'page.inject' not in access['capabilities']):
             raise ValueError(f'Enabled pack has no installed page binding: {pack_id}@{version}')
+        script_ids = set()
+        for script in page['scripts']:
+            if (type(script) is not dict or set(script) != {'id', 'version', 'file'}
+                    or type(script['id']) is not str or not RESOURCE_ID.fullmatch(script['id'])
+                    or script['id'] in script_ids or type(script['version']) is not str
+                    or not RESOURCE_VERSION.fullmatch(script['version'])
+                    or type(script['file']) is not str):
+                raise ValueError(f'Enabled pack page declarations are malformed: {pack_id}@{version}')
+            script_ids.add(script['id'])
         requested_origins = access['origins']
         requested_capabilities = access['capabilities']
         if (not set(requested_origins) <= set(grants.get('origins', []))
@@ -281,18 +297,42 @@ def effective_configuration(root, base):
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
             if metadata['hashes'].get(name) != digest:
                 raise ValueError(f'Enabled pack integrity check failed: {pack_id}@{version}')
-        for name in page['files']:
-            if name not in expected:
+        for script in page['scripts']:
+            if script['file'] not in expected:
                 raise ValueError(f'Enabled pack page script is undeclared: {pack_id}@{version}')
         for origin in requested_origins:
             exact_origin(origin)
-            if origin in claimed:
-                raise ValueError(f'Page origin {origin} is claimed by both {claimed[origin]} and {pack_id}')
-            claimed[origin] = pack_id
             if origin not in result['allow_origins']:
                 result['allow_origins'].append(origin)
-        result['page_scripts'].extend(str(code / name) for name in page['files'])
-    return configuration(result)
+        for script in page['scripts']:
+            resource_id = script['id']
+            declaration = {'version': script['version'],
+                           'digest': metadata['hashes'][script['file']],
+                           'path': str(code / script['file']),
+                           'origins': set(requested_origins),
+                           'pack': pack_id}
+            current = declarations.get(resource_id)
+            if current is None:
+                declarations[resource_id] = declaration
+                continue
+            if current['version'] != declaration['version']:
+                raise ValueError(f'Page resource {resource_id} requests conflicting versions: '
+                                 f"{current['version']} and {declaration['version']}")
+            if current['digest'] != declaration['digest']:
+                raise ValueError(f"Page resource {resource_id}@{script['version']} has conflicting "
+                                 f"content in {current['pack']} and {pack_id}")
+            current['origins'].update(requested_origins)
+    if not any_enabled:
+        return base
+    for declaration in declarations.values():
+        result['page_scripts'].append(declaration['path'])
+        script_origins.append(sorted(declaration['origins']))
+    configuration(result)
+    if (len(script_origins) != len(result['page_scripts'])
+            or not all(origins and len(origins) <= 64 for origins in script_origins)):
+        raise ValueError('Effective page script origins are malformed')
+    result['page_script_origins'] = script_origins
+    return result
 
 
 def decision(config, origin):
@@ -329,6 +369,7 @@ def read_token(root, name='bridge-token'):
 class Bridge:
     def __init__(self, config=None, token=None, scripts=None):
         self.config, self.token, self.scripts = config, token, scripts
+        self.script_origins = config.get('page_script_origins') if config else None
         self.component_token = None
 
     def load(self, loader):
@@ -339,6 +380,7 @@ class Bridge:
             self.component_token = read_token(root, 'component-token')
         self.token = read_token(root)
         self.scripts = read_scripts(self.config) if self.config['enabled'] else []
+        self.script_origins = self.config.get('page_script_origins')
         state = {'pid': os.getpid(), 'configuration': fingerprint(self.config), 'enabled': self.config['enabled']}
         path = root / 'state/bridge.json'
         temporary = path.with_suffix('.tmp')
@@ -397,7 +439,9 @@ class Bridge:
         asset = re.fullmatch(re.escape(PREFIX) + r'core/([0-9]+)\.js', path.path)
         if asset:
             index = int(asset.group(1))
-            if index >= len(self.scripts):
+            if (index >= len(self.scripts)
+                    or (self.script_origins is not None
+                        and origin not in self.script_origins[index])):
                 self.reply(flow, 404)
             else:
                 self.reply(flow, 200, self.scripts[index], 'application/javascript; charset=utf-8')
@@ -419,7 +463,8 @@ class Bridge:
             return
         if flow.request.headers.get('sec-fetch-dest', '') not in ('', 'document'):
             return
-        if not self.allowed(self.origin(flow.request)):
+        origin = self.origin(flow.request)
+        if not self.allowed(origin):
             return
         body = response.get_text(strict=False)
         if body is None:
@@ -437,8 +482,10 @@ class Bridge:
         asset_root = html.escape(self.origin(flow.request) + PREFIX, quote=True)
         scripts = [f'<script id="{MARKER}"{nonce_attr} data-tap-token="{self.token}" '
                    f'src="{asset_root}runtime.js?token={self.token}"></script>']
+        indexes = [index for index in range(len(self.scripts))
+                   if self.script_origins is None or origin in self.script_origins[index]]
         scripts += [f'<script{nonce_attr} src="{asset_root}core/{index}.js?token={self.token}"></script>'
-                    for index in range(len(self.scripts))]
+                    for index in indexes]
         position = parsed.body_end if parsed.body_end is not None else len(body)
         response.set_text(body[:position] + ''.join(scripts) + body[position:])
         for name in ('etag', 'last-modified'):
