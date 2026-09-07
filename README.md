@@ -2,6 +2,40 @@
 
 Open infrastructure for observing and extending the exchange between local applications and the network.
 
+## How it fits together
+
+TAP supports three useful paths. This is the intended extension surface; the
+implementation status below distinguishes what has been demonstrated so far.
+
+```mermaid
+flowchart TB
+  subgraph DATA["Capture / data"]
+    traffic["Application traffic"] --> records["Saved records"]
+    records --> reader["Reader"] --> output["Files / indexes / projections"]
+  end
+
+  subgraph PAGE["Browser / control"]
+    request["Injected page request"] --> bridge["Local bridge + handler"]
+    bridge --> response["Result in the requesting page"]
+  end
+
+  subgraph APP["Application packs"]
+    command["Command / background consumer"] --> adapter["Application adapter"]
+    adapter --> result["Result / confirmed effect"]
+  end
+
+  output -. "combined example" .-> bridge
+  output -. "when a consumer needs saved data" .-> command
+```
+
+Readers can run without a browser. Page interaction can run without saving traffic
+or running readers; injection still needs page interception. Application commands
+need not use either path. The open example combines capture and browser interaction.
+The diagram shows successful paths; errors and uncertain effects need explicit
+outcomes too. Application-specific behavior belongs in packs.
+
+## Current implementation
+
 TAP Core is being extracted from an existing working TAP installation. A first
 [development-checkout runtime](docs/runtime.md) provides isolated macOS profiles
 with the existing `install`, `on`, `off`, `status`, `doctor` and `where` command
@@ -35,6 +69,35 @@ A person on a clean supported Mac can install TAP Core, enable an open example p
 Support for source-application attribution and routing must be established experimentally. A process label alone is not evidence that per-application routing works. Supported and unsupported configurations will be documented before release.
 
 We will port and verify existing mechanisms incrementally. A general workflow engine, marketplace, billing service and application-specific features are outside this first core release.
+
+The route to that release follows useful capabilities. Arrows show progression,
+not a requirement to finish every linked issue before starting the next slice.
+These are acceptance targets, not completion markers.
+
+```mermaid
+flowchart TB
+  demo["Live harness connects the cycle<br/>#29"]
+  profile["Turn on a profile: the cycle runs itself<br/>#11 + #32"]
+  pack["Install an external pack without editing core<br/>#14"]
+  release["A new user reproduces it on a clean Mac<br/>#7 + #15"]
+
+  demo --> profile --> pack --> release
+
+  subgraph INFRA["Develop alongside each slice"]
+    routing["Traffic selection / TLS<br/>#3 / #6"]
+    reliability["Limits / recovery / diagnostics<br/>#8 / #9 / #12 / #13"]
+    delivery["Runtime packaging<br/>#7"]
+  end
+
+  routing -. "supported operating conditions" .-> release
+  reliability -. "strengthen each slice" .-> profile
+  delivery -. "prepare installation early" .-> release
+```
+
+See the [release tracker](https://github.com/inem/tap-core/issues/1) for current
+status and the [development views](docs/development-views.md) for the full diagrams,
+including infrastructure responsibilities. Module, process, pack and repository
+boundaries are separate decisions.
 
 ## Development
 
