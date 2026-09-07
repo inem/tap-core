@@ -19,13 +19,26 @@ for Copy itself, but the current bridge still injects the legacy TapProbe
 | `youtube-ui.js` | Host DOM adapter (`window.YouTubeUI`), copied as-is |
 | `copy-links.js` | Feature bootstrap, extracted from the legacy mutator |
 | `bridge.json.example` | Shape only; absolute paths are filled by the seam check |
-| `PROVENANCE.md` | Source paths and delivery change |
+| `PROVENANCE.md` | Content hashes, ownership and license review |
+
+## Evidence status
+
+| Evidence | Status | Owner |
+| --- | --- | --- |
+| Fixture seam admit (`tools/check_youtube_copy_links_seams.py`) | Covered by this change | this example |
+| Live MITM cert + CSP/nonce on real YouTube | Open | #38 |
+| Manual Copy with visible feedback | Open | #38 |
+| Pack install / Hub auto-start | Out of scope here | #14 / #11 / #32 |
+
+This staging PR must not close #38. Live rows stay on #38 until a report records
+them.
 
 ## Wire to a profile
 
 ```sh
 # from this repository root, after choosing an isolated profile + backend
-python3 tools/check_youtube_copy_links_seams.py --write-config /tmp/yt-bridge.json
+python3 tools/check_youtube_copy_links_seams.py \
+  --proxy-port 19001 --hub-port 19002 --write-config /tmp/yt-bridge.json
 
 ./tap --profile /absolute/profile install \
   --backend /absolute/path/to/mitmdump --port 19001 --routing explicit \
@@ -44,7 +57,7 @@ Fixture checks, live HTTPS and clean-Mac acceptance are different evidence.
 
 1. **Config admit** — `allow_origins` exact `https://www.youtube.com` and
    `https://youtube.com`; both scripts absolute, ≤256 KiB, UTF-8; `hub_port`
-   ≠ proxy port.
+   ≠ proxy port (seam check takes `--proxy-port` and rejects collisions).
 2. **Script order** — `youtube-ui.js` then `copy-links.js` as `core/0.js` /
    `core/1.js`. Bootstrap no-ops without `YouTubeUI`.
 3. **Injection vs legacy mutator** — bridge keeps CSP and reuses page nonce;
