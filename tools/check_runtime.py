@@ -109,6 +109,13 @@ def main():
             assert not adapter.port_open(first) and not adapter.service_loaded(first)
             assert adapter.service_pid(second) == second_pid and adapter.owns_port(second)
             report["stopping_one_profile_preserves_other"] = True
+            assert not first.plist.exists()
+            result = subprocess.run([sys.executable, str(entry), "--profile", str(first.root), "on"],
+                                    text=True, capture_output=True, timeout=45)
+            assert result.returncode == 0, result.stderr
+            assert first.plist.exists() and adapter.owns_port(first)
+            assert adapter.service_pid(second) == second_pid and adapter.owns_port(second)
+            report["off_removes_autoload_on_recreates"] = True
             report["system_settings_unchanged"] = adapter.network_state() == before
             assert report["system_settings_unchanged"]
         finally:
