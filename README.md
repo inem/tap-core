@@ -32,6 +32,9 @@ harness for the trusted legacy source. The [release tracker](https://github.com/
 links the implementation work. The legacy directory structure is not the target
 architecture by default.
 
+Read [TECHNOLOGY.md](TECHNOLOGY.md) for release requirements, working stack choices
+and unresolved packaging decisions before starting an implementation task.
+
 ## License
 
 The new scaffold in this repository is MIT licensed. Existing implementation files and bundled dependencies must pass the migration and license review before being added.
