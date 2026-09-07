@@ -80,8 +80,8 @@ capture on macOS. Its implementation uses a macOS Network Extension. See the
 [mode documentation](https://docs.mitmproxy.org/stable/concepts/modes/#local-capture)
 and [upstream explanation](https://www.mitmproxy.org/posts/local-capture/macos/).
 
-Read-only checks found **no installed Mitmproxy Redirector app or registered
-mitmproxy Network Extension** on this machine. Launching Local Capture would add
+At the time of the first #17 experiment, read-only checks found **no installed
+Mitmproxy Redirector app or registered mitmproxy Network Extension** on this machine. Launching Local Capture would add
 a shared OS component rather than just start a second isolated TCP listener.
 The coordinated task explicitly excluded that activation from this pass. This
 is not an automatic approval rejection and not evidence of backend failure.
@@ -134,8 +134,8 @@ not a proposed fallback for Local Capture's synthetic endpoint.
    profile while preserving the existing lifecycle and bypass behavior.
    It may record an **unknown** source application. No transparent app-scoping
    promise follows from a client deliberately using that proxy.
-2. Treat macOS Local Capture as an **optional experimental backend** until the
-   acceptance below passes. Do not build a new native routing helper before
+2. Evaluate macOS Local Capture as the **first candidate for release app routing**.
+   Its support remains experimental until the acceptance below passes. Do not build a new native routing helper before
    establishing what the existing backend cannot deliver.
 3. Keep user exclusions authoritative over pack requests. Translate policy into
    backend selectors centrally; do not concatenate arbitrary pack spec strings.
@@ -202,3 +202,12 @@ policy propagation separately from the `lsof` timing above.
 
 Machine-readable measurements are in
 [`process-routing-2026-09-07.json`](results/process-routing-2026-09-07.json).
+
+## Follow-up: actual activation attempt
+
+The [executable acceptance follow-up](local-capture-acceptance.md) replaces the
+manual-only procedure with a controlled harness. Its explicit-proxy control
+passed; Local Capture installed the bundled Redirector and reached macOS
+`activated waiting for user`. The OS approval step and routing acceptance remain
+open. This supersedes the earlier statement that Local Capture was never started,
+without turning the startup attempt into routing evidence.
