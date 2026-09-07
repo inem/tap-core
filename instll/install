@@ -1,0 +1,227 @@
+#!/bin/bash
+# TAP Core one-line installer (issue #7).
+# Bare macOS: needs only curl, tar and bash. No Homebrew, Xcode CLT or system Python.
+# Supports Apple silicon (arm64) and Intel (x86_64).
+#
+# Usage (after main):
+#   curl -fsSL instll.sh/inem/tap-core | sh
+# Branch test (after instll.sh @ref is deployed):
+#   curl -fsSL instll.sh/inem/tap-core@issue-7-installer | sh
+# Fallback:
+#   curl -fsSL \
+#     https://raw.githubusercontent.com/inem/tap-core/issue-7-installer/instll/install | TAP_REF=issue-7-installer bash
+#
+# Explicit by default; system routing is opt-in. Never changes keychain trust.
+
+set -euo pipefail
+
+REPO="${TAP_REPO:-inem/tap-core}"
+# Default delivery channel. Override with an exact commit for reproducibility.
+REF="${TAP_REF:-main}"
+ROOT="${TAP_ROOT:-$HOME/.tap-core}"
+BIN_DIR="${TAP_BIN_DIR:-$HOME/.local/bin}"
+PORT="${TAP_PORT:-18999}"
+ROUTING="${TAP_ROUTING:-explicit}"
+PROBE_URL="${TAP_PROBE_URL:-http://example.com/}"
+BACKEND_VERSION="${TAP_BACKEND_VERSION:-12.2.3}"
+PYTHON_BUILD="${TAP_PYTHON_BUILD:-20260901}"
+PYTHON_VERSION="${TAP_PYTHON_VERSION:-3.12.14}"
+SKIP_START="${TAP_SKIP_START:-0}"
+FORCE_BACKEND="${TAP_BACKEND:-}"
+FORCE_PYTHON="${TAP_PYTHON:-}"
+
+CHECKOUT="$ROOT/checkout"
+BACKEND_DIR="$ROOT/backend"
+PYTHON_DIR="$ROOT/python"
+PROFILE="$ROOT/profile"
+WRAPPER="$BIN_DIR/tap"
+MARK="$ROOT/install.json"
+
+fail() { echo "tap-core: $*" >&2; exit 1; }
+info() { echo "tap-core: $*"; }
+need() { command -v "$1" >/dev/null 2>&1 || fail "need $1 (macOS base system tool)"; }
+
+os="$(uname -s)"
+arch="$(uname -m)"
+[ "$os" = Darwin ] || fail "macOS only for this installer slice"
+case "$arch" in
+  arm64)
+    mitm_arch=arm64
+    cpython_arch=aarch64
+    ;;
+  x86_64)
+    mitm_arch=x86_64
+    cpython_arch=x86_64
+    ;;
+  *)
+    fail "unsupported architecture: $arch (need arm64 or x86_64)"
+    ;;
+esac
+
+need curl
+need tar
+
+# Refuse before downloads or writes to an existing installation / command.
+case "$ROOT" in /*) ;; *) fail "TAP_ROOT must be absolute" ;; esac
+case "$BIN_DIR" in /*) ;; *) fail "TAP_BIN_DIR must be absolute" ;; esac
+[ ! -e "$ROOT" ] && [ ! -L "$ROOT" ] || fail "Install root already exists; retained files are unchanged. Use its existing tap, or choose a new TAP_ROOT."
+[ ! -e "$WRAPPER" ] && [ ! -L "$WRAPPER" ] || fail "Command already exists: $WRAPPER; choose another TAP_BIN_DIR"
+case "$ROUTING" in explicit|system) ;; *) fail "TAP_ROUTING must be explicit or system" ;; esac
+case "$SKIP_START" in 0|1) ;; *) fail "TAP_SKIP_START must be 0 or 1" ;; esac
+umask 077
+# mkdir is exclusive: two installers cannot both take ownership of the root.
+mkdir "$ROOT" || fail "Cannot reserve fresh install root"
+mkdir -p "$BIN_DIR" "$BACKEND_DIR" "$PYTHON_DIR"
+trap 'code=$?; if [ "$code" != 0 ]; then echo "tap-core: installation incomplete; retained $ROOT for inspection/recovery" >&2; fi' EXIT
+
+python_ok() {
+  local py="$1"
+  [ -n "$py" ] && [ -x "$py" ] || return 1
+  "$py" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null
+}
+
+ensure_python() {
+  if [ -n "$FORCE_PYTHON" ]; then
+    python_ok "$FORCE_PYTHON" || fail "TAP_PYTHON unusable or < 3.9: $FORCE_PYTHON"
+    PYTHON="$FORCE_PYTHON"
+    info "python ok ($PYTHON)"
+    return
+  fi
+
+  PYTHON="$PYTHON_DIR/bin/python3"
+  if python_ok "$PYTHON"; then
+    info "python ok ($PYTHON)"
+    return
+  fi
+
+  local url tmp inner
+  url="https://github.com/astral-sh/python-build-standalone/releases/download/${PYTHON_BUILD}/cpython-${PYTHON_VERSION}+${PYTHON_BUILD}-${cpython_arch}-apple-darwin-install_only.tar.gz"
+  tmp="$(mktemp -d "$ROOT/python-download.XXXXXX")"
+  info "downloading CPython ${PYTHON_VERSION} ($cpython_arch) — no system/CLT Python required"
+  curl -fsSL "$url" | tar -xz -C "$tmp"
+  if [ -x "$tmp/python/bin/python3" ]; then
+    rm -rf "$PYTHON_DIR"
+    mv "$tmp/python" "$PYTHON_DIR"
+  else
+    inner="$(find "$tmp" -mindepth 1 -maxdepth 1 -type d | head -1)"
+    [ -n "$inner" ] && [ -x "$inner/bin/python3" ] || fail "portable CPython layout unexpected in $url"
+    rm -rf "$PYTHON_DIR"
+    mv "$inner" "$PYTHON_DIR"
+  fi
+  rm -rf "$tmp"
+  PYTHON="$PYTHON_DIR/bin/python3"
+  python_ok "$PYTHON" || fail "portable CPython failed to run"
+  info "python installed at $PYTHON"
+}
+
+ensure_backend() {
+  local current url tmp app
+  if [ -n "$FORCE_BACKEND" ]; then
+    [ -x "$FORCE_BACKEND" ] || fail "TAP_BACKEND is not executable: $FORCE_BACKEND"
+    current="$("$FORCE_BACKEND" --version 2>/dev/null | awk '/^Mitmproxy:/{print $2; exit}')"
+    [ "$current" = "$BACKEND_VERSION" ] || fail "TAP_BACKEND version $current, need $BACKEND_VERSION"
+    BACKEND="$FORCE_BACKEND"
+    info "backend $BACKEND_VERSION ok ($BACKEND)"
+    return
+  fi
+
+  BACKEND="$BACKEND_DIR/mitmproxy.app/Contents/MacOS/mitmdump"
+  if [ -x "$BACKEND" ]; then
+    current="$("$BACKEND" --version 2>/dev/null | awk '/^Mitmproxy:/{print $2; exit}')"
+    if [ "$current" = "$BACKEND_VERSION" ]; then
+      info "backend $BACKEND_VERSION ok ($BACKEND)"
+      return
+    fi
+    info "replacing backend $current with $BACKEND_VERSION"
+  fi
+
+  url="https://downloads.mitmproxy.org/${BACKEND_VERSION}/mitmproxy-${BACKEND_VERSION}-macos-${mitm_arch}.tar.gz"
+  tmp="$(mktemp -d "$ROOT/backend-download.XXXXXX")"
+  info "downloading mitmproxy $BACKEND_VERSION ($mitm_arch)"
+  curl -fsSL "$url" | tar -xz -C "$tmp"
+  app="$tmp/mitmproxy.app"
+  [ -x "$app/Contents/MacOS/mitmdump" ] || fail "mitmproxy.app missing from $url"
+  rm -rf "$BACKEND_DIR/mitmproxy.app"
+  mv "$app" "$BACKEND_DIR/mitmproxy.app"
+  rm -rf "$tmp"
+  current="$("$BACKEND" --version 2>/dev/null | awk '/^Mitmproxy:/{print $2; exit}')"
+  [ "$current" = "$BACKEND_VERSION" ] || fail "backend version check failed: $current"
+  info "backend installed at $BACKEND"
+}
+
+ensure_checkout() {
+  local url stage inner
+  # Resolve a channel once; the downloaded checkout and ownership record refer
+  # to that exact commit even if the branch moves during installation.
+  RESOLVED_REF="$(curl -fsSL -H 'Accept: application/vnd.github.sha' "https://api.github.com/repos/${REPO}/commits/${REF}")"
+  [[ "$RESOLVED_REF" =~ ^[0-9a-f]{40}$ ]] || fail "Cannot resolve requested source ref to a commit"
+  url="https://codeload.github.com/${REPO}/tar.gz/${RESOLVED_REF}"
+  stage="$(mktemp -d "$ROOT/checkout-stage.XXXXXX")"
+  info "fetching ${REPO}@${REF}"
+  curl -fsSL "$url" | tar -xz -C "$stage"
+  inner="$(find "$stage" -mindepth 1 -maxdepth 1 -type d | head -1)"
+  [ -n "$inner" ] || fail "empty checkout archive for $REF"
+  rm -rf "$CHECKOUT"
+  mv "$inner" "$CHECKOUT"
+  rm -rf "$stage"
+  [ -f "$CHECKOUT/tap" ] || fail "checkout missing tap entrypoint"
+  info "checkout at $CHECKOUT"
+}
+
+write_mark() {
+  "$PYTHON" "$CHECKOUT/instll/ownership.py" record \
+    "$ROOT" "$WRAPPER" "$PYTHON" "$BACKEND" "$REPO" "$RESOLVED_REF" "$arch" "$PORT" "$ROUTING" "$SKIP_START"
+}
+
+start_profile() {
+  info "installing profile $PROFILE (port $PORT, routing $ROUTING)"
+  "$PYTHON" "$CHECKOUT/tap" --profile "$PROFILE" install \
+    --backend "$BACKEND" \
+    --port "$PORT" \
+    --routing "$ROUTING" \
+    --probe-url "$PROBE_URL"
+  "$PYTHON" "$CHECKOUT/tap" --profile "$PROFILE" on
+}
+
+ensure_python
+ensure_backend
+ensure_checkout
+write_mark
+
+if [ "$SKIP_START" = 1 ]; then
+  info "TAP_SKIP_START=1 — files only"
+else
+  start_profile
+fi
+
+cat <<EOF
+
+TAP Core installed.
+
+  arch:     $arch
+  root:     $ROOT
+  python:   $PYTHON
+  command:  $WRAPPER
+  profile:  $PROFILE
+  proxy:    http://127.0.0.1:$PORT
+  backend:  $BACKEND
+
+For next shells:
+  export PATH="$BIN_DIR:\$PATH"
+
+CA (manual trust; installer does not mutate keychain):
+  open "$PROFILE/certificates/mitmproxy-ca-cert.pem"
+
+Uninstall:
+  "$PYTHON" "$CHECKOUT/instll/ownership.py" remove "$ROOT" 0
+
+EOF
+
+export PATH="$BIN_DIR:$PATH"
+echo "—— live check ——"
+uname -m
+if [ "$SKIP_START" = 1 ]; then
+  info "skip tap doctor (TAP_SKIP_START=1)"
+else
+  tap doctor
+fi

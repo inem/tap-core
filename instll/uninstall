@@ -1,0 +1,14 @@
+#!/bin/bash
+# A missing interpreter or ownership record is a recovery error, never permission
+# to remove a possibly running installation. Data is retained by default.
+set -euo pipefail
+ROOT="${TAP_ROOT:-$HOME/.tap-core}"
+PURGE="${TAP_PURGE:-0}"
+fail() { echo "tap-core: $*; retained installation" >&2; exit 1; }
+case "$ROOT" in /*) ;; *) fail "TAP_ROOT must be absolute" ;; esac
+[ -d "$ROOT" ] && [ ! -L "$ROOT" ] || fail "Missing or symlinked install root"
+[ -f "$ROOT/interpreter" ] && [ ! -L "$ROOT/interpreter" ] || fail "Missing interpreter ownership pointer; use this installation's verified Python to recover it"
+IFS= read -r PY < "$ROOT/interpreter" || fail "Cannot read interpreter pointer"
+[ -x "$PY" ] || fail "Recorded interpreter is unavailable"
+[ -f "$ROOT/checkout/instll/ownership.py" ] || fail "Installed uninstaller is missing"
+exec "$PY" "$ROOT/checkout/instll/ownership.py" remove "$ROOT" "$PURGE"

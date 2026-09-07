@@ -40,6 +40,16 @@ TAP Core is being extracted from an existing working TAP installation. A first
 [development-checkout runtime](docs/runtime.md) provides isolated macOS profiles
 with the existing `install`, `on`, `off`, `status`, `doctor` and `where` command
 surface. This is not yet a packaged clean-Mac release.
+A first [one-line installer](docs/install.md) exists for #7:
+
+```bash
+curl -fsSL instll.sh/inem/tap-core | bash
+```
+
+It places a pinned mitmproxy backend, a checkout, and an explicit profile under
+`~/.tap-core` with arm64/Intel download paths and its own portable Python
+(unless explicitly supplied). It does not yet satisfy signed delivery, CA trust
+automation or clean-Mac acceptance in #7/#15.
 [Capture record v1 and journal positions](docs/capture-records.md) define the
 current storage input for independent readers, including legacy compatibility
 and explicit errors when retention removes a saved position.
