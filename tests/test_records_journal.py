@@ -22,10 +22,10 @@ def encoded(record):
 
 
 def capture_record(ctype='application/json', body='{"fixture":"new"}', streamed=False,
-                   request_body='', request_streamed=False, size='1'):
+                   request_body='', request_streamed=False, size='1', raw=b''):
     records = []
     response = SimpleNamespace(status_code=200, headers={'content-type': ctype, 'content-length': size},
-                               stream=streamed, get_text=lambda **kw: body, raw_content=b'')
+                               stream=streamed, get_text=lambda **kw: body, raw_content=raw)
     request = SimpleNamespace(method='GET', url='https://fixture.example/data', headers={},
                               stream=request_streamed, get_text=lambda **kw: request_body)
     capture = Capture(SimpleNamespace(submit=records.append))
@@ -71,6 +71,14 @@ class RecordTests(unittest.TestCase):
             record = validate_record(capture_record(request_body=body, request_streamed=streamed))
             self.assertEqual(record['req_body_reason'], reason)
             self.assertEqual('req_body' in record, reason == 'retained')
+
+    def test_unusable_content_length_uses_buffered_raw_size(self):
+        for length in ('-7', '0', '', 'invalid'):
+            with self.subTest(length=length):
+                record = capture_record(size=length, raw=b'1234567')
+                self.assertEqual(validate_record(record)['size'], 7)
+        self.assertEqual(capture_record(size='11', raw=b'1234567')['size'], 11)
+        self.assertEqual(capture_record(size='-7', streamed=True)['size'], 0)
 
     def test_repeated_identical_responses_get_distinct_ids(self):
         one, two = capture_record(), capture_record()

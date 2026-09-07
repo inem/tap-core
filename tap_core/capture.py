@@ -269,7 +269,7 @@ class Capture:
             size = int(response.headers.get("content-length") or 0)
         except ValueError:
             size = 0
-        if keep and not size:
+        if keep and size <= 0:
             size = len(response.raw_content or b"")
         reason = "media_type" if not wants_body(ctype) else "streamed" if streamed else "retained"
         body = response.get_text(strict=False) if keep else None
