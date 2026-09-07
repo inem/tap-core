@@ -40,11 +40,11 @@ What it does:
 6. Writes managed bridge/components under `~/.tap-core/managed/` with absolute paths
    only inside the install root (Hub, example reader/handlers from the checkout).
 7. Refuses an existing install root or occupied command path; creates an owned `~/.local/bin/tap`.
-8. Runs `install` + `on` for an **explicit** profile on port `18999` (Hub on `19000`)
-   with those managed bindings, then `tap doctor` and a Hub HTTP/WS smoke.
-   Clients opt into the proxy, so the existing system proxy is preserved.
-   Set `TAP_ROUTING=system` explicitly where system routing is available; this needs
-   administrative access and refuses another enabled proxy.
+8. Runs `install` for a **system**-routing profile on port `18999` (Hub on `19000`)
+   with those managed bindings. If passwordless `networksetup` sudoers is missing,
+   prints the one-time enable command and leaves `on` for you after that.
+   Opt out of system proxy mutation with `TAP_ROUTING=explicit`.
+
 
 ## Uninstall
 
@@ -61,7 +61,7 @@ TAP_PURGE=1 bash "$HOME/.tap-core/checkout/instll/uninstall"  # also delete owne
 | `TAP_REF` | `main` | GitHub ref for the checkout archive |
 | `TAP_PORT` | `18999` | Profile proxy port |
 | `TAP_HUB_PORT` | `TAP_PORT + 1` | Managed Hub listen port |
-| `TAP_ROUTING` | `explicit` | `explicit` or `system` |
+| `TAP_ROUTING` | `system` | `system` (default, needs one-time sudoers) or `explicit` |
 | `TAP_SKIP_START` | `0` | `1` = place files only |
 | `TAP_BIN_DIR` | `~/.local/bin` | Where the `tap` wrapper is written |
 | `TAP_BACKEND_VERSION` | `12.2.3` | Required mitmproxy version |
@@ -90,9 +90,25 @@ Trust the CA manually:
 open "$HOME/.tap-core/profile/certificates/mitmproxy-ca-cert.pem"
 ```
 
-Point a dedicated client at the proxy for default explicit routing. This installer does not establish CA trust. System routing is opt-in and is not a supported clean-Mac claim yet.
+## Two install modes
 
-The in-place routing command from merged #47 is `tap routing set explicit|system`. It preserves the profile and restores the previous network state before leaving system mode. This installer adds no second configuration command; existing `install` never rewrites a saved profile.
+**System (default)** — browsers pick up the macOS proxy after `tap on`, like legacy TAP.
+Needs a one-time sudoers drop-in (password once):
+
+```sh
+bash "$HOME/.tap-core/checkout/instll/enable-system-proxy-sudo"
+tap on
+```
+
+**Explicit** — no sudoers, no system proxy mutation; clients must point at the proxy:
+
+```sh
+TAP_ROUTING=explicit curl -fsSL https://instll.sh/inem/tap-core | sh
+```
+
+The installer prints these hints itself. `doctor` reports `sudoers.ready` for system profiles.
+
+Point a dedicated client at the proxy only for explicit routing. This installer does not establish CA trust.
 
 ## Failure and ownership contract
 

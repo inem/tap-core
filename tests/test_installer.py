@@ -239,3 +239,11 @@ class InstallerTests(unittest.TestCase):
         self.assertFalse(verified)
         self.assertTrue(recovery.is_file())
         self.assertTrue(error)
+
+    def test_sudoers_snippet_passes_visudo_after_user_substitution(self):
+        snippet = (REPO / 'instll/sudoers.snippet').read_text()
+        self.assertIn('__TAP_USER__', snippet)
+        rendered = self.parent / 'tap-core'
+        rendered.write_text(snippet.replace('__TAP_USER__', 'fixtureuser'))
+        check = subprocess.run(['visudo', '-c', '-f', str(rendered)], capture_output=True, text=True)
+        self.assertEqual(check.returncode, 0, check.stderr)

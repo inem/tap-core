@@ -12,7 +12,9 @@
 #     https://raw.githubusercontent.com/inem/tap-core/issue-49-installer-managed-runtime/instll/install \
 #     | TAP_REF=issue-49-installer-managed-runtime bash
 #
-# Explicit by default; system routing is opt-in. Never changes keychain trust.
+# System routing by default (legacy TAP behavior). Explicit is opt-in:
+#   TAP_ROUTING=explicit curl ... | sh
+# Never changes keychain trust.
 # Delivers portable Python, mitmproxy and Bun, then wires managed Hub/readers
 # from the installed checkout (issue #49).
 
@@ -26,7 +28,7 @@ ROOT="${TAP_ROOT:-$HOME/.tap-core}"
 BIN_DIR="${TAP_BIN_DIR:-$HOME/.local/bin}"
 PORT="${TAP_PORT:-18999}"
 HUB_PORT="${TAP_HUB_PORT:-$((PORT + 1))}"
-ROUTING="${TAP_ROUTING:-explicit}"
+ROUTING="${TAP_ROUTING:-system}"
 PROBE_URL="${TAP_PROBE_URL:-http://example.com/}"
 BACKEND_VERSION="${TAP_BACKEND_VERSION:-12.2.3}"
 BUN_VERSION="${TAP_BUN_VERSION:-1.3.11}"
@@ -231,6 +233,30 @@ write_mark() {
     "$ROOT" "$WRAPPER" "$PYTHON" "$BACKEND" "$REPO" "$RESOLVED_REF" "$arch" "$PORT" "$ROUTING" "$SKIP_START"
 }
 
+sudoers_ready() {
+  sudo -n -l 2>/dev/null | grep -Eq 'TAP_CORE_PROXY|networksetup -setwebproxy'
+}
+
+print_sudoers_hint() {
+  cat <<EOF
+
+System routing needs a one-time passwordless networksetup rule (same idea as legacy TAP).
+Run once (will ask for your Mac password):
+
+  bash "$CHECKOUT/instll/enable-system-proxy-sudo"
+
+Then:
+
+  export PATH="$BIN_DIR:\$PATH"
+  tap on
+
+Or install without system proxy mutation:
+
+  TAP_ROUTING=explicit curl -fsSL https://instll.sh/inem/tap-core | sh
+
+EOF
+}
+
 start_profile() {
   info "installing profile $PROFILE (port $PORT, hub $HUB_PORT, routing $ROUTING)"
   "$PYTHON" "$CHECKOUT/tap" --profile "$PROFILE" install \
@@ -240,9 +266,17 @@ start_profile() {
     --probe-url "$PROBE_URL" \
     --bridge-config "$ROOT/managed/bridge.json" \
     --components-config "$ROOT/managed/components.json"
+  if [ "$ROUTING" = system ] && ! sudoers_ready; then
+    info "profile installed; deferring on until sudoers is enabled"
+    print_sudoers_hint
+    STARTED=0
+    return
+  fi
   "$PYTHON" "$CHECKOUT/tap" --profile "$PROFILE" on
+  STARTED=1
 }
 
+STARTED=0
 ensure_python
 ensure_bun
 ensure_backend
@@ -269,6 +303,7 @@ TAP Core installed.
   proxy:    http://127.0.0.1:$PORT
   hub:      http://127.0.0.1:$HUB_PORT
   backend:  $BACKEND
+  routing:  $ROUTING
 
 For next shells:
   export PATH="$BIN_DIR:\$PATH"
@@ -277,15 +312,21 @@ CA (manual trust; installer does not mutate keychain):
   open "$PROFILE/certificates/mitmproxy-ca-cert.pem"
 
 Uninstall:
-  "$PYTHON" "$CHECKOUT/instll/ownership.py" remove "$ROOT" 0
+  bash "$CHECKOUT/instll/uninstall"
 
 EOF
+
+if [ "$ROUTING" = system ] && [ "$STARTED" != 1 ] && [ "$SKIP_START" != 1 ]; then
+  print_sudoers_hint
+fi
 
 export PATH="$BIN_DIR:$PATH"
 echo "—— live check ——"
 uname -m
 if [ "$SKIP_START" = 1 ]; then
   info "skip tap doctor / hub smoke (TAP_SKIP_START=1)"
+elif [ "$STARTED" != 1 ]; then
+  info "skip doctor/smoke until: bash \"$CHECKOUT/instll/enable-system-proxy-sudo\" && tap on"
 else
   tap doctor
   info "Hub HTTP/WS smoke"
