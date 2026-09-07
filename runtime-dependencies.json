@@ -1,0 +1,28 @@
+{
+  "stage": "development-checkout; release distribution unresolved",
+  "coordinator": {
+    "runtime": "CPython",
+    "minimum_version": "3.9",
+    "tested_version": "3.9.6",
+    "packages": [],
+    "delivery": "explicit prerequisite; no runtime bundled yet"
+  },
+  "capture_backend": {
+    "name": "mitmproxy",
+    "required_version": "12.2.3",
+    "version_enforced": true,
+    "tested_distribution": "standalone macOS arm64 binary",
+    "embedded_python": "3.14.4",
+    "delivery": "explicit --backend executable; never installed or upgraded implicitly",
+    "license": "MIT",
+    "license_url": "https://github.com/mitmproxy/mitmproxy/blob/v12.2.3/LICENSE"
+  },
+  "platform": {
+    "tested_os": "macOS 15.6.1",
+    "tested_architecture": "arm64",
+    "system_tools": ["launchctl", "networksetup", "sudo", "lsof", "curl", "bash"],
+    "tested_bash": "3.2.57",
+    "minimum_os": "not established",
+    "browser_https_acceptance": "not established"
+  }
+}
