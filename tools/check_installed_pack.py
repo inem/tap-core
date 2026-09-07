@@ -110,6 +110,9 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     os.umask(0o077)
+    # Child pythons (`-m tap_core.pack_store`) must import the checkout package.
+    os.environ["PYTHONPATH"] = os.pathsep.join(
+        [str(ROOT), os.environ.get("PYTHONPATH", "")]).rstrip(os.pathsep)
     backend = args.backend.resolve(strict=True)
     adapter = MacOS()
     network_before = adapter.network_state()
