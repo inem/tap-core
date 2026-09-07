@@ -12,6 +12,9 @@ and explicit errors when retention removes a saved position.
 [Independent reader runs](docs/readers.md) add per-reader progress, resume and
 explicit replay over retained capture, with synthetic subprocess examples.
 
+[The first live vertical slice](docs/live-slice.md) connects captured data to a
+reader projection and an injected browser page through the existing WS bridge.
+
 ## Scope
 
 - Traffic capture and explicit routing policies by host, transport and source application.

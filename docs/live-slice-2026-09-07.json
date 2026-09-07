@@ -1,0 +1,49 @@
+{
+  "scope": "live loopback HTTP + WS in isolated launchd profile and headless Chrome; synthetic data",
+  "source_sha256": {
+    "mutators/site-probe.py": "a2f85cf20e05e20b3067afcc42e25da9daa069cd9e7b473c42a93db1c7557a85",
+    "probe/hub.js": "db87e6ed08f453e430af60c818f3bb6a214634899afa69255a3630e50ddcd9ec",
+    "probe/runtime.js": "cc5777a0afe7778a5b0b613ee73178a71edb43df098a0e6bfda22b87bbff66ed",
+    "probe/adapter-runtime.js": "615c1c40e62c416b39b5de993d05b5dc38a37aa218832d7c0b18fe32f3816c5f"
+  },
+  "platform": {
+    "macOS": "15.6.1",
+    "architecture": "arm64",
+    "python": "3.9.6"
+  },
+  "backend": "Mitmproxy: 12.2.3 binary",
+  "bun": "1.3.11",
+  "playwright": "1.62.1",
+  "hub_started_empty": true,
+  "capture_reader_projection_page_match": true,
+  "controller_received_page_result": true,
+  "reader_records_processed": 13,
+  "browser": "152.0.7977.76",
+  "websocket_frame_kinds": {
+    "sent": [
+      "Hello",
+      "Event",
+      "Result",
+      "Result"
+    ],
+    "received": [
+      "Welcome",
+      "EventAck",
+      "Command",
+      "Command"
+    ]
+  },
+  "other_tab_unchanged": true,
+  "denied_origin_not_injected": true,
+  "legacy_sources_unchanged": true,
+  "transport": {
+    "http_body": "verified_live",
+    "own_page_hub_ws": "verified_live",
+    "https_ca_trust": "not_tested",
+    "sse": "not_tested",
+    "third_party_ws_capture": "not_tested",
+    "chatgpt_conduit": "not_tested"
+  },
+  "system_settings_unchanged": true,
+  "temporary_profile_and_jobs_removed": true
+}
