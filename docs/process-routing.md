@@ -151,8 +151,8 @@ not a proposed fallback for Local Capture's synthetic endpoint.
    rules need executable/bundle identity and tested helper/restart behavior.
    Never persist a naked PID as durable application identity.
 
-This is the branch's recommendation. #3 remains open until the shared policy
-adopts scope and the remaining criteria are resolved or explicitly deferred.
+This was the original research recommendation. The accepted release decision and
+explicit handoff to #6/#7 are recorded in [the follow-up](local-capture-acceptance.md#accepted-research-outcome-and-remaining-owners).
 
 ## Separate clean-Mac and Local Capture acceptance
 

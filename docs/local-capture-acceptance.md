@@ -2,7 +2,8 @@
 
 Related to #3, based on main `a7c043f` and the earlier #17 attribution report.
 Local Capture is the first backend candidate for app routing. A custom process
-helper is not justified by the existing evidence. This PR does not close #3.
+helper is not justified by the existing evidence. The accepted release decision below completes the research scope of #3; it does
+not declare Local Capture supported.
 
 ## Observed on 2026-09-07
 
@@ -88,10 +89,10 @@ swap for new IPv4 HTTP connections. If loopback is unsupported, repeat against a
 controlled non-loopback origin with explicit fixture guards; do not substitute
 production websites, an account or broad capture.
 
-Still needed in #3: restart/PID lifetime, source-port reuse through this backend,
+Still needed for the second adapter in #6: restart/PID lifetime, source-port reuse through this backend,
 parent/helper and stable application identity, name-selector collisions,
 unknown-source behavior, attribution available at the addon boundary, and the
-accepted first-release scope. The existing #17 lsof experiment does not establish
+accepted native support matrix. The existing #17 lsof experiment does not establish
 these for Local Capture. Performance measurements must describe the actual
 selected workload; none are claimed from a startup timeout.
 
@@ -107,8 +108,36 @@ other network filter was disabled. The machine's existing TAP was not migrated.
 
 ## Validation of the evidence tool
 
-127 unit tests passed locally. Four added checks cover unavailable extension
+183 unit tests passed locally after integrating main `695c5f5` (the original
+pre-integration pass contained 127). Four added checks cover unavailable extension
 inspection, a partial startup event, backend failure followed by successful
 cleanup, and a fake running backend with two direct responses. The latter must
 fail routing, not produce a false green result. These tests use a fake backend
 and do not install or activate an extension.
+
+## Accepted research outcome and remaining owners
+
+The user accepted the release decision on 2026-09-07: proceed with the existing
+proxy implementation; Local Capture becomes a separately accepted second adapter
+and does not gate the first release. Research #3 can close with this explicit
+scope decision, source/attribution evidence from #17 and the bounded startup
+experiment here. It does not close because pending native tests have passed.
+
+- #6 owns adapter integration and native runtime acceptance: routing vs recorded
+  identity; selected/unselected processes; restart, child/helper identity and
+  PID/port lifetime; selector conflicts/exclusions; unknown identity; policy
+  updates and existing connections; explicit/system proxy coexistence; backend
+  crash and shared extension ownership; declared protocol support and measured
+  workload costs. Unsupported/unresolved cases stay explicit in its matrix.
+- #7 owns distribution and platform acceptance: signed component delivery,
+  permissions and refusal/cancel, update/remove, clean-Mac support and the
+  interaction with existing network filters. System proxy remains the supported
+  first-release route; its own release checks are still required.
+- The first #6 PR extracts the existing proxy boundary with unchanged lifecycle.
+  The native adapter is a separate follow-up PR. Capturing bodies, TLS behavior,
+  injection and app logic are not duplicated inside these adapters.
+
+Unknown app identity remains unknown. A requirement to select an application is
+unsupported in the proxy implementation; it must not be answered with a UA guess
+or an automatic switch to all-application capture. Native unknown-source behavior
+is an acceptance obligation of the future adapter, not assumed from source alone.
