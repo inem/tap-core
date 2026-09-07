@@ -42,6 +42,8 @@ Read [TECHNOLOGY.md](TECHNOLOGY.md) for release requirements, working stack choi
 and unresolved packaging decisions before starting an implementation task.
 Use the [review lenses](docs/review-planes.md) to check the affected responsibility,
 state, access and delivery boundaries and the evidence behind each claim.
+The [development views](docs/development-views.md) show useful cycles, their
+operating conditions and the route from a live harness to an installable product.
 
 ## License
 
