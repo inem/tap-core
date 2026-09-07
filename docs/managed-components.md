@@ -9,8 +9,10 @@ handler for the actual saved reader projection. No private TAP checkout is used.
 This began as a **development-checkout** binding. The one-line installer (#49)
 now downloads pinned Python/Bun/mitmproxy and writes the same bridge/components
 shape under `~/.tap-core/managed/` with absolute paths inside the install root.
-Pack installation remains #14; CA trust, update and clean-Mac matrix remain
-#7 / #15.
+Pack installation remains #14. The first installed host bindings project enabled
+pack `reader` / `handler` / `page` entrypoints onto the existing managed
+components and bridge composition (no second store). CA trust, update and
+clean-Mac matrix remain #7 / #15.
 
 ## Run and configure
 

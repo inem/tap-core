@@ -96,9 +96,24 @@ provider publishes the reusable UI/site adapter, each pack declares what it uses
 and Core implements validation, storage, composition and origin-scoped delivery.
 
 Disable prevents injection after the next `off`/`on`. It cannot revoke JavaScript
-that already ran in an open document; reload that page. Reader, handler and
-mutator manifests still validate, but activation fails clearly until their host
-bindings are added. That limitation keeps the current perimeter honest.
+that already ran in an open document; reload that page. Installed readers and
+handlers using `python-jsonl-v1` also bind to the existing managed host. Mutator
+activation and `browser-module-v1` remain unsupported.
+
+Reader/handler packs require an existing components configuration with explicit
+Python/Bun paths and an enabled bridge. On startup, the host refreshes the
+effective origins and handler bindings from enabled immutable pack versions.
+The component name is the pack ID; existing reader checkpoints and handler
+state/output/log directories remain under their respective `readers/<id>` and
+`handlers/<id>` roots. See [managed component protocols](managed-components.md)
+for the reader context and handler request/result envelope. A handler receives
+`{version, request_id, args}` and returns `{ok, value}` or a typed error; the old
+standalone fixture echo format is not the managed handler protocol.
+
+Updating or rolling back a reader with an incompatible saved definition is
+refused before changing the selected version. Its checkpoint is retained; this
+slice does not implement checkpoint migration or automatic replay. Independent
+managed reader-only startup without Hub/Bun remains acceptance work in #14.
 
 ## Build and use an external pack
 
@@ -164,7 +179,8 @@ count remains in the report because background request volume varies. The
 response had a CSP header but no source nonce to reuse. Playwright ignored
 certificate errors, so this is not the clean CA-trust result.
 
-Still required for #14: installed reader/handler/mutator bindings, the combined
-capture → reader → page/handler example, migration hooks and independent
+Still required for #14: the external installed combined
+capture → reader → page/handler example, reader checkpoint migration/replay policy,
+Hubless reader-only operation and independent
 author/clean-Mac reproduction. System CA trust and a live nonce-bearing YouTube
 response remain #38 evidence rather than claims of this slice.

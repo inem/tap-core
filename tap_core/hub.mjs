@@ -5,6 +5,10 @@ import { fileURLToPath } from 'node:url';
 import { timingSafeEqual } from 'node:crypto';
 const root = process.argv[2];
 const profile = JSON.parse(readFileSync(join(root, 'profile.json'), 'utf8'));
+let effective = null;
+try { effective = JSON.parse(readFileSync(join(root, 'state/effective-runtime.json'), 'utf8')); } catch {}
+const bridge = effective?.bridge ?? profile.bridge;
+const components = effective?.components ?? profile.components;
 const secret = readFileSync(join(root, 'state/component-token'), 'utf8').trim();
 const pageToken = readFileSync(join(root, 'state/bridge-token'), 'utf8').trim();
 const here = dirname(fileURLToPath(import.meta.url));
@@ -12,7 +16,9 @@ const VERSION = 'tap.bridge/v1';
 const peers = new Set();
 let active = 0;
 const equal = (a, b) => typeof a === 'string' && Buffer.byteLength(a) === Buffer.byteLength(b) && timingSafeEqual(Buffer.from(a), Buffer.from(b));
-const allowed = origin => profile.bridge.enabled && profile.bridge.allow_origins.includes(origin) && !profile.bridge.exclude_origins.includes(origin);
+const allowed = origin => bridge.enabled
+  && bridge.allow_origins.includes(origin)
+  && !(profile.bridge?.exclude_origins ?? bridge.exclude_origins).includes(origin);
 const encode = value => JSON.stringify(value);
 const fail = (code, message) => ({ok: false, error: {code, message, completion: 'unknown'}});
 function send(ws, value) { if (!ws.data.closed) ws.send(encode({version: VERSION, session: ws.data.session, ...value})); }
@@ -27,7 +33,7 @@ async function bounded(stream, limit) {
   return Buffer.concat(chunks).toString('utf8');
 }
 async function invoke(ws, request) {
-  const binding = Object.hasOwn(profile.components.handlers, request.handler) ? profile.components.handlers[request.handler] : null;
+  const binding = Object.hasOwn(components.handlers, request.handler) ? components.handlers[request.handler] : null;
   if (!binding || !binding.origins.includes(ws.data.origin)) return fail('handler_denied', 'Handler is not granted to this origin');
   if (active >= 8 || ws.data.pending >= 4) return fail('busy', 'Handler capacity exceeded');
   active++; ws.data.pending++;
@@ -37,7 +43,7 @@ async function invoke(ws, request) {
       session_id: ws.data.session, request_id: request.id, config: binding.config,
       state_dir: join(root, 'state/handlers', request.handler), output_dir: join(root, 'data/handlers', request.handler),
       log_dir: join(root, 'logs/handlers', request.handler)};
-    child = Bun.spawn([profile.components.python, '-B', join(here, 'guardian.py'), String(process.pid), ...binding.command], {
+    child = Bun.spawn([components.python, '-B', join(here, 'guardian.py'), String(process.pid), ...binding.command], {
       cwd: root, detached: true, stdin: 'pipe', stdout: 'pipe', stderr: 'pipe',
       env: {...process.env, TAP_PACK_CONTEXT: encode(context)},
     });
@@ -64,7 +70,7 @@ async function invoke(ws, request) {
   }
 }
 const server = Bun.serve({
-  hostname: '127.0.0.1', port: profile.bridge.hub_port,
+  hostname: '127.0.0.1', port: bridge.hub_port,
   fetch(request, server) {
     if (request.method !== 'GET') return new Response('Method not allowed', {status: 405});
     const url = new URL(request.url);

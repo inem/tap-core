@@ -51,6 +51,8 @@ def secret(profile):
 def prepare(profile):
     configuration(profile.components, profile)
     from .readers import private_dir
+    from .pack_store import PackStore
+    private_dir(profile.root / 'state')
     path = profile.root / 'state/component-token'
     try:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -59,10 +61,24 @@ def prepare(profile):
     else:
         with os.fdopen(fd, 'w') as handle:
             handle.write(secrets.token_hex(24) + '\n')
-    for name in profile.components['handlers']:
+    store = PackStore(profile.root)
+    effective_bridge = store.effective_bridge(profile.bridge) or profile.bridge
+    effective_components = store.effective_components(profile.components)
+    configuration(effective_components, profile)
+    atomic_json(profile.root / 'state/effective-runtime.json', {
+        'bridge': {
+            'enabled': effective_bridge['enabled'],
+            'hub_port': effective_bridge['hub_port'],
+            'allow_origins': list(effective_bridge['allow_origins']),
+            'exclude_origins': list(effective_bridge.get('exclude_origins') or profile.bridge.get('exclude_origins') or []),
+        },
+        'components': effective_components,
+    })
+    for name in effective_components['handlers']:
         for parent in ('state', 'data', 'logs'):
             private_dir(profile.root / parent / 'handlers')
             private_dir(profile.root / parent / 'handlers' / name)
+    return effective_components
 
 
 @dataclass
@@ -80,7 +96,11 @@ class Job:
 
 
 def identity(profile):
-    return fingerprint({'components': profile.components, 'bridge': profile.bridge})
+    from .pack_store import PackStore
+    store = PackStore(profile.root)
+    effective_bridge = store.effective_bridge(profile.bridge) or profile.bridge
+    effective_components = store.effective_components(profile.components)
+    return fingerprint({'components': effective_components, 'bridge': effective_bridge})
 
 
 def hub_health(profile):
@@ -137,7 +157,8 @@ def _start(profile, adapter):
         raise StartupError('Component port is occupied; its owner will not be stopped')
     if adapter.service_loaded(job):
         stop(profile, adapter)
-    config = profile.components
+    # Pack enable/disable/update only touch the registry; refresh Hub/reader snapshot here.
+    config = prepare(profile)
     for path in (config['python'], config['bun']):
         if not Path(path).is_file() or not os.access(path, os.X_OK):
             raise StartupError('Component runtime is not executable: ' + path)
