@@ -9,7 +9,7 @@ reader/corpus digests and measurement environment. Does not claim
 byte-for-byte stdout identity or batch-stdin pack parity.
 """
 import argparse
-from contextlib import closing
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
@@ -25,8 +25,6 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from tap_core.capture import Writer
-from tap_core.journal import Journal
-from tap_core.readers import fingerprint
 from tap_core.runtime import Profile
 
 FIXTURE = ROOT / 'fixtures/readers/sqlite_projection.py'
@@ -47,6 +45,21 @@ def git_commit():
     if result.returncode:
         return None
     return result.stdout.strip()
+
+
+def source_dirty():
+    result = subprocess.run(['git', '-C', str(ROOT), 'status', '--porcelain'],
+                            text=True, capture_output=True, check=False)
+    return bool(result.stdout.strip()) if result.returncode == 0 else None
+
+
+def corpus_bytes():
+    """Stable source JSONL, shared as input data rather than delivery machinery."""
+    base = json.loads((ROOT / 'fixtures/capture/v1.jsonl').read_text().splitlines()[0])
+    return ''.join(json.dumps(dict(base,
+        record_id=str(uuid.uuid5(uuid.NAMESPACE_URL, f'tap-reader-parity-v1/{index}')),
+        body=json.dumps({'value': value})), ensure_ascii=False) + '\n'
+        for index, value in enumerate(CORPUS)).encode()
 
 
 def measurement_environment():
@@ -84,8 +97,8 @@ def invoke_independent(command, record, context, delivery_id, invocation_id, cwd
                            f'{(result.stderr or result.stdout).decode(errors="replace")}')
 
 
-def direct_deliver(profile, command, name='direct'):
-    """Independent baseline: Journal.scan + raw subprocess, never Reader.execute."""
+def direct_deliver(profile, command, source, name='direct'):
+    """Independent baseline: source JSONL + raw subprocess, no Writer/Journal/Reader."""
     root = profile.root
     state = root / 'state/readers' / name / 'work'
     output = root / 'data/readers' / name
@@ -95,13 +108,15 @@ def direct_deliver(profile, command, name='direct'):
         path.chmod(0o700)
     generation = 1
     started = time.perf_counter()
-    with closing(Journal(root / 'data').scan(after=None)) as entries:
-        for entry in entries:
-            delivery_id = hashlib.sha256(entry.cursor.encode()).hexdigest()
-            invocation_id = fingerprint([name, generation, delivery_id])
-            context = {'reader_id': name, 'reader_generation': generation, 'config': {},
-                       'state_dir': str(state), 'output_dir': str(output), 'log_dir': str(logs)}
-            invoke_independent(command, entry.record, context, delivery_id, invocation_id, root)
+    for payload in source.splitlines():
+        record = json.loads(payload)
+        # IDs are opaque to this fixture. Direct uses stable source identities;
+        # the runner uses its own cursor and generation identities.
+        delivery_id = hashlib.sha256(record['record_id'].encode()).hexdigest()
+        invocation_id = hashlib.sha256(f'{name}/{generation}/{delivery_id}'.encode()).hexdigest()
+        context = {'reader_id': name, 'reader_generation': generation, 'config': {},
+                   'state_dir': str(state), 'output_dir': str(output), 'log_dir': str(logs)}
+        invoke_independent(command, record, context, delivery_id, invocation_id, root)
     elapsed_ms = (time.perf_counter() - started) * 1000
     return projection(output / 'projection.sqlite3'), elapsed_ms
 
@@ -128,10 +143,10 @@ def main():
         profile = Profile(Path(directory), '/unused/synthetic/backend', 18998, 'explicit',
                           'http://fixture.test', [])
         profile.save()
-        base = json.loads((ROOT / 'fixtures/capture/v1.jsonl').read_text().splitlines()[0])
+        source = corpus_bytes()
         writer = Writer(profile.root / 'data', profile.root / 'state')
-        for value in CORPUS:
-            writer.submit(dict(base, record_id=str(uuid.uuid4()), body=json.dumps({'value': value})))
+        for payload in source.splitlines():
+            writer.submit(json.loads(payload))
         writer.close()
         assert writer.written == len(CORPUS)
         stream_bytes = (profile.root / 'data/stream.jsonl').read_bytes()
@@ -145,7 +160,7 @@ def main():
         definition = profile.root / 'reader.json'
         definition.write_text(json.dumps(spec))
 
-        direct, direct_ms = direct_deliver(profile, command)
+        direct, direct_ms = direct_deliver(profile, command, source)
         via_runner, runner_ms, summary = runner_deliver(profile, definition)
 
         order_equal = direct['deliveries'] == via_runner['deliveries'] == list(CORPUS)
@@ -158,11 +173,14 @@ def main():
         report = {
             'scope': 'synthetic Writer + SQLite fixture; no network or launchd',
             'commit': git_commit(),
+            'measured_at': datetime.now(timezone.utc).isoformat(),
+            'source_dirty': source_dirty(),
             'corpus': 'a_b_a_n3',
             'records': len(CORPUS),
             'reader': str(FIXTURE.relative_to(ROOT)),
             'digests': {
                 'reader_sha256': sha256_file(FIXTURE),
+                'source_jsonl_sha256': hashlib.sha256(source).hexdigest(),
                 'corpus_stream_sha256': hashlib.sha256(stream_bytes).hexdigest(),
                 'corpus_values_sha256': sha256_text(json.dumps(list(CORPUS), separators=(',', ':'))),
                 'capture_template_sha256': sha256_file(ROOT / 'fixtures/capture/v1.jsonl'),
@@ -172,6 +190,8 @@ def main():
                 'direct': 'independent_subprocess',
                 'runner': 'tap_reader_cli',
                 'shares_reader_execute': False,
+                'shares_journal_scan': False,
+                'source': 'stable source JSONL before Writer',
             },
             'projection_equal': True,
             'order_equal': True,
@@ -182,7 +202,7 @@ def main():
             'intentional_differences': [
                 'Direct baseline is an independent subprocess host and does not call Reader.execute, so runner delivery bugs are not masked.',
                 'Direct does not set TAP_READER_LOCK_FD, OUTPUT_LIMIT, killpg, guardian, or persist a checkpoint.',
-                'Delivery/invocation IDs still follow the documented cursor hash + name/generation formula so projection keys are comparable.',
+                'Direct IDs derive from stable source record IDs; runner IDs derive from journal cursors and reader generations. Compare projected values/order/receipt count, not identity bytes.',
                 'Neither path exercises pack batch-stdin EOF over many lines in one process.',
                 'JSON projection equality is structural (order/latest/receipts), not byte-for-byte stdout identity.',
                 'Append-only pack readers may duplicate on retry; this SQLite fixture uses generation-scoped receipts.',
@@ -196,13 +216,13 @@ def main():
                 'note': 'Wall time includes process startup on a tiny synthetic corpus; not a throughput SLA.',
                 'next_threshold': 'Revisit long-lived workers if per-record startup dominates a declared larger corpus or live backlog (#32), not from this n=3 alone.',
             },
-            'temporary_profile_removed': True,
         }
-        rendered = json.dumps(report, indent=2) + '\n'
-        if args.output:
-            args.output.parent.mkdir(parents=True, exist_ok=True)
-            args.output.write_text(rendered)
-        print(rendered)
+    report['temporary_profile_removed'] = not profile.root.exists()
+    rendered = json.dumps(report, indent=2) + '\n'
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(rendered)
+    print(rendered)
 
 
 if __name__ == '__main__':

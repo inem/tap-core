@@ -145,8 +145,8 @@ During normal operation a timeout/output failure kills only the invocation's
 process group and reaps its leader. A killed controller cannot enforce its own
 deadline; an orphan child can keep the lock until it exits or is separately
 stopped. The next controller cannot claim that old work was safely cancelled.
-OS-supervised background workers and complete orphan recovery are future host
-lifecycle work. The controller-crash fixture verifies that progress stays put and
+Managed scheduling and orphan recovery are implemented by #32/#43; see
+[managed components](managed-components.md) for the profile lifecycle. The controller-crash fixture verifies that progress stays put and
 the inherited lock blocks overlap until the known fixture child is stopped.
 
 Combined captured stdout/stderr is capped at 1 MiB per invocation. The last
@@ -182,7 +182,8 @@ python3 tools/check_pack_fixtures.py --bun /absolute/path/to/bun
 ```
 
 `check_reader_parity.py` runs the same fixed A → B → A corpus through an
-independent one-record subprocess baseline (not `Reader.execute`) and through
+independent one-record subprocess baseline over stable source JSONL (without
+`Writer`, `Journal.scan` or `Reader.execute` in the direct path) and through
 `reader run`, compares the SQLite projection (order + latest), lists intentional
 differences, and records one-process-per-record wall time plus commit, reader /
 corpus digests and measurement environment. It does not claim batch-stdin pack
@@ -195,13 +196,22 @@ crash, locks, rotation/gaps, changed-behavior replay, receipt migration failure,
 partial-replay retries, finite config validation, malformed input, torn tails
 and A → B → A.
 They use real subprocesses and temporary data. No live network, certificates,
-launchd or production TAP state is involved. CI remains deferred (#24).
+launchd or production TAP state is involved. Current CI runs Python tests and
+pack page fixtures; the full Bun protocol suite is also run locally.
 
 Local verification on 2026-09-07 passed all 147 tests (24 reader tests), both
 pack fixtures and the [synthetic CLI check](readers-fixture-2026-09-07.json).
 
-Installed packs, automatic background scheduling, protocol version negotiation,
-orphan recovery and wider failure/upgrade acceptance remain #13/#14/#32 work.
+Managed scheduling/orphan recovery (#32/#43) and installed reader/handler
+bindings (#57) are in main. The installed end-to-end example remains #14;
+aggregate diagnostics and wider failure/upgrade acceptance remain #13/#7.
 Delivery parity and invocation-cost evidence for the declared n=3 corpus are in
 the parity harness above; a larger corpus or long-lived workers are a follow-up
 threshold, not implied by this measurement.
+
+The negative parity test corrupts only runner input and requires failure. Direct
+also runs with Journal.scan disabled. Repeated-delivery effects are covered by
+`test_failure_after_effect_is_deduplicated_by_reader_receipt`,
+`test_a_b_a_updates_latest_instead_of_deduplicating_by_content`, and
+`test_partial_replay_retry_does_not_roll_latest_back` in the reader suite.
+The three distinct A/B/A records in the cost harness are not a retry scenario.
