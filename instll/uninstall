@@ -1,0 +1,34 @@
+#!/bin/bash
+# Remove the TAP Core profile service and optional install root from instll/install.
+# Usage:
+#   curl -fsSL instll.sh/inem/tap-core/uninstall | sh
+#   TAP_PURGE=1 curl -fsSL instll.sh/inem/tap-core/uninstall | sh   # also delete TAP_ROOT
+
+set -euo pipefail
+
+ROOT="${TAP_ROOT:-$HOME/.tap-core}"
+BIN_DIR="${TAP_BIN_DIR:-$HOME/.local/bin}"
+WRAPPER="$BIN_DIR/tap"
+PROFILE="$ROOT/profile"
+CHECKOUT="$ROOT/checkout"
+PURGE="${TAP_PURGE:-0}"
+
+info() { echo "tap-core: $*"; }
+
+if [ -f "$CHECKOUT/tap" ] && [ -d "$PROFILE" ]; then
+  python3 "$CHECKOUT/tap" --profile "$PROFILE" off >/dev/null 2>&1 || true
+  python3 "$CHECKOUT/tap" --profile "$PROFILE" uninstall >/dev/null 2>&1 || true
+  info "profile service removed"
+fi
+
+if [ -L "$WRAPPER" ] || [ -f "$WRAPPER" ]; then
+  rm -f "$WRAPPER"
+  info "removed $WRAPPER"
+fi
+
+if [ "$PURGE" = 1 ]; then
+  rm -rf "$ROOT"
+  info "purged $ROOT"
+else
+  info "kept $ROOT (set TAP_PURGE=1 to delete data/checkout/backend)"
+fi

@@ -9,3 +9,5 @@ __pycache__/
 coverage/
 dist/
 .tap-dev/
+.tap-core/
+.tap-yt-live/

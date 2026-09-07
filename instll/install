@@ -1,0 +1,182 @@
+#!/bin/bash
+# TAP Core one-line installer (issue #7).
+# Usage:
+#   curl -fsSL instll.sh/inem/tap-core | sh
+# Until this lands on main, test with:
+#   TAP_REF=issue-7-installer curl -fsSL \
+#     https://raw.githubusercontent.com/inem/tap-core/refs/heads/issue-7-installer/instll/install | sh
+#
+# Does not mutate the system proxy or keychain. Does not touch a legacy ~/.tap install.
+
+set -euo pipefail
+
+REPO="${TAP_REPO:-inem/tap-core}"
+REF="${TAP_REF:-main}"
+ROOT="${TAP_ROOT:-$HOME/.tap-core}"
+BIN_DIR="${TAP_BIN_DIR:-$HOME/.local/bin}"
+PORT="${TAP_PORT:-18999}"
+ROUTING="${TAP_ROUTING:-explicit}"
+PROBE_URL="${TAP_PROBE_URL:-http://example.com/}"
+BACKEND_VERSION="${TAP_BACKEND_VERSION:-12.2.3}"
+SKIP_START="${TAP_SKIP_START:-0}"
+# Optional absolute mitmdump. Otherwise a pinned app bundle is downloaded into TAP_ROOT.
+FORCE_BACKEND="${TAP_BACKEND:-}"
+
+CHECKOUT="$ROOT/checkout"
+BACKEND_DIR="$ROOT/backend"
+PROFILE="$ROOT/profile"
+WRAPPER="$BIN_DIR/tap"
+MARK="$ROOT/install.json"
+
+fail() { echo "tap-core: $*" >&2; exit 1; }
+info() { echo "tap-core: $*"; }
+
+need() { command -v "$1" >/dev/null 2>&1 || fail "need $1"; }
+
+os="$(uname -s)"
+arch="$(uname -m)"
+[ "$os" = Darwin ] || fail "macOS only for this installer slice"
+case "$arch" in
+  arm64) asset_arch=arm64 ;;
+  x86_64) asset_arch=x86_64 ;;
+  *) fail "unsupported architecture: $arch" ;;
+esac
+
+need curl
+need tar
+need python3
+
+py_ok="$(python3 - <<'PY'
+import sys
+print("1" if sys.version_info >= (3, 9) else "0")
+PY
+)"
+[ "$py_ok" = 1 ] || fail "Python 3.9+ required"
+
+mkdir -p "$ROOT" "$BIN_DIR" "$BACKEND_DIR"
+
+ensure_backend() {
+  local current url tmp app
+  if [ -n "$FORCE_BACKEND" ]; then
+    [ -x "$FORCE_BACKEND" ] || fail "TAP_BACKEND is not executable: $FORCE_BACKEND"
+    current="$("$FORCE_BACKEND" --version 2>/dev/null | awk '/^Mitmproxy:/{print $2; exit}')"
+    [ "$current" = "$BACKEND_VERSION" ] || fail "TAP_BACKEND version $current, need $BACKEND_VERSION"
+    BACKEND="$FORCE_BACKEND"
+    info "backend $BACKEND_VERSION ok ($BACKEND)"
+    return
+  fi
+
+  BACKEND="$BACKEND_DIR/mitmproxy.app/Contents/MacOS/mitmdump"
+  if [ -x "$BACKEND" ]; then
+    current="$("$BACKEND" --version 2>/dev/null | awk '/^Mitmproxy:/{print $2; exit}')"
+    if [ "$current" = "$BACKEND_VERSION" ]; then
+      info "backend $BACKEND_VERSION ok ($BACKEND)"
+      return
+    fi
+    info "replacing backend $current with $BACKEND_VERSION"
+  fi
+
+  url="https://downloads.mitmproxy.org/${BACKEND_VERSION}/mitmproxy-${BACKEND_VERSION}-macos-${asset_arch}.tar.gz"
+  tmp="$(mktemp -d "$ROOT/backend-download.XXXXXX")"
+  info "downloading mitmproxy $BACKEND_VERSION ($asset_arch)"
+  curl -fsSL "$url" | tar -xz -C "$tmp"
+  app="$tmp/mitmproxy.app"
+  [ -x "$app/Contents/MacOS/mitmdump" ] || fail "mitmproxy.app missing from $url"
+  rm -rf "$BACKEND_DIR/mitmproxy.app"
+  mv "$app" "$BACKEND_DIR/mitmproxy.app"
+  rm -rf "$tmp"
+  current="$("$BACKEND" --version 2>/dev/null | awk '/^Mitmproxy:/{print $2; exit}')"
+  [ "$current" = "$BACKEND_VERSION" ] || fail "backend version check failed: $current"
+  info "backend installed at $BACKEND"
+}
+
+ensure_checkout() {
+  local url stage
+  url="https://codeload.github.com/${REPO}/tar.gz/${REF}"
+  stage="$(mktemp -d "$ROOT/checkout-stage.XXXXXX")"
+  info "fetching ${REPO}@${REF}"
+  curl -fsSL "$url" | tar -xz -C "$stage"
+  inner="$(find "$stage" -mindepth 1 -maxdepth 1 -type d | head -1)"
+  [ -n "$inner" ] || fail "empty checkout archive for $REF"
+  rm -rf "$CHECKOUT"
+  mv "$inner" "$CHECKOUT"
+  rm -rf "$stage"
+  [ -x "$CHECKOUT/tap" ] || [ -f "$CHECKOUT/tap" ] || fail "checkout missing tap entrypoint"
+  info "checkout at $CHECKOUT"
+}
+
+write_wrapper() {
+  cat > "$WRAPPER" <<EOF
+#!/bin/bash
+exec python3 "$CHECKOUT/tap" --profile "$PROFILE" "\$@"
+EOF
+  chmod +x "$WRAPPER"
+  info "command: $WRAPPER"
+}
+
+write_mark() {
+  python3 - <<PY
+import json
+from pathlib import Path
+Path("$MARK").write_text(json.dumps({
+  "repo": "$REPO",
+  "ref": "$REF",
+  "root": "$ROOT",
+  "checkout": "$CHECKOUT",
+  "backend": "$BACKEND",
+  "backend_version": "$BACKEND_VERSION",
+  "profile": "$PROFILE",
+  "port": int("$PORT"),
+  "routing": "$ROUTING",
+  "wrapper": "$WRAPPER",
+}, indent=2) + "\n")
+PY
+}
+
+start_profile() {
+  info "installing profile $PROFILE (port $PORT, routing $ROUTING)"
+  python3 "$CHECKOUT/tap" --profile "$PROFILE" install \
+    --backend "$BACKEND" \
+    --port "$PORT" \
+    --routing "$ROUTING" \
+    --probe-url "$PROBE_URL"
+  python3 "$CHECKOUT/tap" --profile "$PROFILE" on
+  python3 "$CHECKOUT/tap" --profile "$PROFILE" doctor || true
+}
+
+ensure_backend
+ensure_checkout
+write_wrapper
+write_mark
+
+if [ "$SKIP_START" = 1 ]; then
+  info "TAP_SKIP_START=1 — files only"
+else
+  start_profile
+fi
+
+cat <<EOF
+
+TAP Core installed.
+
+  root:     $ROOT
+  command:  $WRAPPER
+  profile:  $PROFILE
+  proxy:    http://127.0.0.1:$PORT
+  backend:  $BACKEND
+
+PATH (if needed):
+  export PATH="$BIN_DIR:\$PATH"
+
+CA for HTTPS clients (trust manually; installer does not mutate keychain):
+  open "$PROFILE/certificates/mitmproxy-ca-cert.pem"
+
+Point a browser/profile at the proxy. System routing was not changed.
+
+Uninstall:
+  curl -fsSL instll.sh/inem/tap-core/uninstall | sh
+  # or: $WRAPPER off; $WRAPPER uninstall
+
+This is the first delivery slice for #7 — not a signed release artifact (#15).
+
+EOF
