@@ -227,8 +227,12 @@ The example only reads a projection; its page owns retrying the `not_ready` quer
 real Bun listener/subprocess test with 24 protocol/access/failure assertions,
 reader lock/guardian crash checks and simulated lifecycle failures. Without Bun,
 that integration test is explicitly skipped; it must run for this slice's review.
-On 2026-09-07 the full suite passed **196 tests**, including the Bun integration,
-after integrating the routing changes from main (`04e0143`).
+On 2026-09-07 the full suite passed **198 tests**, including the Bun integration
+and token-file diagnostic regressions (`7a23d65`). The full launchd/browser live
+run was then repeated at `b117825`, which contains those fixes; the report records
+that source commit. Its exhausted-budget check observes the loaded job remaining
+without a PID for seven seconds (more than two restart throttle intervals), with
+no additional start recorded. Only documentation/report changes follow that run.
 
 `tools/check_managed_slice.py` takes explicit backend/Bun/Node/Playwright/Chrome
 paths and `--output report.json`. It creates temporary profiles and synthetic
