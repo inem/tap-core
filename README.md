@@ -2,7 +2,10 @@
 
 Open infrastructure for observing and extending the exchange between local applications and the network.
 
-TAP Core is being extracted from an existing working TAP installation. This repository currently contains the release backlog and project scope; it does not yet contain an installable runtime.
+TAP Core is being extracted from an existing working TAP installation. A first
+[development-checkout runtime](docs/runtime.md) provides isolated macOS profiles
+with the existing `install`, `on`, `off`, `status`, `doctor` and `where` command
+surface. This is not yet a packaged clean-Mac release.
 
 ## Scope
 
