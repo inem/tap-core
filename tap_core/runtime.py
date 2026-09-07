@@ -27,6 +27,10 @@ class TapError(Exception):
     pass
 
 
+class StartupError(TapError):
+    """Startup mutated the profile job; Lifecycle must recover before cleanup."""
+
+
 def atomic_json(path, value):
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(value, indent=2) + "\n")
@@ -187,28 +191,44 @@ class MacOS:
             raise TapError(f"Port {profile.port} is occupied; its owner will not be stopped")
         if self.service_loaded(profile):
             self.stop(profile)
-        self.write_plist(profile)
-        self.run(["/bin/launchctl", "bootstrap", f"gui/{os.getuid()}", profile.plist])
-        if not self.wait(lambda: self.owns_port(profile) and self.port_open(profile)):
-            raise TapError(f"Profile service did not acquire port {profile.port}; see {profile.root / 'logs/capture.log'}")
+        try:
+            self.write_plist(profile)
+            self.run(["/bin/launchctl", "bootstrap", f"gui/{os.getuid()}", profile.plist])
+            if not self.wait(lambda: self.owns_port(profile) and self.port_open(profile)):
+                raise TapError(f"Profile service did not acquire port {profile.port}; see {profile.root / 'logs/capture.log'}")
+        except (TapError, OSError) as error:
+            # Do not stop here: an earlier session may still have armed routing.
+            raise StartupError(str(error)) from error
 
     def stop(self, profile):
-        # Stop the exact job. Never pkill by port or an addon substring.
-        pid = self.service_pid(profile)
-        if self.service_loaded(profile):
-            self.run(["/bin/launchctl", "bootout", self.target(profile)])
-        def stopped():
+        # Remove autoload first, but still attempt bootout if removal fails.
+        errors = []
+        for path in (profile.plist, profile.plist.with_suffix(".tmp")):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as error:
+                errors.append(f"Cannot remove {path}: {error}")
+        try:
+            # Stop the exact job. Never pkill by port or an addon substring.
+            pid = self.service_pid(profile)
             if self.service_loaded(profile):
-                return False
-            if pid:
-                try:
-                    os.kill(pid, 0)
-                except ProcessLookupError:
-                    return True
-                return False
-            return True
-        if not self.wait(stopped):
-            raise TapError("Profile service did not stop")
+                self.run(["/bin/launchctl", "bootout", self.target(profile)])
+            def stopped():
+                if self.service_loaded(profile):
+                    return False
+                if pid:
+                    try:
+                        os.kill(pid, 0)
+                    except ProcessLookupError:
+                        return True
+                    return False
+                return True
+            if not self.wait(stopped):
+                raise TapError("Profile service did not stop")
+        except (TapError, OSError) as error:
+            errors.append(str(error))
+        if errors:
+            raise TapError("Profile cleanup FAILED: " + "; ".join(errors))
 
     def flows(self, profile):
         for _ in range(3):
@@ -337,14 +357,22 @@ class Lifecycle:
     def __init__(self, profile, os_adapter):
         self.profile, self.os = profile, os_adapter
 
-    def recover(self, failure):
+    def recover(self, failure, cleanup=False):
         if self.profile.routing == "system":
             try:
                 self.os.disarm(self.profile)
             except (TapError, OSError, ValueError) as error:
                 raise TapError(f"{failure}; rollback FAILED: {error}. Capture was not stopped.") from error
-            raise TapError(f"{failure}; previous proxy routing restored")
-        raise TapError(f"{failure}; system proxy settings were not changed")
+            routing = "previous proxy routing restored"
+        else:
+            routing = "system proxy settings were not changed"
+        if cleanup:
+            try:
+                self.os.stop(self.profile)
+            except (TapError, OSError) as error:
+                raise TapError(f"{failure}; {routing}; startup cleanup FAILED: {error}") from error
+            routing += "; failed startup job and autoload removed"
+        raise TapError(f"{failure}; {routing}")
 
     def install(self):
         self.os.backend_version(self.profile)
@@ -354,7 +382,7 @@ class Lifecycle:
         try:
             self.os.start(self.profile)
         except (TapError, OSError) as error:
-            self.recover(f"Installation failed: {error}")
+            self.recover(f"Installation failed: {error}", cleanup=isinstance(error, StartupError))
         return "Installed profile service; use on to verify traffic"
 
     def on(self):
@@ -363,8 +391,8 @@ class Lifecycle:
             self.os.start(self.profile)
         except (TapError, OSError) as error:
             # A saved snapshot means routing may already be armed after a crash.
-            if self.profile.snapshot.exists():
-                self.recover(f"Capture startup failed: {error}")
+            if self.profile.snapshot.exists() or isinstance(error, StartupError):
+                self.recover(f"Capture startup failed: {error}", cleanup=isinstance(error, StartupError))
             raise TapError(f"Capture startup failed: {error}; proxy settings were not changed") from error
         try:
             if self.profile.routing == "system":
