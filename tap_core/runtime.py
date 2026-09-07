@@ -121,13 +121,13 @@ class Profile:
 
 
 @contextmanager
-def profile_lock(root):
+def profile_lock(root, *, busy_message="Another command is changing this profile"):
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     with (root / "command.lock").open("a") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as error:
-            raise TapError("Another command is changing this profile") from error
+            raise TapError(busy_message) from error
         yield lock
 
 

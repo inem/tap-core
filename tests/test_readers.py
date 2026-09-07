@@ -149,7 +149,7 @@ class ReaderTests(unittest.TestCase):
             worker = int(pidfile.read_text())
             controller.kill()
             controller.wait(timeout=3)
-            with self.assertRaises(TapError):
+            with self.assertRaisesRegex(TapError, "^Reader 'one' is busy;"):
                 self.reader.run(spec)
             self.assertIsNone(self.reader.load()['cursor'])
         finally:
@@ -167,7 +167,7 @@ class ReaderTests(unittest.TestCase):
                 self.reader.run(spec)
                 break
             except TapError as error:
-                if 'Another command' not in str(error) or time.monotonic() >= deadline:
+                if "Reader 'one' is busy;" not in str(error) or time.monotonic() >= deadline:
                     raise
                 time.sleep(0.01)
         self.assertEqual(self.outputs(self.reader), ['A'])
@@ -280,8 +280,15 @@ class ReaderTests(unittest.TestCase):
         self.write('A')
         self.reader.prepare()
         with profile_lock(self.reader.state):
-            with self.assertRaises(TapError):
-                self.reader.run(self.spec)
+            for action in (self.reader.run, self.reader.replay):
+                with self.subTest(action=action.__name__), self.assertRaisesRegex(
+                        TapError, "^Reader 'one' is busy; another run or replay holds its lock$"):
+                    action(self.spec)
+            self.assertFalse(self.reader.checkpoint.exists())
+            with profile_lock(self.profile.root):
+                with self.assertRaisesRegex(TapError, '^Another command is changing this profile$'):
+                    with profile_lock(self.profile.root):
+                        self.fail('Profile lock contention was not detected')
             other = Reader(self.profile, 'other')
             other.run(self.spec)
             self.assertEqual(self.outputs(other), ['A'])
