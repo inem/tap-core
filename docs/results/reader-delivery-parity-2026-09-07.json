@@ -1,12 +1,12 @@
 {
   "scope": "synthetic Writer + SQLite fixture; no network or launchd",
-  "commit": "d683354ffe5acffac517d04a637e90ab42c5c4ac",
+  "commit": "836d09b0f0f8e28ccc4f3a590bdbaa724898f9be",
   "corpus": "a_b_a_n3",
   "records": 3,
   "reader": "fixtures/readers/sqlite_projection.py",
   "digests": {
     "reader_sha256": "8871eb4b23ae9aa475c53275639c936fb74588b37d2133a84ab954ab547dd831",
-    "corpus_stream_sha256": "234d996a6322531d550872937304c99ec4b35fa783e571edf99866644eab058c",
+    "corpus_stream_sha256": "55e44922420fd436e2eb25f5d8ccdbf5920903a8a16ac9cf44d1bc7d958f3488",
     "corpus_values_sha256": "a8da1d7ebbf9ad6555728aff59196db30117a563dbbb1cd4fe7cdbee1783bdfc",
     "capture_template_sha256": "e54aa1d9f0212ce760de2f4ccc3d0fa75a37204d05ad5f71fa7fe66766939fac"
   },
@@ -56,9 +56,9 @@
   ],
   "invocation_cost": {
     "n_records": 3,
-    "direct_wall_ms_total": 112.15,
-    "runner_wall_ms_total": 201.06,
-    "runner_wall_ms_per_record": 67.02,
+    "direct_wall_ms_total": 103.99,
+    "runner_wall_ms_total": 185.54,
+    "runner_wall_ms_per_record": 61.85,
     "model": "one_process_per_record",
     "note": "Wall time includes process startup on a tiny synthetic corpus; not a throughput SLA.",
     "next_threshold": "Revisit long-lived workers if per-record startup dominates a declared larger corpus or live backlog (#32), not from this n=3 alone."
