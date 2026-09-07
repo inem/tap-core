@@ -321,6 +321,148 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(hashlib.sha256(self.wrapper.read_bytes()).hexdigest(), after['wrapper_sha256'])
         leftovers = list(self.root.glob('checkout.prev.*'))
         self.assertEqual(leftovers, [], leftovers)
+        profile = json.loads((self.root / 'profile/profile.json').read_text())
+        self.assertEqual(profile['backend'], str(backend))
+        self.assertEqual(profile['bridge']['hub_port'], 19000)
+        self.assertEqual(profile['components']['bun'], str(bun))
+
+    def test_update_refuses_while_profile_lock_held(self):
+        self.prepare(configured=True)
+        shutil.copytree(REPO / 'instll', self.root / 'checkout/instll', dirs_exist_ok=True)
+        shutil.copytree(REPO / 'tap_core', self.root / 'checkout/tap_core', dirs_exist_ok=True)
+        (self.root / 'checkout/tap').write_text('#!/bin/sh\n')
+        staging = self.parent / 'next-profile-lock'
+        shutil.copytree(self.root / 'checkout', staging)
+        from tap_core.runtime import profile_lock
+        with profile_lock(self.root / 'profile'):
+            result = subprocess.run(
+                [sys.executable, str(staging / 'instll/ownership.py'), 'apply-checkout',
+                 str(self.root), str(staging), sys.executable, '/fixture/backend', sys.executable,
+                 'b' * 40, 'arm64', '19000'],
+                capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('changing this profile', result.stderr)
+
+    def test_refresh_restores_mark_and_wrapper_on_save_failure(self):
+        self.prepare()
+        before_mark = (self.root / 'install.json').read_bytes()
+        before_wrapper = self.wrapper.read_bytes()
+        with patch.object(ownership, '_save_mark', side_effect=OSError('disk full')):
+            with self.assertRaises(OSError):
+                ownership.refresh(str(self.root), sys.executable, '/fixture/backend', 'b' * 40, 'arm64')
+        self.assertEqual((self.root / 'install.json').read_bytes(), before_mark)
+        self.assertEqual(self.wrapper.read_bytes(), before_wrapper)
+
+    def test_apply_restores_mark_when_policy_fails_after_refresh(self):
+        self.prepare(configured=False)
+        shutil.copytree(REPO / 'instll', self.root / 'checkout/instll', dirs_exist_ok=True)
+        shutil.copytree(REPO / 'tap_core', self.root / 'checkout/tap_core', dirs_exist_ok=True)
+        for name in ('fixtures/managed/page.js', 'fixtures/managed/handler.py',
+                     'fixtures/live-slice/reader.py'):
+            path = self.root / 'checkout' / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('fixture\n')
+        (self.root / 'checkout/tap').write_text('ok-a\n')
+        (self.root / 'checkout/UPDATE_MARKER').write_text('version-a\n')
+        backend = self.parent / 'fixture-backend'
+        backend.write_text('#!/bin/sh\necho "Mitmproxy: 12.2.3"\n')
+        backend.chmod(0o700)
+        staging = self.parent / 'policy-next'
+        shutil.copytree(self.root / 'checkout', staging)
+        (staging / 'UPDATE_MARKER').write_text('version-b\n')
+        before_mark = json.loads((self.root / 'install.json').read_text())
+        real_refresh = ownership.refresh
+
+        def lie_routing(*args, **kwargs):
+            data = real_refresh(*args, **kwargs)
+            return dict(data, routing='system' if before_mark['routing'] == 'explicit' else 'explicit')
+
+        with patch.object(ownership, 'refresh', side_effect=lie_routing):
+            with self.assertRaises(ValueError) as ctx:
+                ownership.apply_checkout(
+                    str(self.root), str(staging), sys.executable, str(backend),
+                    sys.executable, 'b' * 40, 'arm64', '19000')
+        self.assertIn('routing changed', str(ctx.exception))
+        self.assertEqual((self.root / 'checkout/UPDATE_MARKER').read_text().strip(), 'version-a')
+        after_mark = json.loads((self.root / 'install.json').read_text())
+        self.assertEqual(after_mark['ref'], before_mark['ref'])
+        self.assertEqual(after_mark['routing'], before_mark['routing'])
+        self.assertEqual(list(self.root.glob('checkout.prev.*')), [])
+
+    def test_ensure_profile_stopped_refuses_unknown_state(self):
+        self.prepare(configured=True)
+        shutil.copytree(REPO / 'tap_core', self.root / 'checkout/tap_core', dirs_exist_ok=True)
+        sys.path.insert(0, str(self.root / 'checkout'))
+        with patch('tap_core.runtime.MacOS.service_loaded', side_effect=OSError('launchctl down')):
+            with self.assertRaises(ValueError) as ctx:
+                ownership._ensure_profile_stopped(self.root / 'profile')
+        self.assertIn('unknown', str(ctx.exception).lower())
+
+    def test_update_uses_target_ownership_when_current_lacks_apply(self):
+        """main→B: A has no apply-checkout; B's helper still performs the swap."""
+        def pack(archive, marker, *, include_apply):
+            staging = self.parent / ('tree-' + marker)
+            if staging.exists():
+                shutil.rmtree(staging)
+            for name in ('tap', 'tap_core', 'instll', 'fixtures'):
+                source = REPO / name
+                target = staging / name
+                if source.is_dir():
+                    shutil.copytree(source, target)
+                else:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(source, target)
+            if not include_apply:
+                text = (staging / 'instll/ownership.py').read_text()
+                text = text.replace('def apply_checkout', 'def apply_checkout_gone')
+                text = text.replace("'apply-checkout'", "'apply-checkout-gone'")
+                (staging / 'instll/ownership.py').write_text(text)
+                (staging / 'instll/update').write_text('#!/bin/bash\necho old-update\nexit 1\n')
+            (staging / 'UPDATE_MARKER').write_text(marker + '\n')
+            with tarfile.open(archive, 'w:gz') as out:
+                out.add(staging, arcname='tap-core-' + marker)
+        archive_a = self.parent / 'mainlike.tar.gz'
+        archive_b = self.parent / 'with-apply.tar.gz'
+        pack(archive_a, 'version-a', include_apply=False)
+        pack(archive_b, 'version-b', include_apply=True)
+        self.assertNotIn('def apply_checkout(', (self.parent / 'tree-version-a/instll/ownership.py').read_text())
+        fake_bin = self.parent / 'download-bin-main'
+        fake_bin.mkdir()
+        curl = fake_bin / 'curl'
+        curl.write_text(
+            '#!/bin/bash\n'
+            'case "$*" in *api.github.com*) printf %s ' + 'a' * 40 + '; exit 0;; esac\n'
+            'exec /bin/cat ' + shlex.quote(str(archive_a)) + '\n')
+        curl.chmod(0o700)
+        backend = self.parent / 'backend-main'
+        backend.write_text('#!/bin/sh\necho "Mitmproxy: 12.2.3"\n')
+        backend.chmod(0o700)
+        bun = self.parent / 'bun-main'
+        bun.write_text('#!/bin/sh\necho 1.3.11\n')
+        bun.chmod(0o700)
+        # Install uses a current update script that can consume B; seed root via A archive.
+        env = {**os.environ, 'PATH': str(fake_bin) + os.pathsep + os.environ['PATH'],
+               'TAP_ROOT': str(self.root), 'TAP_BIN_DIR': str(self.wrapper.parent),
+               'TAP_PYTHON': sys.executable, 'TAP_BACKEND': str(backend), 'TAP_BUN': str(bun),
+               'TAP_SKIP_START': '1', 'TAP_ROUTING': 'explicit'}
+        installed = subprocess.run(['/bin/bash', str(REPO / 'instll/install')],
+                                   env=env, capture_output=True, text=True)
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+        # Replace installed checkout with main-like tree (no apply-checkout).
+        shutil.rmtree(self.root / 'checkout')
+        with tarfile.open(archive_a, 'r:gz') as archive:
+            archive.extractall(self.parent / 'extract-a')
+        extracted = next((self.parent / 'extract-a').iterdir())
+        extracted.rename(self.root / 'checkout')
+        self.assertNotIn('def apply_checkout(', (self.root / 'checkout/instll/ownership.py').read_text())
+        # Drop the target update script into place via env archive B, run REPO update.
+        updated = subprocess.run(['/bin/bash', str(REPO / 'instll/update')],
+                                 env={**env, 'TAP_CHECKOUT_ARCHIVE': str(archive_b),
+                                      'TAP_REF': 'b' * 40},
+                                 capture_output=True, text=True)
+        self.assertEqual(updated.returncode, 0, updated.stderr + updated.stdout)
+        self.assertEqual((self.root / 'checkout/UPDATE_MARKER').read_text().strip(), 'version-b')
+        self.assertIn('def apply_checkout(', (self.root / 'checkout/instll/ownership.py').read_text())
 
     def test_update_refuses_while_root_lock_held(self):
         self.prepare(configured=True)
@@ -350,6 +492,9 @@ class InstallerTests(unittest.TestCase):
             path.write_text('fixture\n')
         (self.root / 'checkout/tap').write_text('ok-a\n')
         (self.root / 'checkout/UPDATE_MARKER').write_text('version-a\n')
+        backend = self.parent / 'fixture-backend-restore'
+        backend.write_text('#!/bin/sh\necho "Mitmproxy: 12.2.3"\n')
+        backend.chmod(0o700)
         staging = self.parent / 'broken-next'
         shutil.copytree(self.root / 'checkout', staging)
         (staging / 'UPDATE_MARKER').write_text('version-b\n')
@@ -357,7 +502,7 @@ class InstallerTests(unittest.TestCase):
         before = (self.root / 'checkout/UPDATE_MARKER').read_text()
         result = subprocess.run(
             [sys.executable, str(self.root / 'checkout/instll/ownership.py'), 'apply-checkout',
-             str(self.root), str(staging), sys.executable, '/fixture/backend', sys.executable,
+             str(self.root), str(staging), sys.executable, str(backend), sys.executable,
              'b' * 40, 'arm64', '19000'],
             capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)

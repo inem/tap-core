@@ -119,14 +119,25 @@ command. For an owned install, use the in-place updater:
 TAP_REF=<branch-or-commit> bash "$HOME/.tap-core/checkout/instll/update"
 ```
 
-Update stops a running profile when needed, stages the new checkout, then swaps
-it under the install-root and profile locks (same family as uninstall). The
-previous checkout remains as `checkout.prev.<pid>` until managed rewrite and
-ownership refresh both succeed; on failure it is restored and bindings are
-repaired. Routing mode and the CA grant digest must stay unchanged (#6 proxy
-policy for this slice). Failure retains the installation for recovery. Update is
-**not** purge/reinstall and does not claim Local Capture, clean-Mac, or browser
-HTTPS-without-`-k`.
+Update stops a confirmed-running profile under the same locks (or refuses when
+process state cannot be inspected), stages the new checkout, then swaps it under
+the install-root and profile locks. The previous checkout remains as
+`checkout.prev.<pid>` until managed rewrite, profile backend/bindings refresh,
+ownership refresh and routing/CA checks all succeed; on any failure checkout and
+wrapper/mark are restored. Runtime settings from `managed/` are written into the
+working `profile.json` (backend/bridge/components).
+
+Existing `main` installs without `instll/update` can still move forward by
+running the **target** update script:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/inem/tap-core/<ref>/instll/update \
+  | TAP_ROOT="$HOME/.tap-core" TAP_REF=<ref> bash
+```
+
+The target checkout supplies `apply-checkout`; the old tree does not need it.
+Failure retains the installation for recovery. Update is **not** purge/reinstall
+and does not claim Local Capture, clean-Mac, or browser HTTPS-without-`-k`.
 
 Choose a new `TAP_ROOT` and free `TAP_BIN_DIR` only for an independent parallel
 installation. The default command name must be free: an existing file or symlink
@@ -137,7 +148,9 @@ Uninstall uses the recorded command location, so it does not depend on repeating
 
 Interrupted installs retain their partial root for inspection; they do not silently overwrite it on retry. Older experimental installs lacking the ownership record/pointer require manual inspection and recovery, not a guessed purge. The installer never interprets inability to inspect a service as proof that it is stopped.
 
-The installation and its declared code/runtimes must stay available until successful off/uninstall. This first slice has no in-place updater. Startup failure can require recovery via the retained wrapper; it is not reported as a completed install.
+The installation and its declared code/runtimes must stay available until successful
+off/uninstall. Startup failure can require recovery via the retained wrapper; it is
+not reported as a completed install.
 
 ## Managed runtime check
 

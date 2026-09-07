@@ -82,7 +82,7 @@ def verify_owned(root):
 
 
 def refresh(root, python, backend, ref, arch):
-    """Rewrite wrapper/mark after a successful checkout swap; preserve grants."""
+    """Rewrite wrapper/mark; roll both back if either step fails."""
     root = canonical(root)
     marker, data = _load_mark(root)
     verify_owned(root)
@@ -91,79 +91,236 @@ def refresh(root, python, backend, ref, arch):
     require(Path(python).is_file(), 'Updated interpreter is missing')
     code = wrapper_code(python, root)
     wrapper = Path(data['wrapper'])
+    previous_mark = marker.read_bytes()
+    previous_wrapper = wrapper.read_bytes()
+    previous_interpreter = (root / 'interpreter').read_bytes()
+    updated = dict(data, python=python, backend=backend, ref=ref, arch=arch,
+                   wrapper_sha256=hashlib.sha256(code.encode()).hexdigest())
     temporary = wrapper.with_name(wrapper.name + '.tmp')
-    temporary.write_text(code)
-    temporary.chmod(0o700)
-    temporary.replace(wrapper)
-    data['python'] = python
-    data['backend'] = backend
-    data['ref'] = ref
-    data['arch'] = arch
-    data['wrapper_sha256'] = hashlib.sha256(code.encode()).hexdigest()
-    _save_mark(marker, data)
-    (root / 'interpreter').write_text(python + '\n')
-    return data
+    try:
+        temporary.write_text(code)
+        temporary.chmod(0o700)
+        temporary.replace(wrapper)
+        _save_mark(marker, updated)
+        (root / 'interpreter').write_text(python + '\n')
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        wrapper.write_bytes(previous_wrapper)
+        marker.write_bytes(previous_mark)
+        (root / 'interpreter').write_bytes(previous_interpreter)
+        raise
+    return updated
 
 
-def apply_checkout(root, new_checkout, python, backend, bun, ref, arch, hub_port):
-    """Swap checkout under install+profile locks; keep backup until refresh succeeds."""
-    import subprocess
+def assert_idle(root):
+    """Fail if install root or profile lock is already held (different process)."""
     root = canonical(root)
     verify_owned(root)
-    new_checkout = canonical(Path(new_checkout))
+    sys.path.insert(0, str(root / 'checkout'))
+    from tap_core.runtime import profile_lock
+    profile_root = root / 'profile'
+    with profile_lock(root, busy_message='Another install/update holds this root'):
+        if (profile_root / 'profile.json').is_file():
+            with profile_lock(profile_root, busy_message='Another command is changing this profile'):
+                pass
+    return {'ok': True, 'root': str(root)}
+
+
+def _ensure_profile_stopped(profile_root):
+    """Refuse update unless the profile service is confirmed stopped."""
+    from tap_core.runtime import MacOS, Profile, TapError
+    from tap_core.routing import select_routing
+    from tap_core.cli import mutate
+    try:
+        profile = Profile.load(profile_root)
+        adapter = MacOS()
+    except (TapError, OSError, ValueError) as error:
+        raise ValueError('Cannot inspect profile service state; refusing update: ' + str(error)) from error
+    try:
+        loaded = adapter.service_loaded(profile)
+        owned = adapter.owns_port(profile) if loaded else False
+        opened = adapter.port_open(profile)
+    except (TapError, OSError) as error:
+        raise ValueError('Process state is unknown; refusing update: ' + str(error)) from error
+    if not loaded and not owned and not opened:
+        return False
+    try:
+        with select_routing(profile, adapter).mutation_lock():
+            mutate('off', profile, adapter)
+    except (TapError, OSError, ValueError) as error:
+        raise ValueError('Cannot stop profile before update: ' + str(error)) from error
+    try:
+        loaded = adapter.service_loaded(profile)
+        owned = adapter.owns_port(profile) if loaded else False
+        opened = adapter.port_open(profile)
+    except (TapError, OSError) as error:
+        raise ValueError('Process state is unknown after stop; refusing update: ' + str(error)) from error
+    if loaded or owned or opened:
+        raise ValueError('Profile still running after stop; refusing update')
+    return True
+
+
+def _propagate_profile(root, profile_root, backend, hub_port):
+    """Point the working profile at the new backend and managed bindings."""
+    from tap_core.runtime import Profile
+    bridge = json.loads((root / 'managed/bridge.json').read_text())
+    components = json.loads((root / 'managed/components.json').read_text())
+    require(int(bridge.get('hub_port', -1)) == int(hub_port), 'Managed hub_port mismatch')
+    profile = Profile.load(profile_root)
+    profile.backend = backend
+    profile.bridge = bridge
+    profile.components = components
+    profile.save()
+
+
+def _promote_staged(staged, destination):
+    """Move staged path into destination; return previous path (kept until success)."""
+    staged, destination = Path(staged), Path(destination)
+    require(staged.exists(), 'Staged runtime missing: ' + str(staged))
+    previous = destination.with_name(destination.name + '.prev.' + str(os.getpid()))
+    if previous.exists():
+        shutil.rmtree(previous) if previous.is_dir() else previous.unlink()
+    kept = None
+    if destination.exists():
+        destination.rename(previous)
+        kept = previous
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        staged.rename(destination)
+    except Exception:
+        if kept is not None and not destination.exists():
+            kept.rename(destination)
+        raise
+    return kept
+
+
+def _drop_path(path):
+    if path is None:
+        return
+    path = Path(path)
+    if path.is_dir():
+        shutil.rmtree(path, ignore_errors=True)
+    elif path.exists():
+        path.unlink(missing_ok=True)
+
+
+def _restore_path(previous, destination):
+    destination = Path(destination)
+    if destination.exists():
+        shutil.rmtree(destination) if destination.is_dir() else destination.unlink(missing_ok=True)
+    if previous is not None and Path(previous).exists():
+        Path(previous).rename(destination)
+
+
+def apply_checkout(root, new_checkout, python, backend, bun, ref, arch, hub_port,
+                   staged_python='', staged_backend='', staged_bun=''):
+    """Swap checkout under install+profile locks; keep backup until refresh+policy OK.
+
+    Optional staged_* paths are prepared outside the install root and promoted only
+    while locks are held, so update does not mutate the root past a held lock.
+    """
+    import subprocess
+    root = canonical(root)
+    before = verify_owned(root)
+    routing_before = before['routing']
+    ca_before = ((before.get('grants') or {}).get('ca') or {}).get('sha256') or ''
+    new_checkout = Path(new_checkout).resolve()
     require((new_checkout / 'tap').is_file(), 'New checkout missing tap entrypoint')
+    require((new_checkout / 'instll/ownership.py').is_file(), 'New checkout missing ownership helper')
     require(str(hub_port).isdigit(), 'hub_port must be an integer')
     hub_port = int(hub_port)
-    python = str(Path(python).absolute())
-    bun = str(Path(bun).absolute())
-    require(Path(bun).is_file(), 'Bun executable missing')
+    staged_python = staged_python or ''
+    staged_backend = staged_backend or ''
+    staged_bun = staged_bun or ''
     checkout = root / 'checkout'
     backup = root / ('checkout.prev.' + str(os.getpid()))
     profile_root = root / 'profile'
     require(not backup.exists(), 'Leftover checkout backup present; inspect before update')
+    bun_for_restore = bun
+    managed_components = root / 'managed/components.json'
+    if managed_components.is_file():
+        bun_for_restore = json.loads(managed_components.read_text()).get('bun') or bun
 
-    # Locks come from the currently installed checkout (pre-swap).
     sys.path.insert(0, str(checkout))
     from tap_core.runtime import profile_lock
 
-    def write_managed(target_checkout):
+    def write_managed(target_checkout, python_path, bun_path):
         helper = target_checkout / 'instll/write_managed.py'
         require(helper.is_file(), 'write_managed helper missing in checkout')
         result = subprocess.run(
-            [python, str(helper), str(root), str(target_checkout), python, bun,
+            [python_path, str(helper), str(root), str(target_checkout), python_path, bun_path,
              str(hub_port), str(profile_root)],
             capture_output=True, text=True)
         if result.returncode:
             raise ValueError('write_managed failed: ' + (result.stderr or result.stdout).strip())
 
+    was_running = False
+    previous_python = previous_backend = previous_bun = None
     with profile_lock(root, busy_message='Another install/update holds this root'):
         configured = (profile_root / 'profile.json').is_file()
         with (profile_lock(profile_root, busy_message='Another command is changing this profile')
               if configured else nullcontext()):
-            checkout.rename(backup)
+            if configured:
+                was_running = _ensure_profile_stopped(profile_root)
             try:
-                new_checkout.rename(checkout)
-            except Exception:
-                if not checkout.exists() and backup.exists():
-                    backup.rename(checkout)
-                raise
-            completed = False
-            try:
-                write_managed(checkout)
+                if staged_python:
+                    previous_python = _promote_staged(staged_python, root / 'python')
+                    python = str(root / 'python/bin/python3')
+                else:
+                    python = str(Path(python).absolute())
+                if staged_backend:
+                    previous_backend = _promote_staged(staged_backend, root / 'backend/mitmproxy.app')
+                    backend = str(root / 'backend/mitmproxy.app/Contents/MacOS/mitmdump')
+                else:
+                    backend = str(Path(backend).absolute())
+                if staged_bun:
+                    previous_bun = _promote_staged(staged_bun, root / 'bun/bin/bun')
+                    bun = str(root / 'bun/bin/bun')
+                    Path(bun).chmod(0o700)
+                else:
+                    bun = str(Path(bun).absolute())
+                require(Path(python).is_file(), 'Updated interpreter is missing')
+                require(Path(bun).is_file(), 'Bun executable missing')
+                require(Path(backend).exists(), 'Backend path missing')
+                checkout.rename(backup)
+                try:
+                    new_checkout.rename(checkout)
+                except Exception:
+                    if not checkout.exists() and backup.exists():
+                        backup.rename(checkout)
+                    raise
+                write_managed(checkout, python, bun)
+                if configured:
+                    _propagate_profile(root, profile_root, backend, hub_port)
                 data = refresh(root, python, backend, ref, arch)
-                completed = True
+                require(data['routing'] == routing_before, 'routing changed during update')
+                ca_after = ((data.get('grants') or {}).get('ca') or {}).get('sha256') or ''
+                require(ca_after == ca_before, 'CA grant fingerprint changed during update')
                 shutil.rmtree(backup)
+                _drop_path(previous_python)
+                _drop_path(previous_backend)
+                _drop_path(previous_bun)
             except Exception:
-                if checkout.exists():
+                if checkout.exists() and backup.exists():
                     shutil.rmtree(checkout)
-                if backup.exists():
+                if backup.exists() and not checkout.exists():
                     backup.rename(checkout)
+                _restore_path(previous_python, root / 'python')
+                _restore_path(previous_backend, root / 'backend/mitmproxy.app')
+                _restore_path(previous_bun, root / 'bun/bin/bun')
+                if checkout.exists():
                     try:
-                        write_managed(checkout)
+                        write_managed(checkout, before['python'], bun_for_restore)
+                    except Exception:
+                        pass
+                    try:
+                        refresh(root, before['python'], before['backend'],
+                                before['ref'], before['arch'])
                     except Exception:
                         pass
                 raise
             require(not backup.exists(), 'Checkout backup survived a successful update')
+    data['was_running'] = was_running
     return data
 
 
@@ -311,14 +468,21 @@ def main():
         elif sys.argv[1] == 'verify':
             verify_owned(sys.argv[2])
             print(json.dumps({'ok': True, 'root': sys.argv[2]}))
+        elif sys.argv[1] == 'assert-idle':
+            print(json.dumps(assert_idle(sys.argv[2])))
         elif sys.argv[1] == 'refresh':
             data = refresh(*sys.argv[2:7])
             print(json.dumps({'ok': True, 'ref': data['ref'], 'routing': data['routing'],
                               'grants': data.get('grants') or {}}))
         elif sys.argv[1] == 'apply-checkout':
-            data = apply_checkout(*sys.argv[2:10])
+            # Optional trailing staged runtime paths (empty string = already installed).
+            args = sys.argv[2:13]
+            while len(args) < 11:
+                args.append('')
+            data = apply_checkout(*args[:11])
             print(json.dumps({'ok': True, 'ref': data['ref'], 'routing': data['routing'],
-                              'grants': data.get('grants') or {}, 'backup_retained': False}))
+                              'grants': data.get('grants') or {}, 'backup_retained': False,
+                              'was_running': data.get('was_running')}))
         elif sys.argv[1] == 'grant-sudoers':
             grant_sudoers(*sys.argv[2:])
         elif sys.argv[1] == 'grant-ca':

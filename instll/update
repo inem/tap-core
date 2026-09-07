@@ -4,6 +4,9 @@
 # #6 proxy policy for this slice: routing mode and CA grant fingerprint stay put.
 #
 #   TAP_REF=<commit-or-branch> bash "$HOME/.tap-core/checkout/instll/update"
+# From an older main without update:
+#   curl -fsSL https://raw.githubusercontent.com/inem/tap-core/<ref>/instll/update \
+#     | TAP_ROOT="$HOME/.tap-core" TAP_REF=<ref> bash
 # Local archive substitute (tests): TAP_CHECKOUT_ARCHIVE=/path/to.tar.gz
 set -euo pipefail
 
@@ -26,6 +29,15 @@ PYTHON_DIR="$ROOT/python"
 BUN_DIR="$ROOT/bun"
 PROFILE="$ROOT/profile"
 MARK="$ROOT/install.json"
+
+# All downloads/staging stay outside the install root until apply-checkout holds locks.
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/tap-core-update.XXXXXX")"
+STAGE=""
+STAGED_PYTHON=""
+STAGED_BACKEND=""
+STAGED_BUN=""
+cleanup() { rm -rf "$WORK" ${STAGE:+"$STAGE"}; }
+trap cleanup EXIT
 
 fail() { echo "tap-core: $*; installation retained" >&2; exit 1; }
 info() { echo "tap-core: $*"; }
@@ -59,20 +71,6 @@ CA_BEFORE="$(printf '%s' "$BEFORE" | "$PY" -c 'import json,sys; g=json.load(sys.
 
 "$PY" "$CHECKOUT/instll/ownership.py" verify "$ROOT" >/dev/null
 
-WAS_RUNNING=0
-if [ -f "$PROFILE/profile.json" ] && [ "$SKIP_START" != 1 ]; then
-  if "$PY" "$CHECKOUT/tap" --profile "$PROFILE" status 2>/dev/null | "$PY" -c 'import json,sys
-try:
-    s=json.load(sys.stdin)
-except Exception:
-    raise SystemExit(1)
-raise SystemExit(0 if s.get("port_owned") else 1)'; then
-    WAS_RUNNING=1
-    info "stopping profile before checkout swap"
-    "$PY" "$CHECKOUT/tap" --profile "$PROFILE" off
-  fi
-fi
-
 python_ok() {
   local py="$1"
   [ -n "$py" ] && [ -x "$py" ] || return 1
@@ -91,20 +89,17 @@ ensure_python() {
   fi
   local url tmp inner
   url="https://github.com/astral-sh/python-build-standalone/releases/download/${PYTHON_BUILD}/cpython-${PYTHON_VERSION}+${PYTHON_BUILD}-${cpython_arch}-apple-darwin-install_only.tar.gz"
-  tmp="$(mktemp -d "$ROOT/python-download.XXXXXX")"
-  info "downloading CPython ${PYTHON_VERSION}"
+  tmp="$(mktemp -d "$WORK/python.XXXXXX")"
+  info "downloading CPython ${PYTHON_VERSION} (staged outside install root)"
   curl -fsSL "$url" | tar -xz -C "$tmp"
   if [ -x "$tmp/python/bin/python3" ]; then
-    rm -rf "$PYTHON_DIR"
-    mv "$tmp/python" "$PYTHON_DIR"
+    STAGED_PYTHON="$tmp/python"
   else
     inner="$(find "$tmp" -mindepth 1 -maxdepth 1 -type d | head -1)"
     [ -n "$inner" ] && [ -x "$inner/bin/python3" ] || fail "portable CPython layout unexpected"
-    rm -rf "$PYTHON_DIR"
-    mv "$inner" "$PYTHON_DIR"
+    STAGED_PYTHON="$inner"
   fi
-  rm -rf "$tmp"
-  PYTHON="$PYTHON_DIR/bin/python3"
+  PYTHON="$STAGED_PYTHON/bin/python3"
   python_ok "$PYTHON" || fail "portable CPython failed"
 }
 
@@ -123,17 +118,14 @@ ensure_bun() {
     [ "$current" = "$BUN_VERSION" ] && return
   fi
   url="https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-${bun_asset}.zip"
-  tmp="$(mktemp -d "$ROOT/bun-download.XXXXXX")"
+  tmp="$(mktemp -d "$WORK/bun.XXXXXX")"
   zip="$tmp/bun.zip"
-  info "downloading Bun $BUN_VERSION"
+  info "downloading Bun $BUN_VERSION (staged outside install root)"
   curl -fsSL "$url" -o "$zip"
   ditto -x -k "$zip" "$tmp/extract"
   [ -x "$tmp/extract/bun-${bun_asset}/bun" ] || fail "Bun binary missing"
-  rm -rf "$BUN_DIR/bin"
-  mkdir -p "$BUN_DIR/bin"
-  mv "$tmp/extract/bun-${bun_asset}/bun" "$BUN"
-  chmod 700 "$BUN"
-  rm -rf "$tmp"
+  STAGED_BUN="$tmp/extract/bun-${bun_asset}/bun"
+  BUN="$STAGED_BUN"
 }
 
 ensure_backend() {
@@ -151,19 +143,18 @@ ensure_backend() {
     [ "$current" = "$BACKEND_VERSION" ] && return
   fi
   url="https://downloads.mitmproxy.org/${BACKEND_VERSION}/mitmproxy-${BACKEND_VERSION}-macos-${mitm_arch}.tar.gz"
-  tmp="$(mktemp -d "$ROOT/backend-download.XXXXXX")"
-  info "downloading mitmproxy $BACKEND_VERSION"
+  tmp="$(mktemp -d "$WORK/backend.XXXXXX")"
+  info "downloading mitmproxy $BACKEND_VERSION (staged outside install root)"
   curl -fsSL "$url" | tar -xz -C "$tmp"
   app="$tmp/mitmproxy.app"
   [ -x "$app/Contents/MacOS/mitmdump" ] || fail "mitmproxy.app missing"
-  rm -rf "$BACKEND_DIR/mitmproxy.app"
-  mv "$app" "$BACKEND_DIR/mitmproxy.app"
-  rm -rf "$tmp"
+  STAGED_BACKEND="$app"
+  BACKEND="$STAGED_BACKEND/Contents/MacOS/mitmdump"
 }
 
 stage_checkout() {
-  local url stage inner
-  STAGE="$(mktemp -d "$ROOT/checkout-stage.XXXXXX")"
+  local url inner
+  STAGE="$(mktemp -d "$WORK/checkout.XXXXXX")"
   if [ -n "$LOCAL_ARCHIVE" ]; then
     [ -f "$LOCAL_ARCHIVE" ] || fail "TAP_CHECKOUT_ARCHIVE missing: $LOCAL_ARCHIVE"
     if [[ "$REF" =~ ^[0-9a-f]{40}$ ]]; then
@@ -186,16 +177,32 @@ stage_checkout() {
   NEW_CHECKOUT="$inner"
 }
 
+# Stage target code first so main→B can use B's ownership (assert-idle/apply).
+stage_checkout
+APPLY_HELPER="$NEW_CHECKOUT/instll/ownership.py"
+[ -f "$APPLY_HELPER" ] || fail "target checkout missing ownership helper"
+grep -q 'def apply_checkout' "$APPLY_HELPER" || fail "target checkout cannot apply updates; choose a newer TAP_REF"
+grep -q 'def assert_idle' "$APPLY_HELPER" || fail "target checkout missing assert-idle; choose a newer TAP_REF"
+
+# Refuse before any install-root mutation when another command holds locks.
+info "checking install/profile locks via target ownership"
+"$PY" "$APPLY_HELPER" assert-idle "$ROOT" >/dev/null \
+  || fail "install is busy; another command holds the root/profile lock"
+
 ensure_python
 ensure_bun
 ensure_backend
-stage_checkout
 
 HUB_PORT="$("$PY" -c 'import json,sys; print(int(json.load(open(sys.argv[1]))["port"])+1)' "$MARK")"
 info "applying checkout $REF_BEFORE → $RESOLVED_REF under install/profile locks"
-"$PYTHON" "$CHECKOUT/instll/ownership.py" apply-checkout \
-  "$ROOT" "$NEW_CHECKOUT" "$PYTHON" "$BACKEND" "$BUN" "$RESOLVED_REF" "$arch" "$HUB_PORT" >/dev/null
-rm -rf "$STAGE"
+APPLY_JSON="$("$PYTHON" "$APPLY_HELPER" apply-checkout \
+  "$ROOT" "$NEW_CHECKOUT" "$PYTHON" "$BACKEND" "$BUN" "$RESOLVED_REF" "$arch" "$HUB_PORT" \
+  "${STAGED_PYTHON}" "${STAGED_BACKEND}" "${STAGED_BUN}")"
+STAGE=""  # moved into place; do not delete NEW_CHECKOUT via trap
+WAS_RUNNING="$("$PY" -c 'import json,sys; print(1 if json.load(sys.stdin).get("was_running") else 0)' <<<"$APPLY_JSON")"
+# Runtimes may have been promoted from the work dir; re-read final paths.
+IFS= read -r PYTHON < "$ROOT/interpreter" || fail "Cannot read interpreter after update"
+BACKEND="$(printf '%s' "$(cat "$MARK")" | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["backend"])')"
 
 AFTER="$(cat "$MARK")"
 ROUTING_AFTER="$(printf '%s' "$AFTER" | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["routing"])')"
