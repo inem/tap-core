@@ -1,0 +1,253 @@
+{
+  "source_file": "tap",
+  "source_sha256": "a29a7ca35e3eff188cdf037eb7a59ae4518ed73fab02f09731252756b45d007e",
+  "scope": "Original on/off/install dispatch; lifecycle helpers and OS operations substituted",
+  "live_integration": "not_tested",
+  "cases": [
+    {
+      "name": "on_success",
+      "status": "verified_fixture",
+      "exit_code": 0,
+      "events": [
+        "start",
+        "arm",
+        "flows"
+      ],
+      "observed_output_marker": "ON —"
+    },
+    {
+      "name": "on_start_failure",
+      "status": "verified_fixture",
+      "exit_code": 1,
+      "events": [
+        "start"
+      ],
+      "observed_output_marker": "proxy untouched"
+    },
+    {
+      "name": "on_arm_failure",
+      "status": "known_gap",
+      "exit_code": 1,
+      "events": [
+        "start",
+        "arm"
+      ],
+      "observed_output_marker": "proxy is off, net safe",
+      "gap": "Arm failure returns without attempting rollback; the off claim is unverified."
+    },
+    {
+      "name": "on_probe_failure",
+      "status": "verified_fixture",
+      "exit_code": 1,
+      "events": [
+        "start",
+        "arm",
+        "flows",
+        "disarm"
+      ],
+      "observed_output_marker": "disarmed, net safe"
+    },
+    {
+      "name": "on_rollback_failure",
+      "status": "known_gap",
+      "exit_code": 1,
+      "events": [
+        "start",
+        "arm",
+        "flows",
+        "disarm"
+      ],
+      "observed_output_marker": "disarmed, net safe",
+      "gap": "Failed rollback is still reported as disarmed and safe."
+    },
+    {
+      "name": "off_success",
+      "status": "verified_fixture",
+      "exit_code": 0,
+      "events": [
+        "disarm",
+        "stop"
+      ],
+      "observed_output_marker": "recorder may respawn"
+    },
+    {
+      "name": "off_disarm_failure",
+      "status": "verified_fixture",
+      "exit_code": 1,
+      "events": [
+        "disarm"
+      ],
+      "observed_output_marker": "REFUSING to kill"
+    },
+    {
+      "name": "off_stop_failure",
+      "status": "verified_fixture",
+      "exit_code": 0,
+      "events": [
+        "disarm",
+        "stop"
+      ],
+      "observed_output_marker": "traffic goes direct"
+    },
+    {
+      "name": "install_missing_backend",
+      "status": "verified_fixture",
+      "exit_code": 1,
+      "events": [
+        "backend"
+      ],
+      "observed_output_marker": "mitmproxy not installed"
+    },
+    {
+      "name": "install_success",
+      "status": "verified_fixture",
+      "exit_code": 0,
+      "events": [
+        "backend",
+        "mkdir",
+        "link",
+        "plist",
+        "launchctl:bootout",
+        "stop",
+        "launchctl:bootstrap",
+        "port",
+        "launchctl:print",
+        "permission",
+        "armed",
+        "certificate"
+      ],
+      "observed_output_marker": "loaded, capture live"
+    },
+    {
+      "name": "install_start_failure",
+      "status": "known_gap",
+      "exit_code": 0,
+      "events": [
+        "backend",
+        "mkdir",
+        "link",
+        "plist",
+        "launchctl:bootout",
+        "stop",
+        "launchctl:bootstrap",
+        "port",
+        "port",
+        "port",
+        "port",
+        "port",
+        "port",
+        "port",
+        "port",
+        "port",
+        "port",
+        "port",
+        "port",
+        "launchctl:print",
+        "disarm",
+        "permission",
+        "armed",
+        "certificate"
+      ],
+      "observed_output_marker": "service didn't load",
+      "gap": "Failed service startup still exits zero."
+    },
+    {
+      "name": "install_rollback_failure",
+      "status": "known_gap",
+      "exit_code": 0,
+      "events": [
+        "backend",
+        "mkdir",
+        "link",
+        "plist",
+        "launchctl:bootout",
+        "stop",
+        "launchctl:bootstrap",
+        "port",
+        "port",
+        "port",
+        "port",
+        "port",
+        "port",
+        "port",
+        "port",
+        "port",
+        "port",
+        "port",
+        "port",
+        "launchctl:print",
+        "disarm",
+        "permission",
+        "armed",
+        "certificate"
+      ],
+      "observed_output_marker": "proxy disarmed (traffic direct",
+      "gap": "Failed startup and failed rollback still exit zero and claim direct traffic."
+    },
+    {
+      "name": "install_port_without_service",
+      "status": "known_gap",
+      "exit_code": 0,
+      "events": [
+        "backend",
+        "mkdir",
+        "link",
+        "plist",
+        "launchctl:bootout",
+        "stop",
+        "launchctl:bootstrap",
+        "port",
+        "launchctl:print",
+        "disarm",
+        "permission",
+        "armed",
+        "certificate"
+      ],
+      "observed_output_marker": "service didn't load",
+      "gap": "Port-only liveness is correctly rejected, but the failed install exits zero."
+    },
+    {
+      "name": "install_plist_write_failure",
+      "status": "known_gap",
+      "exit_code": 0,
+      "events": [
+        "backend",
+        "mkdir",
+        "link",
+        "plist",
+        "launchctl:bootout",
+        "stop",
+        "launchctl:bootstrap",
+        "port",
+        "launchctl:print",
+        "permission",
+        "armed",
+        "certificate"
+      ],
+      "observed_output_marker": "loaded, capture live",
+      "gap": "Plist write failure does not prevent bootstrap or a success claim if later checks pass."
+    },
+    {
+      "name": "install_setup_instructions",
+      "status": "verified_fixture",
+      "exit_code": 0,
+      "events": [
+        "backend",
+        "mkdir",
+        "link",
+        "plist",
+        "launchctl:bootout",
+        "stop",
+        "launchctl:bootstrap",
+        "port",
+        "launchctl:print",
+        "permission",
+        "armed",
+        "certificate"
+      ],
+      "observed_output_marker": "trust the cert"
+    }
+  ],
+  "matched_cases": 15,
+  "known_gap_cases": 6
+}
