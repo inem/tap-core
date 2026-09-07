@@ -40,6 +40,8 @@ architecture by default.
 
 Read [TECHNOLOGY.md](TECHNOLOGY.md) for release requirements, working stack choices
 and unresolved packaging decisions before starting an implementation task.
+Use the [review lenses](docs/review-planes.md) to check the affected responsibility,
+state, access and delivery boundaries and the evidence behind each claim.
 
 ## License
 
