@@ -112,7 +112,24 @@ The installer prints these hints itself. `doctor` reports `sudoers.ready` for sy
 
 ## Failure and ownership contract
 
-A repeated install **refuses before downloads or replacement**. It is not an update command. Choose a new `TAP_ROOT` and free `TAP_BIN_DIR` for an independent installation. The default command name must be free: an existing file or symlink (including a legacy TAP wrapper) is never overwritten. Environment overrides must apply to `bash`, not just the left side of a download pipe.
+A repeated install **refuses before downloads or replacement**. It is not an update
+command. For an owned install, use the in-place updater:
+
+```sh
+TAP_REF=<branch-or-commit> bash "$HOME/.tap-core/checkout/instll/update"
+```
+
+Update stops a running profile when needed, swaps `checkout/` (and refreshes
+managed bindings / pinned runtimes), rewrites the owned `tap` wrapper, and keeps
+`profile/`, pack data and recorded grants (CA / sudoers). Routing mode and the CA
+grant digest must stay unchanged (#6 proxy policy for this slice). Failure retains
+the installation for recovery. Update is **not** purge/reinstall and does not
+claim Local Capture, clean-Mac, or browser HTTPS-without-`-k`.
+
+Choose a new `TAP_ROOT` and free `TAP_BIN_DIR` only for an independent parallel
+installation. The default command name must be free: an existing file or symlink
+(including a legacy TAP wrapper) is never overwritten. Environment overrides must
+apply to `bash`, not just the left side of a download pipe.
 
 Uninstall uses the recorded command location, so it does not depend on repeating `TAP_BIN_DIR`. It verifies ownership and uses Core's profile/network locks and recovery-first lifecycle through removal. A failed restore/stop, missing interpreter/configuration, or replaced command stops removal with a nonzero exit and preserves recovery files. Default uninstall removes the owned service/command and retains code/data; `TAP_PURGE=1` also removes the installation only after successful cleanup. An explicit external `TAP_PYTHON` or `TAP_BACKEND` remains untouched.
 
@@ -144,7 +161,14 @@ install root unless uninstall cleanup is verified.
 
 - Signed/notarized release package and locked matrix of OS/browser versions
 - Automatic CA trust via `finish-setup`; verified browser HTTPS matrix and CA removal ownership still open
-- In-place update preserving profile/packs/data — next delivery slice
 - System-routing recovery acceptance on a clean machine
 - Full live coexistence acceptance with a parallel legacy TAP install; file/path conflicts are covered by controlled regressions
 - Update channel that is not a fresh archive of a git ref
+
+Hermetic update A→B (profile/grants/routing preserved):
+
+```sh
+python3 tools/check_installer_update.py \
+  --output docs/results/installer-update-a-to-b.json
+python3 -m unittest tests.test_installer
+```

@@ -1,0 +1,23 @@
+{
+  "scope": "hermetic local-archive update A\u2192B; explicit routing; no network mutation, Local Capture, or browser HTTPS",
+  "commit": "23ba350da0cc1fe927df348908040bdba7515801",
+  "update": {
+    "ref_before": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "ref_after": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "checkout_marker": "version-b"
+  },
+  "policy_proxy_hash6": {
+    "routing_unchanged": true,
+    "routing": "explicit",
+    "ca_grant_unchanged": true,
+    "profile_data_retained": true,
+    "local_capture": false
+  },
+  "environment": {
+    "python": "3.14.6",
+    "platform": "macOS-15.6.1-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "mac_ver": "15.6.1"
+  },
+  "wrapper_sha_matches": true
+}

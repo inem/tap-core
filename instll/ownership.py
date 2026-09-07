@@ -1,4 +1,4 @@
-"""Ownership and removal for the first installer; no runtime update protocol."""
+"""Ownership, removal and in-place update for the first installer."""
 from contextlib import nullcontext
 import hashlib
 import json
@@ -20,6 +20,13 @@ def canonical(path):
     return path
 
 
+
+def wrapper_code(python, root):
+    return ('#!/bin/bash\nexec '
+            + shlex.join([python, str(Path(root) / 'checkout/tap'), '--profile', str(Path(root) / 'profile')])
+            + ' "$@"\n')
+
+
 def record(args):
     root, wrapper, python, backend, repo, ref, arch, port, routing, skip = args
     root, wrapper = Path(root).resolve(), Path(wrapper).parent.resolve() / Path(wrapper).name
@@ -27,7 +34,7 @@ def record(args):
     require('\n' not in python, 'Interpreter path cannot contain a newline')
     require(not wrapper.exists() and not wrapper.is_symlink(), 'Command path is already occupied')
     require(not (root / 'install.json').exists(), 'Install ownership record already exists')
-    code = '#!/bin/bash\nexec ' + shlex.join([python, str(root / 'checkout/tap'), '--profile', str(root / 'profile')]) + ' "$@"\n'
+    code = wrapper_code(python, root)
     data = {'version': 1, 'root': str(root), 'wrapper': str(wrapper), 'python': python,
             'backend': backend, 'repo': repo, 'ref': ref, 'arch': arch, 'port': int(port),
             'routing': routing, 'profile_requested': skip != '1',
@@ -58,6 +65,44 @@ def _save_mark(marker, data):
     temporary.write_text(json.dumps(data, indent=2) + '\n')
     temporary.chmod(0o600)
     temporary.replace(marker)
+
+
+
+def verify_owned(root):
+    """Confirm install.json + wrapper still belong to this root."""
+    root = canonical(root)
+    marker, data = _load_mark(root)
+    wrapper = Path(data['wrapper'])
+    require(not wrapper.is_symlink(), 'Command path is a symlink; refusing update')
+    require(wrapper.is_file(), 'Owned command is missing; refusing update')
+    require(hashlib.sha256(wrapper.read_bytes()).hexdigest() == data['wrapper_sha256'],
+            'Command was replaced by another owner; refusing update')
+    require(data.get('routing') in ('explicit', 'system'), 'Invalid routing in ownership record')
+    return data
+
+
+def refresh(root, python, backend, ref, arch):
+    """Rewrite wrapper/mark after a successful checkout swap; preserve grants."""
+    root = canonical(root)
+    marker, data = _load_mark(root)
+    verify_owned(root)
+    python = str(Path(python).absolute())
+    require('\n' not in python, 'Interpreter path cannot contain a newline')
+    require(Path(python).is_file(), 'Updated interpreter is missing')
+    code = wrapper_code(python, root)
+    wrapper = Path(data['wrapper'])
+    temporary = wrapper.with_name(wrapper.name + '.tmp')
+    temporary.write_text(code)
+    temporary.chmod(0o700)
+    temporary.replace(wrapper)
+    data['python'] = python
+    data['backend'] = backend
+    data['ref'] = ref
+    data['arch'] = arch
+    data['wrapper_sha256'] = hashlib.sha256(code.encode()).hexdigest()
+    _save_mark(marker, data)
+    (root / 'interpreter').write_text(python + '\n')
+    return data
 
 
 def grant_sudoers(root, path, digest, alias):
@@ -201,6 +246,13 @@ def main():
             record(sys.argv[2:])
         elif sys.argv[1] == 'remove':
             remove(*sys.argv[2:])
+        elif sys.argv[1] == 'verify':
+            verify_owned(sys.argv[2])
+            print(json.dumps({'ok': True, 'root': sys.argv[2]}))
+        elif sys.argv[1] == 'refresh':
+            data = refresh(*sys.argv[2:7])
+            print(json.dumps({'ok': True, 'ref': data['ref'], 'routing': data['routing'],
+                              'grants': data.get('grants') or {}}))
         elif sys.argv[1] == 'grant-sudoers':
             grant_sudoers(*sys.argv[2:])
         elif sys.argv[1] == 'grant-ca':

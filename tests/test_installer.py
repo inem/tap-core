@@ -249,6 +249,86 @@ class InstallerTests(unittest.TestCase):
         check = subprocess.run(['visudo', '-c', '-f', str(rendered)], capture_output=True, text=True)
         self.assertEqual(check.returncode, 0, check.stderr)
 
+    def test_update_preserves_profile_grants_routing_and_swaps_checkout(self):
+        """A→B update keeps data/CA/routing; not purge/reinstall (#7 + #6 proxy)."""
+        def pack(archive, marker):
+            staging = self.parent / ('tree-' + marker)
+            for name in ('tap', 'tap_core', 'instll', 'fixtures'):
+                target = staging / name
+                if (REPO / name).is_dir():
+                    shutil.copytree(REPO / name, target)
+                else:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(REPO / name, target)
+            (staging / 'UPDATE_MARKER').write_text(marker + '\n')
+            with tarfile.open(archive, 'w:gz') as out:
+                out.add(staging, arcname='tap-core-' + marker)
+        archive_a = self.parent / 'a.tar.gz'
+        archive_b = self.parent / 'b.tar.gz'
+        pack(archive_a, 'version-a')
+        pack(archive_b, 'version-b')
+        fake_bin = self.parent / 'download-bin'
+        fake_bin.mkdir()
+        curl = fake_bin / 'curl'
+        # First install resolves commits API + serves archive A.
+        curl.write_text(
+            '#!/bin/bash\n'
+            'case "$*" in\n'
+            '  *api.github.com*) printf %s ' + 'a' * 40 + '; exit 0;;\n'
+            'esac\n'
+            'exec /bin/cat ' + shlex.quote(str(archive_a)) + '\n')
+        curl.chmod(0o700)
+        backend = self.parent / 'backend'
+        backend.write_text('#!/bin/sh\necho "Mitmproxy: 12.2.3"\n')
+        backend.chmod(0o700)
+        bun = self.parent / 'bun'
+        bun.write_text('#!/bin/sh\necho 1.3.11\n')
+        bun.chmod(0o700)
+        env = {**os.environ, 'PATH': str(fake_bin) + os.pathsep + os.environ['PATH'],
+               'TAP_ROOT': str(self.root), 'TAP_BIN_DIR': str(self.wrapper.parent),
+               'TAP_PYTHON': sys.executable, 'TAP_BACKEND': str(backend), 'TAP_BUN': str(bun),
+               'TAP_SKIP_START': '1', 'TAP_ROUTING': 'explicit'}
+        installed = subprocess.run(['/bin/bash', str(REPO / 'instll/install')],
+                                   env=env, capture_output=True, text=True)
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+        Profile(self.root / 'profile', str(backend), 18999, 'explicit',
+                'http://fixture.test', []).save()
+        retained = self.root / 'profile/data/retained.txt'
+        retained.parent.mkdir(parents=True, exist_ok=True)
+        retained.write_text('keep-me\n')
+        ca = self.root / 'profile/certificates/mitmproxy-ca-cert.pem'
+        ca.parent.mkdir(parents=True, exist_ok=True)
+        # Minimal PEM so grant_ca path exists; fingerprint is recorded as digest arg.
+        ca.write_text('-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n')
+        ownership.grant_ca(str(self.root), str(ca), 'cafe' * 16)
+        before = json.loads((self.root / 'install.json').read_text())
+        self.assertEqual(before['routing'], 'explicit')
+        self.assertEqual(before['grants']['ca']['sha256'], 'cafe' * 16)
+        self.assertEqual((self.root / 'checkout/UPDATE_MARKER').read_text().strip(), 'version-a')
+
+        updated = subprocess.run(['/bin/bash', str(self.root / 'checkout/instll/update')],
+                                 env={**env, 'TAP_CHECKOUT_ARCHIVE': str(archive_b),
+                                      'TAP_REF': 'b' * 40},
+                                 capture_output=True, text=True)
+        self.assertEqual(updated.returncode, 0, updated.stderr + updated.stdout)
+        after = json.loads((self.root / 'install.json').read_text())
+        self.assertEqual(after['ref'], 'b' * 40)
+        self.assertEqual(after['routing'], 'explicit')
+        self.assertEqual(after['grants']['ca']['sha256'], 'cafe' * 16)
+        self.assertEqual(retained.read_text(), 'keep-me\n')
+        self.assertEqual((self.root / 'checkout/UPDATE_MARKER').read_text().strip(), 'version-b')
+        self.assertTrue(self.wrapper.is_file())
+        self.assertEqual(hashlib.sha256(self.wrapper.read_bytes()).hexdigest(), after['wrapper_sha256'])
+
+    def test_update_refuses_foreign_wrapper(self):
+        self.prepare()
+        self.wrapper.write_text('foreign\n')
+        result = subprocess.run(
+            [sys.executable, str(REPO / 'instll/ownership.py'), 'verify', str(self.root)],
+            capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('another owner', result.stderr)
+
     def test_installer_default_ref_is_main(self):
         text = (REPO / 'instll/install').read_text()
         self.assertRegex(text, r'REF="\$\{TAP_REF:-main\}"')
