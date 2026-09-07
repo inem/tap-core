@@ -6,7 +6,8 @@ def response(flow):
     url = urlsplit(flow.request.pretty_url)
     if (url.scheme, url.netloc) != ("https", "fixture.example") or flow.response is None:
         return
-    if "text/html" not in flow.response.headers.get("content-type", "").lower():
+    media_type = flow.response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if media_type != "text/html":
         return
     if flow.response.stream:
         return
