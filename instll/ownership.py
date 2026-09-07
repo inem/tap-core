@@ -78,8 +78,21 @@ def grant_ca(root, cert, digest):
     _save_mark(marker, data)
 
 
-def revoke_grants(root, data):
-    """Best-effort removal of grants owned by this install. Failures stay explicit."""
+def cert_fingerprint(path):
+    """SHA-256 fingerprint of the certificate DER (openssl-compatible, lowercase hex)."""
+    import base64
+    import re
+    text = Path(path).read_text()
+    match = re.search(r'-----BEGIN CERTIFICATE-----(.*?)-----END CERTIFICATE-----', text, re.S)
+    require(match, 'CA path is not a PEM certificate: ' + str(path))
+    der = base64.b64decode(''.join(match.group(1).split()))
+    return hashlib.sha256(der).hexdigest()
+
+
+def revoke_grants(root, data, runner=None):
+    """Remove grants owned by this install. Failures stay explicit; never silent."""
+    import subprocess
+    run = runner or (lambda command: subprocess.run(command, text=True, capture_output=True, check=False))
     grants = data.get('grants') or {}
     errors = []
     sudoers = grants.get('sudoers') or {}
@@ -87,34 +100,47 @@ def revoke_grants(root, data):
     if path:
         target = Path(path)
         try:
-            import subprocess
-            if target.is_file():
-                listed = subprocess.run(['/usr/bin/sudo', '-n', 'cat', str(target)],
-                                        text=True, capture_output=True, check=False)
-                owned = f'tap-core-owned root={root}' in listed.stdout
-                digest = hashlib.sha256(listed.stdout.encode()).hexdigest() if listed.returncode == 0 else None
-                if owned and digest == sudoers.get('sha256'):
-                    removed = subprocess.run(['/usr/bin/sudo', '-n', 'rm', '-f', str(target)],
-                                             text=True, capture_output=True, check=False)
-                    if removed.returncode != 0:
-                        errors.append('sudoers remove failed: ' + (removed.stderr or removed.stdout).strip())
-                elif target.is_file():
-                    errors.append('sudoers file present but not owned/matched; left untouched: ' + str(target))
+            if target.is_symlink():
+                errors.append('sudoers path is a symlink; left untouched: ' + str(target))
+            elif target.is_file():
+                listed = run(['/usr/bin/sudo', '-n', 'cat', str(target)])
+                if listed.returncode != 0:
+                    errors.append('sudoers read failed (need interactive sudo -v then retry): '
+                                  + (listed.stderr or listed.stdout).strip())
+                else:
+                    owned = f'tap-core-owned root={root}' in listed.stdout
+                    digest = hashlib.sha256(listed.stdout.encode()).hexdigest()
+                    if owned and digest == sudoers.get('sha256'):
+                        removed = run(['/usr/bin/sudo', '-n', 'rm', '-f', str(target)])
+                        if removed.returncode != 0:
+                            errors.append('sudoers remove failed: '
+                                          + (removed.stderr or removed.stdout).strip())
+                    else:
+                        errors.append('sudoers file present but not owned/matched; left untouched: '
+                                      + str(target))
         except OSError as error:
             errors.append('sudoers revoke error: ' + str(error))
     ca = grants.get('ca') or {}
-    cert = ca.get('cert')
-    if cert and Path(cert).is_file():
-        try:
-            import subprocess
-            # Remove trust for this exact certificate file; do not delete unrelated mitmproxy entries.
-            removed = subprocess.run(
-                ['/usr/bin/sudo', '-n', '/usr/bin/security', 'remove-trusted-cert', '-d', cert],
-                text=True, capture_output=True, check=False)
-            if removed.returncode != 0:
-                errors.append('CA trust revoke failed: ' + (removed.stderr or removed.stdout).strip())
-        except OSError as error:
-            errors.append('CA revoke error: ' + str(error))
+    if ca:
+        cert = ca.get('cert')
+        expected = (ca.get('sha256') or '').lower()
+        if not cert or not Path(cert).is_file():
+            errors.append('CA cert missing at recorded path; System keychain trust may remain. '
+                          'Restore the cert file or remove that trust manually, then retry uninstall')
+        else:
+            try:
+                actual = cert_fingerprint(cert)
+                if actual != expected:
+                    errors.append('CA fingerprint mismatch (recorded=%s actual=%s); '
+                                  'refusing to revoke possibly foreign trust' % (expected, actual))
+                else:
+                    removed = run(['/usr/bin/sudo', '-n', '/usr/bin/security',
+                                   'remove-trusted-cert', '-d', cert])
+                    if removed.returncode != 0:
+                        errors.append('CA trust revoke failed (sudo -v then retry): '
+                                      + (removed.stderr or removed.stdout).strip())
+            except (OSError, ValueError) as error:
+                errors.append('CA revoke error: ' + str(error))
     return errors
 
 
@@ -155,15 +181,18 @@ def remove(root, purge):
                     mutate('uninstall', profile, adapter)
                 grant_errors = revoke_grants(root, data)
                 check_wrapper()
+                if grant_errors:
+                    raise ValueError(
+                        'grant cleanup incomplete: ' + '; '.join(grant_errors)
+                        + '; run: sudo -v && TAP_ROOT=' + str(root)
+                        + ' bash ' + str(root / 'checkout/instll/uninstall')
+                        + ' — marker/CA/runtime retained')
                 wrapper.unlink(missing_ok=True)
                 if purge == '1':
                     shutil.rmtree(root)
-                message = 'Profile service removed; ' + (
-                    'installation purged' if purge == '1' else 'data and runtime retained')
-                if grant_errors:
-                    print(message + '; grant cleanup incomplete: ' + '; '.join(grant_errors))
-                else:
-                    print(message)
+                print('Profile service removed; ' + (
+                    'installation purged' if purge == '1' else 'data and runtime retained'))
+
 
 
 def main():

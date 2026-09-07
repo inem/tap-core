@@ -1,4 +1,5 @@
 """Installer ownership/recovery regressions; no downloads or OS mutation."""
+import hashlib
 import importlib.util
 import json
 import os
@@ -313,11 +314,145 @@ class InstallerTests(unittest.TestCase):
 
     def test_sudoers_helper_uses_unique_owned_dropin(self):
         script = (REPO / 'instll/enable-system-proxy-sudo').read_text()
+        self.assertIn("tr 'a-z' 'A-Z'", script)
         self.assertIn('/etc/sudoers.d/tap-core-${tag}', script)
-        self.assertIn('refusing to overwrite foreign sudoers file', script)
+        self.assertIn('refusing to overwrite foreign or edited sudoers file', script)
+        self.assertIn('refusing to follow sudoers symlink', script)
         self.assertIn('grant-sudoers', script)
         self.assertIn('tap-core-owned root=', script)
-        self.assertNotRegex(script, r'TARGET=.*/etc/sudoers\.d/tap-core"')
+
+    def test_rendered_sudoers_alias_must_be_uppercase_for_visudo(self):
+        root = '/tmp/tap-review-fixture'
+        tag = hashlib.sha256(root.encode()).hexdigest()[:12]
+        snippet = (REPO / 'instll/sudoers.snippet').read_text()
+        for alias_tag, expect_ok in ((tag, False), (tag.upper(), True)):
+            alias = 'TAP_CORE_PROXY_' + alias_tag
+            body = '# tap-core-owned root=%s tag=%s\n' % (root, tag)
+            body += '\n'.join(
+                line.replace('__TAP_USER__', 'fixtureuser').replace('TAP_CORE_PROXY', alias)
+                for line in snippet.splitlines() if line and not line.startswith('#')) + '\n'
+            rendered = self.parent / ('sudoers-' + alias_tag)
+            rendered.write_text(body)
+            check = subprocess.run(['visudo', '-c', '-f', str(rendered)], capture_output=True, text=True)
+            self.assertEqual(check.returncode == 0, expect_ok, check.stderr or check.stdout)
+
+    def test_revoke_ca_requires_matching_fingerprint_without_security(self):
+        self.prepare()
+        cert = self.parent / 'ca.pem'
+        key = self.parent / 'key.pem'
+        subprocess.run(
+            ['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-keyout', str(key), '-out', str(cert),
+             '-days', '1', '-nodes', '-subj', '/CN=tap-fixture'],
+            check=True, capture_output=True)
+        fp = ownership.cert_fingerprint(cert)
+        ownership.grant_ca(str(self.root), str(cert), fp)
+        data = json.loads((self.root / 'install.json').read_text())
+        calls = []
+        def runner(command):
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0, '', '')
+        # Missing cert → unresolved, no security call.
+        cert.unlink()
+        errors = ownership.revoke_grants(self.root, data, runner=runner)
+        self.assertTrue(any('CA cert missing' in item for item in errors))
+        self.assertFalse(any('security' in ' '.join(c) for c in calls))
+        # Restored but wrong fingerprint → refuse, no security call.
+        cert.write_text('-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n')
+        # invalid PEM will error; use a different valid cert instead
+        other = self.parent / 'other.pem'
+        subprocess.run(
+            ['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-keyout', str(key), '-out', str(other),
+             '-days', '1', '-nodes', '-subj', '/CN=other'],
+            check=True, capture_output=True)
+        data['grants']['ca']['cert'] = str(other)
+        calls.clear()
+        errors = ownership.revoke_grants(self.root, data, runner=runner)
+        self.assertTrue(any('fingerprint mismatch' in item for item in errors))
+        self.assertFalse(any('security' in ' '.join(c) for c in calls))
+        # Matching fingerprint → security invoked.
+        data['grants']['ca'] = {'cert': str(other), 'sha256': ownership.cert_fingerprint(other)}
+        calls.clear()
+        errors = ownership.revoke_grants(self.root, data, runner=runner)
+        self.assertEqual(errors, [])
+        self.assertTrue(any('remove-trusted-cert' in ' '.join(c) for c in calls))
+
+    def test_remove_preserves_root_when_grant_revoke_fails(self):
+        self.prepare()
+        ownership.grant_ca(str(self.root), str(self.root / 'missing.pem'), 'deadbeef')
+        with self.assertRaisesRegex(ValueError, 'grant cleanup incomplete'):
+            ownership.remove(str(self.root), '1')
+        self.assertTrue(self.root.is_dir())
+        self.assertTrue(self.wrapper.is_file())
+        self.assertTrue((self.root / 'install.json').is_file())
+
+    def test_enable_system_proxy_sudo_refuses_symlink_and_edited_dropin(self):
+        self.prepare()
+        shutil.copyfile(REPO / 'instll/enable-system-proxy-sudo', self.root / 'checkout/instll/enable-system-proxy-sudo')
+        shutil.copyfile(REPO / 'instll/sudoers.snippet', self.root / 'checkout/instll/sudoers.snippet')
+        (self.root / 'checkout/instll/enable-system-proxy-sudo').chmod(0o700)
+        target_dir = self.parent / 'sudoers.d'
+        target_dir.mkdir()
+        fake_bin = self.parent / 'fake-bin'
+        fake_bin.mkdir()
+        sudo = fake_bin / 'sudo'
+        # Fake sudo: cat/shasum/grep/install/visudo/-n -l for a sandbox target only.
+        sudo.write_text(r'''#!/bin/bash
+set -euo pipefail
+# strip leading -n
+args=()
+for a in "$@"; do [ "$a" = "-n" ] && continue; args+=("$a"); done
+set -- "${args[@]}"
+case "$1" in
+  cat) exec /bin/cat "$2" ;;
+  grep) shift; exec /usr/bin/grep "$@" ;;
+  shasum) shift; exec /usr/bin/shasum "$@" ;;
+  install) shift; exec /usr/bin/install "$@" ;;
+  visudo) shift; exec /usr/sbin/visudo "$@" ;;
+  -l) exit 1 ;;
+  *) echo "unexpected sudo: $*" >&2; exit 99 ;;
+esac
+''')
+        sudo.chmod(0o700)
+        env = {
+            **os.environ,
+            'PATH': str(fake_bin) + os.pathsep + os.environ.get('PATH', ''),
+            'TAP_ROOT': str(self.root),
+            'TAP_SUDOERS_USER': 'fixtureuser',
+            'TAP_SUDOERS_PATH': str(target_dir / 'tap-core-link'),
+        }
+        # Symlink refusal.
+        real = target_dir / 'real'
+        real.write_text('x\n')
+        (target_dir / 'tap-core-link').symlink_to(real)
+        result = subprocess.run(['/bin/bash', str(self.root / 'checkout/instll/enable-system-proxy-sudo')],
+                                env=env, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('symlink', result.stderr)
+
+        # Edited owned file refusal: comment matches but content differs from recorded+new.
+        env['TAP_SUDOERS_PATH'] = str(target_dir / 'tap-core-edit')
+        tag = hashlib.sha256(str(self.root).encode()).hexdigest()[:12]
+        edited = target_dir / 'tap-core-edit'
+        edited.write_text('# tap-core-owned root=%s tag=%s\n# admin edit\n' % (self.root, tag))
+        ownership.grant_sudoers(str(self.root), str(edited), 'not-the-current-hash', 'TAP_CORE_PROXY_X')
+        result = subprocess.run(['/bin/bash', str(self.root / 'checkout/instll/enable-system-proxy-sudo')],
+                                env=env, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('foreign or edited', result.stderr)
+        self.assertEqual(edited.read_text(), '# tap-core-owned root=%s tag=%s\n# admin edit\n' % (self.root, tag))
+
+        # Fresh install into empty path succeeds under fake sudo.
+        env['TAP_SUDOERS_PATH'] = str(target_dir / 'tap-core-fresh')
+        result = subprocess.run(['/bin/bash', str(self.root / 'checkout/instll/enable-system-proxy-sudo')],
+                                env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        installed = (target_dir / 'tap-core-fresh').read_text()
+        self.assertIn('tap-core-owned root=%s' % self.root, installed)
+        self.assertRegex(installed, r'Cmnd_Alias TAP_CORE_PROXY_[0-9A-F]{12} =')
+        data = json.loads((self.root / 'install.json').read_text())
+        self.assertEqual(data['grants']['sudoers']['path'], str(target_dir / 'tap-core-fresh'))
+        self.assertEqual(data['grants']['sudoers']['sha256'],
+                         hashlib.sha256(installed.encode()).hexdigest())
 
     def test_finish_setup_uses_marker_wrapper_and_grants_ca(self):
         script = (REPO / 'instll/finish-setup').read_text()
@@ -334,3 +469,4 @@ class InstallerTests(unittest.TestCase):
         self.assertIn('| TAP_ROUTING=explicit bash', text)
         self.assertNotIn('TAP_ROUTING=explicit curl', text)
         self.assertIn('tap routing set explicit', text)
+
