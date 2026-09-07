@@ -326,6 +326,24 @@ class ReaderTests(unittest.TestCase):
         self.assertEqual(self.reader.load()['phase'], 'failed')
         self.assertIsNone(self.reader.load()['cursor'])
 
+    def test_nonfinite_checkpoint_timestamp_fails_without_resetting_progress(self):
+        self.write('A')
+        self.reader.run(self.spec)
+        state = self.reader.load()
+        for token in ('NaN', 'Infinity', '-Infinity', '1e999', '-1e999'):
+            source = json.dumps(dict(state, updated_at='TIMESTAMP')).replace('"TIMESTAMP"', token)
+            self.reader.checkpoint.write_text(source)
+            for action in (self.reader.status, lambda: self.reader.run(self.spec),
+                           lambda: self.reader.replay(self.spec)):
+                with self.subTest(token=token), self.assertRaisesRegex(ReaderError, 'Invalid reader checkpoint'):
+                    action()
+                self.assertEqual(self.reader.checkpoint.read_text(), source)
+            result = subprocess.run([sys.executable, str(ROOT / 'tap'), '--profile', str(self.root),
+                                     'reader', 'status', 'one'], capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.stdout, '')
+            self.assertIn('Invalid reader checkpoint', result.stderr)
+
     def test_definition_rejects_nested_nonfinite_json_numbers(self):
         path = self.root / 'reader.json'
         for token in ('NaN', 'Infinity', '-Infinity', '1e999', '-1e999'):
