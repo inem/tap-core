@@ -442,6 +442,11 @@ def effective_configuration(root, base):
             current['origins'].update(requested_origins)
     if not any_enabled:
         return base
+    if (not declarations
+            and result['allow_origins'] == base['allow_origins']
+            and result['page_scripts'] == base['page_scripts']):
+        # Reader-only (or otherwise bridge-inert) packs must not diverge from PackStore.
+        return base
     if declarations:
         for resource_id, origins in order_page_resources(declarations, use_orders):
             declaration = declarations[resource_id]

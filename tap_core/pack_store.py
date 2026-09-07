@@ -424,6 +424,26 @@ class PackStore:
         result["page_script_origins"] = script_origins
         return result
 
+    def _refuse_incompatible_reader_progress(self, name, spec):
+        """Refuse pack activation that would strand an existing reader checkpoint."""
+        from .readers import fingerprint, validate_definition
+        validate_definition(spec)
+        checkpoint = self.root / "state/readers" / name / "checkpoint.json"
+        if not checkpoint.is_file():
+            return
+        require(not checkpoint.is_symlink(), f"reader checkpoint must not be a symlink: {name}")
+        try:
+            state = json.loads(checkpoint.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise PackError(f"reader {name!r} checkpoint unreadable: {error}") from error
+        if state.get("definition") == fingerprint(spec):
+            return
+        raise PackError(
+            f"reader {name!r} has progress under another definition; "
+            f"run `tap reader replay {name}` with the new binding, or remove "
+            f"{checkpoint}, then enable/update again — checkpoint was not reset"
+        )
+
     def _effective_components(self, registry, base):
         """Project enabled pack reader/handler entrypoints onto managed components."""
         projected_readers = {}
@@ -493,7 +513,9 @@ class PackStore:
                                         "dependencies": dict(dependencies or {})},
                                 config=overrides)
         self._effective_bridge(candidate, self._profile_bridge())
-        self._effective_components(candidate, self._profile_components())
+        projected = self._effective_components(candidate, self._profile_components())
+        if "reader" in manifest["entrypoints"] and projected is not None:
+            self._refuse_incompatible_reader_progress(pack_id, projected["readers"][pack_id])
         self.save(candidate)
         return {"id": pack_id, "version": version, "enabled": True,
                 "code": str(root), "applies": "next profile on"}
@@ -525,7 +547,9 @@ class PackStore:
         candidate_record["history"].pop()
         candidate_record["selected"] = version
         self._effective_bridge(candidate, self._profile_bridge())
-        self._effective_components(candidate, self._profile_components())
+        projected = self._effective_components(candidate, self._profile_components())
+        if "reader" in manifest["entrypoints"] and projected is not None:
+            self._refuse_incompatible_reader_progress(pack_id, projected["readers"][pack_id])
         self.save(candidate)
         return {"id": pack_id, "version": version, "enabled": True,
                 "code": str(root), "applies": "next profile on"}

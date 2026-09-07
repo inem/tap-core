@@ -362,6 +362,7 @@ class PackStoreTests(unittest.TestCase):
 
     def test_reader_only_pack_enable_without_page_scripts(self):
         import sys
+        from tap_core.bridge import fingerprint
         reader_src = Path(__file__).resolve().parent.parent / "fixtures/packs/reader"
         components = {
             "version": 1, "python": sys.executable, "bun": "/usr/bin/true",
@@ -374,10 +375,89 @@ class PackStoreTests(unittest.TestCase):
         self.store.enable("example.reader", "0.1.0",
                           origins=["https://fixture.example"],
                           capabilities=["capture.read"])
-        self.assertEqual(self.store.effective_bridge(bridge()), bridge())
+        host = self.store.effective_bridge(bridge())
+        addon = effective_configuration(self.profile, bridge())
+        self.assertEqual(host, bridge())
+        self.assertEqual(addon, bridge())
+        self.assertEqual(fingerprint(host), fingerprint(addon))
         projected = self.store.effective_components(components)
         self.assertIn("example.reader", projected["readers"])
         self.assertEqual(projected["handlers"], {})
+
+    def test_pack_update_refuses_incompatible_reader_checkpoint(self):
+        import sys
+        from tap_core.readers import fingerprint
+        linked = Path(__file__).resolve().parent.parent / "fixtures/packs/installed-linked"
+        components = {
+            "version": 1, "python": sys.executable, "bun": "/usr/bin/true",
+            "readers": {}, "handlers": {},
+        }
+        (self.profile / "profile.json").write_text(json.dumps({
+            "bridge": bridge(), "components": components}) + "\n")
+        first = self.artifact(linked, "linked-v1.tap-pack")
+        self.store.install(first)
+        self.store.enable("fixture.installed-linked", "0.1.0",
+                          origins=["https://fixture.example"],
+                          capabilities=["page.inject", "capture.read", "bridge.handle"])
+        old_spec = self.store.effective_components(components)["readers"]["fixture.installed-linked"]
+        state_dir = self.profile / "state/readers/fixture.installed-linked"
+        state_dir.mkdir(parents=True)
+        (state_dir / "checkpoint.json").write_text(json.dumps({
+            "version": 1, "definition": fingerprint(old_spec), "generation": 1,
+            "cursor": None, "processed": 0, "inflight": None, "phase": "idle",
+            "error": None, "updated_at": 1.0}) + "\n")
+        linked_v2 = self.root / "linked-0.2.0"
+        shutil.copytree(linked, linked_v2)
+        manifest = json.loads((linked_v2 / "pack.json").read_text())
+        manifest["version"] = "0.2.0"
+        (linked_v2 / "reader.py").write_text((linked_v2 / "reader.py").read_text() + "\n# bump\n")
+        (linked_v2 / "pack.json").write_text(json.dumps(manifest, indent=2) + "\n")
+        second = self.artifact(linked_v2, "linked-v2.tap-pack")
+        with self.assertRaisesRegex(PackError, "progress under another definition"):
+            self.store.update(second)
+        selected = self.store.load()["packs"]["fixture.installed-linked"]["selected"]
+        self.assertEqual(selected, "0.1.0")
+        self.assertIn("0.2.0", self.store.load()["packs"]["fixture.installed-linked"]["versions"])
+
+    def test_prepare_refreshes_effective_runtime_after_enable_disable(self):
+        import sys
+        from tap_core.components import prepare
+        from tap_core.runtime import Profile
+        linked = Path(__file__).resolve().parent.parent / "fixtures/packs/installed-linked"
+        components = {
+            "version": 1, "python": sys.executable, "bun": "/usr/bin/true",
+            "readers": {}, "handlers": {},
+        }
+        profile = Profile(self.profile, "/fixture/mitmdump", 19001, "explicit",
+                          "http://example.test", [], bridge=bridge(), components=components)
+        profile.save()
+        artifact = self.artifact(linked, "linked-prep.tap-pack")
+        self.store.install(artifact)
+        self.store.enable("fixture.installed-linked", "0.1.0",
+                          origins=["https://fixture.example"],
+                          capabilities=["page.inject", "capture.read", "bridge.handle"])
+        # No second Profile.save — only pack registry changed.
+        prepare(Profile.load(self.profile))
+        runtime = json.loads((self.profile / "state/effective-runtime.json").read_text())
+        self.assertIn("fixture.installed-linked", runtime["components"]["handlers"])
+        self.assertIn("https://fixture.example", runtime["bridge"]["allow_origins"])
+        self.store.disable("fixture.installed-linked")
+        prepare(Profile.load(self.profile))
+        runtime = json.loads((self.profile / "state/effective-runtime.json").read_text())
+        self.assertNotIn("fixture.installed-linked", runtime["components"]["handlers"])
+
+    def test_installed_linked_handler_speaks_hub_envelope(self):
+        import os
+        import subprocess
+        import sys
+        handler = Path(__file__).resolve().parent.parent / "fixtures/packs/installed-linked/handler.py"
+        env = {**os.environ, "TAP_PACK_CONTEXT": json.dumps({
+            "config": {"reply-prefix": "linked:"}, "page_id": "p", "session_id": "s"})}
+        result = subprocess.run(
+            [sys.executable, str(handler)],
+            input=json.dumps({"version": 1, "request_id": "r1", "args": {"text": "hi"}}) + "\n",
+            capture_output=True, text=True, env=env, check=True)
+        self.assertEqual(json.loads(result.stdout), {"ok": True, "value": {"text": "linked:hi"}})
 
 
 if __name__ == "__main__":
