@@ -102,11 +102,13 @@ handlers using `python-jsonl-v1` also bind to the existing managed host. Mutator
 activation and `browser-module-v1` remain unsupported.
 
 Reader/handler packs require an existing components configuration with an
-absolute Python path. Absolute Bun is required when handlers (or any Hub-backed
-role) are projected. Reader-only packs may run with a disabled bridge and
-without Bun/Hub: managed `on`/`off` starts the component controller and readers
-only. On startup, the host refreshes the effective origins and handler bindings
-from enabled immutable pack versions.
+absolute Python path. Absolute Bun and Hub are required when the page bridge is
+**enabled** (runtime.js / WS) or when handlers are projected. Reader-only packs
+may run with `bridge.enabled=false` and without Bun/Hub: managed `on`/`off`
+starts the component controller and readers only. A components block still
+requires a bridge object (`enabled=false` is the hubless shape; `bridge: null`
+is rejected). On startup, the host refreshes the effective origins and handler
+bindings from enabled immutable pack versions.
 The component name is the pack ID; existing reader checkpoints and handler
 state/output/log directories remain under their respective `readers/<id>` and
 `handlers/<id>` roots. See [managed component protocols](managed-components.md)

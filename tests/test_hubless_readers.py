@@ -1,4 +1,5 @@
 """Managed reader-only on/off without Hub/Bun (#14 hubless slice)."""
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -107,19 +108,59 @@ class HublessReaderTests(unittest.TestCase):
         return adapter
 
     def test_configuration_allows_reader_only_without_enabled_bridge(self):
-        self.assertFalse(needs_hub(self.components))
+        self.assertFalse(needs_hub(self.components, self.bridge))
         configuration(self.components, self.profile)
         with self.assertRaisesRegex(TapError, 'Handlers require an enabled bridge'):
             configuration(dict(self.components, handlers={
                 'echo': {'command': [sys.executable, '-c', 'pass'], 'config': {},
                          'origins': ['https://fixture.example']}}), self.profile)
 
+    def test_enabled_bridge_requires_hub_even_without_handlers(self):
+        bridge = config(enabled=True, hub_port=19311, allow_origins=[], exclude_origins=[],
+                        page_scripts=[])
+        components = dict(version=1, python=sys.executable, bun='/usr/bin/true',
+                          readers={}, handlers={})
+        profile = Profile(self.root / 'hubful', '/fixture/backend', 19312, 'explicit',
+                          'http://fixture.example', [], bridge=bridge, components=components)
+        self.assertTrue(needs_hub(components, bridge))
+        configuration(components, profile)
+        with self.assertRaisesRegex(TapError, 'when Hub is required'):
+            configuration(dict(components, bun='relative-bun'), profile)
+
+    def test_components_without_bridge_rejected_before_save(self):
+        components = dict(version=1, python=sys.executable, bun='/hubless/unused-bun',
+                          readers={}, handlers={})
+        with self.assertRaisesRegex(TapError, 'require a bridge configuration'):
+            Profile(self.root / 'no-bridge', '/fixture/backend', 19313, 'explicit',
+                    'http://fixture.example', [], bridge=None, components=components)
+
+    def test_updater_busy_detects_hubless_components_controller(self):
+        spec = importlib.util.spec_from_file_location('hubless_ownership', ROOT / 'instll/ownership.py')
+        own = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(own)
+        self.install_reader()
+        profile = Profile.load(self.profile_root)
+        adapter = Mock()
+        adapter.service_loaded.side_effect = (
+            lambda target: isinstance(target, Job) or getattr(target, 'label', '').endswith('.components'))
+        adapter.port_open.return_value = False
+        busy = own._profile_processes_busy(adapter, profile)
+        self.assertIn('components service', busy)
+        self.assertNotIn('hub port', busy)
+        # Enabled bridge still treats Hub port as busy when open.
+        profile.bridge['enabled'] = True
+        profile.save()
+        adapter.port_open.side_effect = lambda target: isinstance(target, Job)
+        busy = own._profile_processes_busy(adapter, Profile.load(self.profile_root))
+        self.assertIn('components service', busy)
+        self.assertIn('hub port', busy)
+
     def test_hubless_on_off_preserves_checkpoint_without_bun(self):
         self.install_reader()
         projected = self.store.effective_components(self.components)
         self.assertIn('example.reader', projected['readers'])
         self.assertEqual(projected['handlers'], {})
-        self.assertFalse(needs_hub(projected))
+        self.assertFalse(needs_hub(projected, self.bridge))
         self.seed_journal('{"item":1}')
         adapter = self.start_hubless()
         observed = status(Profile.load(self.profile_root), adapter)

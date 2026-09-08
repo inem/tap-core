@@ -64,7 +64,7 @@ def main():
         hub = None
         hub_pid = None
         try:
-            if needs_hub(components):
+            if needs_hub(components, profile.bridge):
                 command = [components['python'], '-B', str(ROOT / 'guardian.py'), str(os.getpid()),
                            components['bun'], str(ROOT / 'hub.mjs'), str(profile.root)]
                 hub = subprocess.Popen(command, start_new_session=True)

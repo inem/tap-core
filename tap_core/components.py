@@ -15,8 +15,10 @@ ROOT = Path(__file__).resolve().parent
 BUN_VERSION = '1.3.11'
 
 
-def needs_hub(components):
-    """Hub/Bun are required only when handlers are bound (page↔local WS)."""
+def needs_hub(components, bridge=None):
+    """Hub/Bun when the page bridge is enabled (runtime.js/WS) or handlers exist."""
+    if bridge and bridge.get('enabled'):
+        return True
     return type(components) is dict and bool(components.get('handlers'))
 
 
@@ -24,15 +26,17 @@ def configuration(value, profile):
     if (type(value) is not dict or set(value) != {'version', 'python', 'bun', 'readers', 'handlers'}
             or type(value['version']) is not int or value['version'] != 1):
         raise TapError('Components require version 1, python, bun, readers and handlers')
+    if profile.bridge is None:
+        raise TapError('Components require a bridge configuration; use enabled=false for reader-only')
     if not isinstance(value['python'], str) or not Path(value['python']).is_absolute():
         raise TapError('Component python requires an explicit absolute path')
     if not isinstance(value['bun'], str):
         raise TapError('Component bun path must be a string')
-    if needs_hub(value):
-        if not profile.bridge or not profile.bridge['enabled']:
-            raise TapError('Handlers require an enabled bridge')
+    if value.get('handlers') and not profile.bridge['enabled']:
+        raise TapError('Handlers require an enabled bridge')
+    if needs_hub(value, profile.bridge):
         if not Path(value['bun']).is_absolute():
-            raise TapError('Component bun requires an explicit absolute path when handlers are configured')
+            raise TapError('Component bun requires an explicit absolute path when Hub is required')
     for name in ('readers', 'handlers'):
         if type(value[name]) is not dict or len(value[name]) > 8:
             raise TapError('At most eight named readers/handlers per development profile')
@@ -170,7 +174,7 @@ def _start(profile, adapter):
         raise StartupError('Profile components are unhealthy; inspect status/logs and use off/on')
     # Pack enable/disable/update only touch the registry; refresh Hub/reader snapshot here.
     config = prepare(profile)
-    hubful = needs_hub(config)
+    hubful = needs_hub(config, profile.bridge)
     if hubful and adapter.port_open(job):
         raise StartupError('Component port is occupied; its owner will not be stopped')
     if adapter.service_loaded(job):
@@ -207,7 +211,8 @@ def stop(profile, adapter):
     job = Job(profile)
     owned = adapter.service_loaded(job)
     from .pack_store import PackStore
-    hubful = needs_hub(PackStore(profile.root).effective_components(profile.components))
+    hubful = needs_hub(PackStore(profile.root).effective_components(profile.components),
+                       profile.bridge)
     # Existing adapter removes only this exact job and waits for its leader.
     adapter.stop(job)
     # Parent guards clean separate child groups after even an abrupt controller exit.
