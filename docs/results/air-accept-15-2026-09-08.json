@@ -1,0 +1,75 @@
+{
+  "scope": "Air clean-Mac acceptance slice toward #7/#15: system install 3a03e5f \u2192 update 95b1882; empty-root explicit A\u2192B; not HTTPS-without-k / CA revoke / signed release",
+  "host": {
+    "hostname": "Air-Natala",
+    "architecture": "x86_64",
+    "macos": "14.8.5",
+    "python": "3.9.6"
+  },
+  "system_install": {
+    "before_ref": "3a03e5f6ddb43b0897e9933b461d8a97dc1cd097",
+    "after_ref": "95b188204dce0b417a9324d57152a0e216c53d11",
+    "routing": "system",
+    "update_ok": true,
+    "on_after_update": true,
+    "off_on_off": true,
+    "doctor_healthy_after_on": true,
+    "purge_blocked": "sudo password required for sudoers/CA revoke; install retained stopped"
+  },
+  "explicit_empty_root_update": {
+    "scope": "live empty-root install A \u2192 update B \u2192 purge; explicit routing; not Local Capture / CA trust / clean-Mac browser",
+    "host": {
+      "architecture": "x86_64",
+      "macos": "14.8.5",
+      "python": "3.9.6",
+      "platform": "macOS-14.8.5-x86_64-i386-64bit"
+    },
+    "ref_a": "6fcb8d62b11212d1c3a4c44d6426cf12d78e2582",
+    "ref_b": "95b188204dce0b417a9324d57152a0e216c53d11",
+    "sha_a": "6fcb8d62b11212d1c3a4c44d6426cf12d78e2582",
+    "sha_b": "95b188204dce0b417a9324d57152a0e216c53d11",
+    "ok": true,
+    "cleanup_verified": true,
+    "install_ref": "6fcb8d62b11212d1c3a4c44d6426cf12d78e2582",
+    "routing_before": "explicit",
+    "ca_before": null,
+    "doctor_after_install": {
+      "healthy": true
+    },
+    "update_log_tail": [
+      "          \"cursor\": \"eyJ2IjoxLCJzY29wZSI6IjQ1N2FmODA1YTc4NWQ1ZDAxMTdiNTYwNDc5YzhjMjZhZmM3ZWYxYmMwYmFiYmZiMmMxYWUzZGJiMWU2Mjk3MjkiLCJzZWdtZW50IjoiNDhjM2ZiM2IyZTM2NDMwZTIzYTNmMmNjOWYyZTk3YWI0OGM1MDVlNjliNjNjNTU0MjQxNThhNGM1ZTRiMWU3YiIsImxpbmUiOjMsImFuY2hvciI6ImIzMjE1MDAxY2M1YWU3MGU0NWJlOWQxMGFkMmQ2MjY4NWRkNjIzM2FjNDFlMGVmN2I3ZjZlNGY3MjNlYmEwMDMifQ==\",",
+      "          \"processed\": 3,",
+      "          \"inflight\": null,",
+      "          \"phase\": \"idle\",",
+      "          \"error\": null,",
+      "          \"updated_at\": 1788891577.2112541",
+      "        },",
+      "        \"error\": null",
+      "      }",
+      "    },",
+      "    \"configured\": true,",
+      "    \"current_process\": true",
+      "  },",
+      "  \"inspection_errors\": {},",
+      "  \"backend_version\": \"12.2.3\",",
+      "  \"ca_file_present\": true,",
+      "  \"ca_trust\": \"not_verified; HTTPS clients must trust this profile CA explicitly\",",
+      "  \"traffic_probe\": true,",
+      "  \"healthy\": true",
+      "}"
+    ],
+    "update_ref": "95b188204dce0b417a9324d57152a0e216c53d11",
+    "routing_after": "explicit",
+    "ca_after": null,
+    "profile_data_retained": true,
+    "policy_proxy_hash6": {
+      "routing_unchanged": true,
+      "ca_grant_unchanged": true,
+      "local_capture": false
+    },
+    "doctor_after_update": {
+      "healthy": true
+    }
+  },
+  "ok": true
+}
