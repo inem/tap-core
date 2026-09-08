@@ -260,12 +260,85 @@ def _restore_path(previous, destination):
         Path(previous).rename(destination)
 
 
+def _pending_path(root):
+    return Path(root) / 'update-pending.json'
+
+
+def finalize_update(root):
+    """Drop checkout/runtime backups after B has started (or start was skipped)."""
+    root = canonical(root)
+    path = _pending_path(root)
+    require(path.is_file(), 'No pending update to finalize')
+    pending = json.loads(path.read_text())
+    for key in ('checkout_backup', 'managed_backup', 'previous_python', 'previous_backend',
+                'previous_bun', 'profile_backup'):
+        value = pending.get(key) or ''
+        if value:
+            _drop_path(value)
+    path.unlink(missing_ok=True)
+    require(not list(root.glob('checkout.prev.*')), 'Checkout backup survived finalize')
+    return {'ok': True, 'root': str(root)}
+
+
+def rollback_update(root):
+    """Restore A after apply committed B but start/post-check failed."""
+    import subprocess
+    root = canonical(root)
+    path = _pending_path(root)
+    require(path.is_file(), 'No pending update to roll back')
+    pending = json.loads(path.read_text())
+    before = pending.get('before') or {}
+    checkout = root / 'checkout'
+    backup = Path(pending.get('checkout_backup') or '')
+    managed_dir = root / 'managed'
+    managed_backup = Path(pending['managed_backup']) if pending.get('managed_backup') else None
+    profile_root = root / 'profile'
+    hub_port = int(pending.get('hub_port') or 0)
+
+    if checkout.exists() and backup.exists():
+        shutil.rmtree(checkout)
+    if backup.exists() and not checkout.exists():
+        backup.rename(checkout)
+    if managed_dir.exists() and managed_backup is not None and managed_backup.exists():
+        shutil.rmtree(managed_dir)
+    if managed_backup is not None and managed_backup.exists() and not managed_dir.exists():
+        managed_backup.rename(managed_dir)
+    for key, dest in (('created_python', root / 'python'),
+                      ('created_backend', root / 'backend/mitmproxy.app'),
+                      ('created_bun', root / 'bun/bin/bun')):
+        if pending.get(key):
+            _drop_path(pending[key])
+    _restore_path(pending.get('previous_python') or None, root / 'python')
+    _restore_path(pending.get('previous_backend') or None, root / 'backend/mitmproxy.app')
+    _restore_path(pending.get('previous_bun') or None, root / 'bun/bin/bun')
+    profile_backup = pending.get('profile_backup') or ''
+    if profile_backup and Path(profile_backup).is_file():
+        (profile_root / 'profile.json').write_bytes(Path(profile_backup).read_bytes())
+        _drop_path(profile_backup)
+    if checkout.exists() and before.get('python'):
+        helper = checkout / 'instll/write_managed.py'
+        bun = before.get('bun') or ''
+        if helper.is_file() and bun and hub_port and not managed_dir.exists():
+            subprocess.run(
+                [before['python'], str(helper), str(root), str(checkout), before['python'], bun,
+                 str(hub_port), str(profile_root)],
+                capture_output=True, text=True, check=False)
+        try:
+            refresh(root, before['python'], before['backend'], before['ref'], before['arch'])
+        except Exception:
+            pass
+    path.unlink(missing_ok=True)
+    return {'ok': True, 'root': str(root), 'restored': True}
+
+
 def apply_checkout(root, new_checkout, python, backend, bun, ref, arch, hub_port,
                    staged_python='', staged_backend='', staged_bun=''):
-    """Swap checkout under install+profile locks; keep backup until refresh+policy OK.
+    """Swap checkout under install+profile locks; keep A until finalize after start.
 
     Optional staged_* paths are prepared outside the install root and promoted only
     while locks are held, so update does not mutate the root past a held lock.
+    On success leaves update-pending.json; caller must finalize-update after B starts
+    (or immediately when start is skipped), or rollback-update if start fails.
     """
     import subprocess
     root = canonical(root)
@@ -284,6 +357,7 @@ def apply_checkout(root, new_checkout, python, backend, bun, ref, arch, hub_port
     backup = root / ('checkout.prev.' + str(os.getpid()))
     profile_root = root / 'profile'
     require(not backup.exists(), 'Leftover checkout backup present; inspect before update')
+    require(not _pending_path(root).exists(), 'Leftover update-pending.json; finalize or rollback first')
     bun_for_restore = bun
     managed_components = root / 'managed/components.json'
     if managed_components.is_file():
@@ -310,6 +384,7 @@ def apply_checkout(root, new_checkout, python, backend, bun, ref, arch, hub_port
 
     was_running = False
     previous_python = previous_backend = previous_bun = None
+    created_python = created_backend = created_bun = None
     with profile_lock(root, busy_message='Another install/update holds this root'):
         configured = (profile_root / 'profile.json').is_file()
         with (profile_lock(profile_root, busy_message='Another command is changing this profile')
@@ -320,16 +395,22 @@ def apply_checkout(root, new_checkout, python, backend, bun, ref, arch, hub_port
             try:
                 if staged_python:
                     previous_python = _promote_staged(staged_python, root / 'python')
+                    if previous_python is None:
+                        created_python = root / 'python'
                     python = str(root / 'python/bin/python3')
                 else:
                     python = str(Path(python).absolute())
                 if staged_backend:
                     previous_backend = _promote_staged(staged_backend, root / 'backend/mitmproxy.app')
+                    if previous_backend is None:
+                        created_backend = root / 'backend/mitmproxy.app'
                     backend = str(root / 'backend/mitmproxy.app/Contents/MacOS/mitmdump')
                 else:
                     backend = str(Path(backend).absolute())
                 if staged_bun:
                     previous_bun = _promote_staged(staged_bun, root / 'bun/bin/bun')
+                    if previous_bun is None:
+                        created_bun = root / 'bun/bin/bun'
                     bun = str(root / 'bun/bin/bun')
                     Path(bun).chmod(0o700)
                 else:
@@ -355,12 +436,32 @@ def apply_checkout(root, new_checkout, python, backend, bun, ref, arch, hub_port
                 require(data['routing'] == routing_before, 'routing changed during update')
                 ca_after = ((data.get('grants') or {}).get('ca') or {}).get('sha256') or ''
                 require(ca_after == ca_before, 'CA grant fingerprint changed during update')
-                shutil.rmtree(backup)
-                if managed_backup is not None and managed_backup.exists():
-                    shutil.rmtree(managed_backup)
-                _drop_path(previous_python)
-                _drop_path(previous_backend)
-                _drop_path(previous_bun)
+                profile_prev = ''
+                if profile_backup is not None:
+                    profile_prev_path = profile_root / 'profile.json.prev'
+                    profile_prev_path.write_bytes(profile_backup)
+                    profile_prev = str(profile_prev_path)
+                pending = {
+                    'checkout_backup': str(backup),
+                    'managed_backup': str(managed_backup) if managed_backup is not None and managed_backup.exists() else '',
+                    'previous_python': str(previous_python) if previous_python else '',
+                    'previous_backend': str(previous_backend) if previous_backend else '',
+                    'previous_bun': str(previous_bun) if previous_bun else '',
+                    'created_python': str(created_python) if created_python else '',
+                    'created_backend': str(created_backend) if created_backend else '',
+                    'created_bun': str(created_bun) if created_bun else '',
+                    'profile_backup': profile_prev,
+                    'hub_port': hub_port,
+                    'before': {
+                        'python': before['python'],
+                        'backend': before['backend'],
+                        'ref': before['ref'],
+                        'arch': before['arch'],
+                        'bun': bun_for_restore,
+                    },
+                }
+                _pending_path(root).write_text(json.dumps(pending, indent=2) + '\n')
+                # A stays until finalize-update after B starts successfully.
             except Exception:
                 if checkout.exists() and backup.exists():
                     shutil.rmtree(checkout)
@@ -370,6 +471,9 @@ def apply_checkout(root, new_checkout, python, backend, bun, ref, arch, hub_port
                     shutil.rmtree(managed_dir)
                 if managed_backup is not None and managed_backup.exists() and not managed_dir.exists():
                     managed_backup.rename(managed_dir)
+                _drop_path(created_python)
+                _drop_path(created_backend)
+                _drop_path(created_bun)
                 _restore_path(previous_python, root / 'python')
                 _restore_path(previous_backend, root / 'backend/mitmproxy.app')
                 _restore_path(previous_bun, root / 'bun/bin/bun')
@@ -387,8 +491,10 @@ def apply_checkout(root, new_checkout, python, backend, bun, ref, arch, hub_port
                     except Exception:
                         pass
                 raise
-            require(not backup.exists(), 'Checkout backup survived a successful update')
+            require(backup.exists(), 'Checkout backup missing after apply; cannot roll back a failed start')
+            require(_pending_path(root).is_file(), 'update-pending.json missing after apply')
     data['was_running'] = was_running
+    data['pending'] = True
     return data
 
 
@@ -549,8 +655,12 @@ def main():
                 args.append('')
             data = apply_checkout(*args[:11])
             print(json.dumps({'ok': True, 'ref': data['ref'], 'routing': data['routing'],
-                              'grants': data.get('grants') or {}, 'backup_retained': False,
-                              'was_running': data.get('was_running')}))
+                              'grants': data.get('grants') or {}, 'backup_retained': True,
+                              'pending': True, 'was_running': data.get('was_running')}))
+        elif sys.argv[1] == 'finalize-update':
+            print(json.dumps(finalize_update(sys.argv[2])))
+        elif sys.argv[1] == 'rollback-update':
+            print(json.dumps(rollback_update(sys.argv[2])))
         elif sys.argv[1] == 'grant-sudoers':
             grant_sudoers(*sys.argv[2:])
         elif sys.argv[1] == 'grant-ca':

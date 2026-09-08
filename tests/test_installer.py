@@ -528,6 +528,75 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual((self.root / 'profile/profile.json').read_bytes(), before_profile)
         self.assertEqual((self.root / 'checkout/tap').read_text(), 'ok-a\n')
 
+    def test_apply_keeps_backup_until_finalize_and_rollback_restores(self):
+        self.prepare(configured=False)
+        shutil.copytree(REPO / 'instll', self.root / 'checkout/instll', dirs_exist_ok=True)
+        shutil.copytree(REPO / 'tap_core', self.root / 'checkout/tap_core', dirs_exist_ok=True)
+        for name in ('fixtures/managed/page.js', 'fixtures/managed/handler.py',
+                     'fixtures/live-slice/reader.py'):
+            path = self.root / 'checkout' / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('fixture\n')
+        (self.root / 'checkout/tap').write_text('ok-a\n')
+        (self.root / 'checkout/UPDATE_MARKER').write_text('version-a\n')
+        backend = self.parent / 'fixture-backend-pending'
+        backend.write_text('#!/bin/sh\necho "Mitmproxy: 12.2.3"\n')
+        backend.chmod(0o700)
+        staging = self.parent / 'pending-next'
+        shutil.copytree(self.root / 'checkout', staging)
+        (staging / 'UPDATE_MARKER').write_text('version-b\n')
+        ownership.apply_checkout(
+            str(self.root), str(staging), sys.executable, str(backend),
+            sys.executable, 'b' * 40, 'arm64', '19000')
+        self.assertTrue((self.root / 'update-pending.json').is_file())
+        self.assertEqual(len(list(self.root.glob('checkout.prev.*'))), 1)
+        self.assertEqual((self.root / 'checkout/UPDATE_MARKER').read_text().strip(), 'version-b')
+        ownership.rollback_update(str(self.root))
+        self.assertFalse((self.root / 'update-pending.json').exists())
+        self.assertEqual(list(self.root.glob('checkout.prev.*')), [])
+        self.assertEqual((self.root / 'checkout/UPDATE_MARKER').read_text().strip(), 'version-a')
+        # Re-apply and finalize (start skipped): A is dropped only then.
+        staging2 = self.parent / 'pending-next-2'
+        shutil.copytree(self.root / 'checkout', staging2)
+        (staging2 / 'UPDATE_MARKER').write_text('version-b\n')
+        ownership.apply_checkout(
+            str(self.root), str(staging2), sys.executable, str(backend),
+            sys.executable, 'b' * 40, 'arm64', '19000')
+        ownership.finalize_update(str(self.root))
+        self.assertFalse((self.root / 'update-pending.json').exists())
+        self.assertEqual(list(self.root.glob('checkout.prev.*')), [])
+        self.assertEqual((self.root / 'checkout/UPDATE_MARKER').read_text().strip(), 'version-b')
+
+    def test_apply_drops_newly_created_runtime_on_failure(self):
+        self.prepare(configured=False)
+        shutil.copytree(REPO / 'instll', self.root / 'checkout/instll', dirs_exist_ok=True)
+        shutil.copytree(REPO / 'tap_core', self.root / 'checkout/tap_core', dirs_exist_ok=True)
+        for name in ('fixtures/managed/page.js', 'fixtures/managed/handler.py',
+                     'fixtures/live-slice/reader.py'):
+            path = self.root / 'checkout' / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('fixture\n')
+        (self.root / 'checkout/tap').write_text('ok-a\n')
+        backend = self.parent / 'fixture-backend-created'
+        backend.write_text('#!/bin/sh\necho "Mitmproxy: 12.2.3"\n')
+        backend.chmod(0o700)
+        staged_python = self.parent / 'staged-python'
+        (staged_python / 'bin').mkdir(parents=True)
+        (staged_python / 'bin/python3').write_text(
+            '#!/bin/sh\nexec ' + shlex.quote(sys.executable) + ' "$@"\n')
+        (staged_python / 'bin/python3').chmod(0o700)
+        staging = self.parent / 'created-next'
+        shutil.copytree(self.root / 'checkout', staging)
+        (staging / 'instll/write_managed.py').write_text('raise SystemExit("boom")\n')
+        self.assertFalse((self.root / 'python').exists())
+        with self.assertRaises(ValueError):
+            ownership.apply_checkout(
+                str(self.root), str(staging), sys.executable, str(backend),
+                sys.executable, 'b' * 40, 'arm64', '19000',
+                staged_python=str(staged_python))
+        self.assertFalse((self.root / 'python').exists())
+        self.assertEqual((self.root / 'checkout/tap').read_text(), 'ok-a\n')
+
     def test_update_uses_target_ownership_when_current_lacks_apply(self):
         """main→B: current main has no verify/apply; target update still works."""
         def pack(archive, marker, *, mainlike):
@@ -543,10 +612,9 @@ class InstallerTests(unittest.TestCase):
                     target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copyfile(source, target)
             if mainlike:
-                # Exact main ownership surface: record/remove/grants only.
-                main_ownership = subprocess.check_output(
-                    ['git', 'show', 'main:instll/ownership.py'], cwd=REPO, text=True)
-                (staging / 'instll/ownership.py').write_text(main_ownership)
+                # Frozen pre-update ownership (record/remove/grants only); no git branch dep.
+                shutil.copyfile(REPO / 'tests/fixtures/installer/ownership-pre-update.py',
+                                staging / 'instll/ownership.py')
                 (staging / 'instll/update').unlink(missing_ok=True)
             (staging / 'UPDATE_MARKER').write_text(marker + '\n')
             with tarfile.open(archive, 'w:gz') as out:

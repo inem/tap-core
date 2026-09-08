@@ -216,14 +216,27 @@ CA_AFTER="$(printf '%s' "$AFTER" | "$PY" -c 'import json,sys; g=json.load(sys.st
 [ "$ROUTING_BEFORE" = "$ROUTING_AFTER" ] || fail "routing changed during update ($ROUTING_BEFORE → $ROUTING_AFTER)"
 [ "$CA_BEFORE" = "$CA_AFTER" ] || fail "CA grant fingerprint changed during update"
 
+START_FAILED=0
 if [ "$SKIP_START" != 1 ] && [ -f "$PROFILE/profile.json" ]; then
   if [ "$WAS_RUNNING" = 1 ] || [ "$ROUTING_AFTER" = explicit ]; then
     info "starting profile after update"
-    "$PYTHON" "$CHECKOUT/tap" --profile "$PROFILE" on
+    if ! "$PYTHON" "$CHECKOUT/tap" --profile "$PROFILE" on; then
+      START_FAILED=1
+    fi
   else
     info "profile left stopped; re-run finish-setup or tap on if needed"
   fi
 fi
+# Ownership helper now lives at the swapped checkout (APPLY_HELPER path was moved).
+POST_HELPER="$CHECKOUT/instll/ownership.py"
+if [ "$START_FAILED" = 1 ]; then
+  info "start failed; restoring previous checkout"
+  "$PYTHON" "$POST_HELPER" rollback-update "$ROOT" >/dev/null || true
+  fail "profile start failed after update; previous checkout restored"
+fi
+# Drop A only after B applied and (when requested) started successfully.
+"$PYTHON" "$POST_HELPER" finalize-update "$ROOT" >/dev/null \
+  || fail "update applied but finalize failed; inspect $ROOT/update-pending.json"
 
 cat <<EOF
 

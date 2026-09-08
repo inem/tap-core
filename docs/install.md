@@ -122,10 +122,11 @@ TAP_REF=<branch-or-commit> bash "$HOME/.tap-core/checkout/instll/update"
 Update stops a confirmed-running profile under the same locks (or refuses when
 process state cannot be inspected), including Hub/readers and pending network
 recovery. It stages the new checkout outside the install root, then swaps under
-the install-root and profile locks. The previous checkout (and managed tree)
-remain until ownership refresh and routing/CA checks succeed; on any failure
-checkout, managed, profile.json, wrapper/mark and only the runtimes that were
-actually replaced are restored. Update rewrites `profile.backend` and component
+the install-root and profile locks. Checkout A (and managed/runtime backups)
+remain as `checkout.prev.*` / `update-pending.json` until B starts successfully
+(or start is skipped); a failed start runs `rollback-update`. On any apply
+failure, checkout/managed/profile.json and only replaced runtimes are restored;
+newly added runtimes are removed. Update rewrites `profile.backend` and component
 python/bun path bindings; it does **not** reset port, hub_port, exclude/allow
 origins, or user-defined readers/handlers. Installer defaults stay in `managed/`.
 
