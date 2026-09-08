@@ -503,8 +503,9 @@ class BridgeTests(unittest.TestCase):
         self.assertNotIn('fixture.installed-linked', projected['readers'])
         self.assertNotIn('fixture.installed-linked', projected['handlers'])
 
-    def test_handler_pack_add_while_running_rolls_back_empty_registry(self):
-        """First pack add with no registry file must not leave the pack enabled."""
+    def test_handler_pack_add_while_running_never_publishes_enabled_plan(self):
+        """First pack add must refuse before enabling; bridge must not observe the grant."""
+        import copy
         import sys
         from tap_core.pack_store import PackStore, build_artifact
         linked = Path(__file__).resolve().parents[1] / 'fixtures/packs/installed-linked'
@@ -518,25 +519,99 @@ class BridgeTests(unittest.TestCase):
         self.assertFalse((self.root / 'state/pack-registry.json').is_file())
         artifact = self.root / 'linked.tap-pack'
         build_artifact(linked, artifact)
+        bridge = Bridge()
+        with patch.dict(os.environ, {'TAP_CORE_PROFILE': str(self.root)}):
+            bridge.load(None)
+        self.assertFalse(bridge.allowed('https://fixture.example'))
 
-        def fake_add(profile_root, source, assume_yes=False):
+        published_enabled = []
+
+        def fake_add(profile_root, source, assume_yes=False, live=False):
             store = PackStore(profile_root)
             installed = store.install(artifact)
             enabled = store.enable('fixture.installed-linked', '0.1.0',
                                    origins=['https://fixture.example'],
-                                   capabilities=['page.inject', 'capture.read', 'bridge.handle'])
+                                   capabilities=['page.inject', 'capture.read', 'bridge.handle'],
+                                   live=live)
             return {**installed, **enabled, 'source': source}
+
+        original_save = PackStore.save
+
+        def save_and_refresh(store, value):
+            packs = value.get('packs') or {}
+            linked_record = packs.get('fixture.installed-linked')
+            if linked_record and linked_record.get('enabled'):
+                published_enabled.append(copy.deepcopy(linked_record))
+                original_save(store, value)
+                bridge._plan_checked_at = 0
+                bridge.refresh_plan(force=True)
+                return
+            return original_save(store, value)
 
         argv = ['--profile', str(self.root), 'pack', 'add', 'owner/linked-http', '--yes']
         with patch.object(MacOS, 'service_loaded', side_effect=lambda target: True), \
-             patch('tap_core.pack_add.add', side_effect=fake_add):
+             patch('tap_core.pack_add.add', side_effect=fake_add), \
+             patch.object(PackStore, 'save', save_and_refresh):
             self.assertEqual(main(argv), 1)
+        self.assertEqual(published_enabled, [])
         store = PackStore(self.root)
-        registry = store.load()
-        self.assertNotIn('fixture.installed-linked', registry.get('packs', {}))
+        record = store.load()['packs']['fixture.installed-linked']
+        self.assertFalse(record['enabled'])
+        bridge._plan_checked_at = 0
+        bridge.refresh_plan(force=True)
+        self.assertFalse(bridge.allowed('https://fixture.example'))
         projected = store.effective_components(components)
         self.assertNotIn('fixture.installed-linked', projected['readers'])
         self.assertNotIn('fixture.installed-linked', projected['handlers'])
+
+    def test_refused_handler_enable_never_observable_by_bridge_refresh(self):
+        import copy
+        import sys
+        from tap_core.pack_store import PackStore, build_artifact
+        linked = Path(__file__).resolve().parents[1] / 'fixtures/packs/installed-linked'
+        components = {
+            'version': 1, 'python': sys.executable, 'bun': '/usr/bin/true',
+            'readers': {}, 'handlers': {},
+        }
+        self.profile.bridge = config(allow_origins=[], exclude_origins=[], page_scripts=[])
+        self.profile.components = components
+        self.profile.save()
+        store = PackStore(self.root)
+        artifact = self.root / 'linked.tap-pack'
+        build_artifact(linked, artifact)
+        store.install(artifact)
+        bridge = Bridge()
+        with patch.dict(os.environ, {'TAP_CORE_PROFILE': str(self.root)}):
+            bridge.load(None)
+        self.assertFalse(bridge.allowed('https://fixture.example'))
+        published_enabled = []
+        original_save = PackStore.save
+
+        def save_and_refresh(store_self, value):
+            packs = value.get('packs') or {}
+            linked_record = packs.get('fixture.installed-linked')
+            if linked_record and linked_record.get('enabled'):
+                published_enabled.append(copy.deepcopy(linked_record))
+                original_save(store_self, value)
+                bridge._plan_checked_at = 0
+                bridge.refresh_plan(force=True)
+                return
+            return original_save(store_self, value)
+
+        argv = ['--profile', str(self.root), 'pack', 'enable', 'fixture.installed-linked',
+                '--version', '0.1.0',
+                '--grant-origin', 'https://fixture.example',
+                '--grant-capability', 'page.inject',
+                '--grant-capability', 'capture.read',
+                '--grant-capability', 'bridge.handle']
+        with patch.object(MacOS, 'service_loaded', side_effect=lambda target: True), \
+             patch.object(PackStore, 'save', save_and_refresh):
+            self.assertEqual(main(argv), 1)
+        self.assertEqual(published_enabled, [])
+        self.assertFalse(store.load()['packs']['fixture.installed-linked']['enabled'])
+        bridge._plan_checked_at = 0
+        bridge.refresh_plan(force=True)
+        self.assertFalse(bridge.allowed('https://fixture.example'))
 
     def test_failed_plan_refresh_keeps_previous_assets(self):
         script = self.root / 'page.js'

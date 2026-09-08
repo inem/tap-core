@@ -105,7 +105,9 @@ Changes to bridge configuration still take effect after stop/configure/start.
 Installed **page-only** pack enable/update/disable may apply while the proxy is
 running: new documents pick up the refreshed plan; already executed page scripts
 are not removed until the page is reloaded. Reader/handler pack changes still
-require `off` before mutating components. Stopping the proxy closes existing
+require `off`: the candidate component projection is checked **before** the
+active registry is published, so a concurrent bridge refresh cannot observe a
+rejected plan. Stopping the proxy closes existing
 proxied WS connections; with the bridge disabled, their reconnects are denied
 and new pages receive no bootstrap.
 

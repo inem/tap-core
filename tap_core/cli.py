@@ -264,22 +264,19 @@ def main(argv=None):
                         root,
                         busy_message="A command from this profile is still running; "
                                      "wait before changing packs"):
-                    import copy
-                    running = (
+                    # Reader/handler projection is refused before registry publish so a
+                    # concurrent bridge refresh cannot observe a rejected plan.
+                    live = (
                         profile is not None
                         and (adapter.service_loaded(profile)
                              or (profile.components is not None and adapter.service_loaded(Job(profile)))))
-                    registry_before = copy.deepcopy(store.load())
-                    before_components = (
-                        store.effective_components(profile.components)
-                        if running and profile is not None and profile.components is not None else None)
                     if args.pack_action == 'add':
                         from .pack_add import add
-                        output = add(root, args.source, assume_yes=args.yes)
+                        output = add(root, args.source, assume_yes=args.yes, live=live)
                     elif args.pack_action == 'install':
                         output = store.install(args.artifact)
                     elif args.pack_action == 'update':
-                        output = store.update(args.artifact)
+                        output = store.update(args.artifact, live=live)
                     elif args.pack_action == 'enable':
                         from .bridge import read_json
                         config = read_json(args.config) if args.config else None
@@ -287,21 +284,14 @@ def main(argv=None):
                                               origins=args.grant_origin,
                                               capabilities=args.grant_capability,
                                               dependencies=_parse_dependency(args.dependency),
-                                              config=config)
+                                              config=config, live=live)
                     elif args.pack_action == 'rollback':
-                        output = store.rollback(args.id)
+                        output = store.rollback(args.id, live=live)
                     elif args.pack_action == 'disable':
-                        output = store.disable(args.id)
+                        output = store.disable(args.id, live=live)
                     else:
                         output = store.uninstall(args.id, args.version)
-                    if running and profile is not None and profile.components is not None:
-                        after_components = store.effective_components(profile.components)
-                        if before_components != after_components:
-                            store.save(registry_before)
-                            raise TapError(
-                                'Stop this profile with off before changing reader/handler packs; '
-                                'page-only pack changes may apply while the proxy is running')
-                    if isinstance(output, dict) and 'applies' in output and running:
+                    if isinstance(output, dict) and 'applies' in output and live:
                         output = dict(output)
                         output['applies'] = (
                             'immediately for new documents and retained content-addressed assets; '
