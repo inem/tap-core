@@ -1,0 +1,96 @@
+{
+  "raw_snapshot": {
+    "profile": "/fixture/profile",
+    "routing": "system",
+    "service_loaded": true,
+    "pid": 123,
+    "port_owned": true,
+    "port_open": true,
+    "network_recovery_pending": false,
+    "system_proxy_verified": false,
+    "capture": {
+      "available": true,
+      "current_process": true,
+      "healthy": false
+    },
+    "inspection_errors": {},
+    "bridge": {
+      "configured": false,
+      "healthy": true
+    }
+  },
+  "semantic_result": {
+    "schema": "tap.status-result/v3",
+    "profile": "/fixture/profile",
+    "runtime": {
+      "service_loaded": {
+        "knowledge": "known",
+        "value": true
+      },
+      "pid": {
+        "knowledge": "known",
+        "value": 123
+      },
+      "port_owned": {
+        "knowledge": "known",
+        "value": true
+      },
+      "port_open": {
+        "knowledge": "known",
+        "value": true
+      }
+    },
+    "routing": {
+      "routing": {
+        "knowledge": "known",
+        "value": "system"
+      },
+      "network_recovery_pending": {
+        "knowledge": "known",
+        "value": false
+      },
+      "system_proxy_verified": {
+        "knowledge": "known",
+        "value": false
+      }
+    },
+    "capture": {
+      "available": {
+        "knowledge": "known",
+        "value": true
+      },
+      "current_process": {
+        "knowledge": "known",
+        "value": true
+      },
+      "healthy": {
+        "knowledge": "known",
+        "value": false
+      }
+    },
+    "bridge": {
+      "configured": {
+        "knowledge": "known",
+        "value": false
+      },
+      "enabled": {
+        "knowledge": "unknown",
+        "reason": "not_observed",
+        "message": "observation was not supplied"
+      },
+      "healthy": {
+        "knowledge": "known",
+        "value": true
+      },
+      "hub_liveness": {
+        "knowledge": "unknown",
+        "reason": "not_observed",
+        "message": "observation was not supplied"
+      }
+    }
+  },
+  "terminal": {
+    "width_80": "tap           ● up · PID 123\nbrowser/apps  ○ direct   (tap on)\ncapture       ✗ degraded · writer unhealthy\nbridge        ○ absent · not configured",
+    "width_24": "tap           ● up\nbrowser/apps  ○ direct\ncapture       ✗ degraded\nbridge        ○ absent"
+  }
+}

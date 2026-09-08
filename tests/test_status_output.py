@@ -19,7 +19,7 @@ from tap_core.status_view import (project_status, public_status_result,
                                   load_material, observe)
 
 
-FIXTURES = Path(__file__).parents[1] / "contracts/status-result/v2/fixtures"
+FIXTURES = Path(__file__).parents[1] / "contracts/status-result/v3/fixtures"
 
 
 def snapshot(**changes):
@@ -29,7 +29,8 @@ def snapshot(**changes):
         "network_recovery_pending": False, "system_proxy_verified": False,
         "inspection_errors": {},
         "capture": {"available": True, "current_process": True, "healthy": True},
-        "bridge": {"healthy": True}, "components": {"healthy": True},
+        "bridge": {"configured": False, "healthy": True},
+        "components": {"healthy": True},
     }
     value.update(changes)
     return value
@@ -125,6 +126,65 @@ class StatusContractTests(unittest.TestCase):
         self.assertEqual({atom.arguments[1] for atom in warrants},
                          {"available", "current_process", "healthy"})
 
+    def test_bridge_state_matrix_does_not_claim_hub_liveness(self):
+        cases = [
+            ({"configured": False, "healthy": True},
+             ("absent", "bridge_not_configured")),
+            ({"configured": True, "enabled": False, "healthy": True,
+              "hub_liveness": "not_checked"},
+             ("disabled", "disabled_snapshot_applied")),
+            ({"configured": True, "enabled": True, "healthy": True,
+              "hub_liveness": "not_checked"},
+             ("applied", "enabled_snapshot_applied_hub_unchecked")),
+            ({"configured": True, "enabled": True, "healthy": False,
+              "hub_liveness": "not_checked"},
+             ("drifted", "running_runtime_snapshot_mismatch")),
+            ({"configured": False, "healthy": False},
+             ("unknown", "inconsistent_bridge_observations")),
+        ]
+        for bridge, expected in cases:
+            with self.subTest(bridge=bridge):
+                self.assertEqual(states(snapshot(bridge=bridge))["bridge"], expected)
+        unknown = states(snapshot(
+            bridge={"configured": False, "healthy": None},
+            inspection_errors={"bridge": "denied"}))
+        self.assertEqual(unknown["bridge"], ("unknown", "inspection_incomplete"))
+
+    def test_bridge_meaning_preserves_snapshot_scope_and_unchecked_liveness(self):
+        bridge = {"configured": True, "enabled": True, "healthy": True,
+                  "hub_liveness": "not_checked"}
+        projection = project_status(public_status_result(snapshot(bridge=bridge)))
+        meaning = next(atom for atom in projection.meanings if atom.arguments[0] == "bridge")
+        self.assertEqual(meaning.arguments[2], "applied")
+        candidate = projection.provenance[meaning].warrants[0]
+        warrants = projection.provenance[candidate].warrants
+        self.assertEqual({atom.arguments[1] for atom in warrants},
+                         {"configured", "enabled", "healthy", "hub_liveness"})
+        self.assertIn("hub unchecked", render_terminal(projection.document))
+
+    def test_unapplied_bridge_is_refined_by_runtime_before_presentation(self):
+        bridge = {"configured": True, "enabled": True, "healthy": False,
+                  "hub_liveness": "not_checked"}
+        cases = [
+            ({}, ("drifted", "running_runtime_snapshot_mismatch")),
+            ({"service_loaded": False, "pid": None, "port_owned": False,
+              "port_open": False}, ("inactive", "runtime_stopped")),
+            ({"port_open": False}, ("blocked", "broken_runtime")),
+            ({"port_owned": False, "port_open": True},
+             ("blocked", "runtime_port_conflict")),
+            ({"service_loaded": None,
+              "inspection_errors": {"service_loaded": "denied"}},
+             ("unverified", "runtime_inspection_incomplete")),
+        ]
+        for changes, expected in cases:
+            with self.subTest(changes=changes):
+                projection = project_status(public_status_result(
+                    snapshot(bridge=bridge, **changes)))
+                meanings = {atom.arguments[0]: (atom.arguments[2], atom.arguments[3])
+                            for atom in projection.meanings}
+                self.assertEqual(meanings["bridge"], expected)
+                self.assertNotIn("unapplied", render_terminal(projection.document))
+
     def test_unknown_is_not_stopped_and_drift_is_not_direct(self):
         unknown = states(snapshot(service_loaded=None, inspection_errors={"service_loaded": "denied"}))
         drift = states(snapshot(network_recovery_pending=True, system_proxy_verified=False))
@@ -174,7 +234,7 @@ class StatusContractTests(unittest.TestCase):
         projection = project_status(public_status_result(raw))
         self.assertFalse(any(atom.arguments[:2] == ("status", "traffic")
                              for atom in projection.meanings))
-        self.assertEqual(render_terminal(projection.document).count("\n"), 2)
+        self.assertEqual(render_terminal(projection.document).count("\n"), 3)
 
     def test_absent_field_is_not_observed_instead_of_known_null(self):
         raw = snapshot()
@@ -248,9 +308,11 @@ class ProjectionKernelTests(unittest.TestCase):
         projection = project_status(public_status_result(snapshot()))
         result = render_terminal_result(projection.document, 24)
         self.assertEqual(result.text,
-                         "tap           ● up\nbrowser/apps  ○ direct\ncapture       ● ready")
+                         "tap           ● up\nbrowser/apps  ○ direct\ncapture       ● ready\n"
+                         "bridge        ○ absent")
         self.assertEqual([item["slot"] for item in result.omissions],
-                         ["runtime-attachment", "routing-attachment", "capture-attachment"])
+                         ["runtime-attachment", "routing-attachment", "capture-attachment",
+                          "bridge-attachment"])
         self.assertTrue(all(item["reason"] == "does-not-fit" for item in result.omissions))
         by_id = {slot.identifier: slot for slot in projection.document.slots}
         self.assertEqual(by_id["runtime-detail"].parent, "runtime-attachment")
@@ -338,8 +400,8 @@ class MaterialCompositionTests(unittest.TestCase):
     def test_fragments_have_distinct_section_and_assembly_owners(self):
         material = load_material()
         self.assertEqual(material["schema"], "tap.internal-status-material/v1")
-        self.assertEqual(material["result_schema"], "tap.status-result/v2")
-        self.assertEqual(set(material["observations"]), {"runtime", "routing", "capture"})
+        self.assertEqual(material["result_schema"], "tap.status-result/v3")
+        self.assertEqual(set(material["observations"]), {"runtime", "routing", "capture", "bridge"})
         self.assertTrue(material["composition_rules"])
         self.assertEqual(material["document_root"], "status")
 
@@ -384,11 +446,12 @@ class StatusCliTests(unittest.TestCase):
         raw = snapshot()
         code, semantic, _ = self.invoke(raw, "--output", "semantic-json")
         self.assertEqual(code, 0)
-        self.assertEqual(json.loads(semantic)["schema"], "tap.status-result/v2")
+        self.assertEqual(json.loads(semantic)["schema"], "tap.status-result/v3")
         code, narrow, _ = self.invoke(raw, "--output", "terminal", "--width", "24", "--color", "never")
         self.assertEqual(code, 0)
         self.assertEqual(narrow,
-                         "tap           ● up\nbrowser/apps  ○ direct\ncapture       ● ready\n")
+                         "tap           ● up\nbrowser/apps  ○ direct\ncapture       ● ready\n"
+                         "bridge        ○ absent\n")
         code, colored, _ = self.invoke(raw, "--output", "terminal", "--color", "always")
         self.assertEqual(code, 0)
         self.assertIn("\x1b[32m", colored)

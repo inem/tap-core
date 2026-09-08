@@ -1,0 +1,96 @@
+{
+  "raw_snapshot": {
+    "profile": "/fixture/profile",
+    "routing": "explicit",
+    "service_loaded": false,
+    "pid": null,
+    "port_owned": false,
+    "port_open": false,
+    "network_recovery_pending": false,
+    "system_proxy_verified": "not_used",
+    "capture": {
+      "available": false,
+      "current_process": false,
+      "healthy": false
+    },
+    "inspection_errors": {},
+    "bridge": {
+      "configured": true,
+      "enabled": true,
+      "healthy": false,
+      "hub_liveness": "not_checked"
+    }
+  },
+  "semantic_result": {
+    "schema": "tap.status-result/v3",
+    "profile": "/fixture/profile",
+    "runtime": {
+      "service_loaded": {
+        "knowledge": "known",
+        "value": false
+      },
+      "pid": {
+        "knowledge": "known",
+        "value": null
+      },
+      "port_owned": {
+        "knowledge": "known",
+        "value": false
+      },
+      "port_open": {
+        "knowledge": "known",
+        "value": false
+      }
+    },
+    "routing": {
+      "routing": {
+        "knowledge": "known",
+        "value": "explicit"
+      },
+      "network_recovery_pending": {
+        "knowledge": "known",
+        "value": false
+      },
+      "system_proxy_verified": {
+        "knowledge": "known",
+        "value": "not_used"
+      }
+    },
+    "capture": {
+      "available": {
+        "knowledge": "known",
+        "value": false
+      },
+      "current_process": {
+        "knowledge": "known",
+        "value": false
+      },
+      "healthy": {
+        "knowledge": "known",
+        "value": false
+      }
+    },
+    "bridge": {
+      "configured": {
+        "knowledge": "known",
+        "value": true
+      },
+      "enabled": {
+        "knowledge": "known",
+        "value": true
+      },
+      "healthy": {
+        "knowledge": "known",
+        "value": false
+      },
+      "hub_liveness": {
+        "knowledge": "known",
+        "value": "not_checked"
+      }
+    }
+  },
+  "terminal": {
+    "width_80": "tap           ✗ down\nbrowser/apps  ○ explicit · clients opt in\ncapture       ○ absent · no health record\nbridge        ○ inactive · TAP stopped",
+    "width_24": "tap           ✗ down\nbrowser/apps  ○ explicit\ncapture       ○ absent\nbridge        ○ inactive"
+  }
+}

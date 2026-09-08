@@ -8,11 +8,12 @@
       "when": [
         ["meaning","runtime","state","$runtime-state","$runtime-reason","$runtime-attrs"],
         ["meaning","routing","state","$routing-state","$routing-reason","$routing-attrs"],
-        ["meaning","capture","state","$capture-state","$capture-reason","$capture-attrs"]
+        ["meaning","capture","state","$capture-state","$capture-reason","$capture-attrs"],
+        ["meaning","bridge","state","$bridge-state","$bridge-reason","$bridge-attrs"]
       ],
       "emit": [
-        ["projection","status-document","$runtime-state","$routing-state","$capture-state"],
-        ["slot","status",null,0,"group","document",false,"",null,[["projection","status-document","$runtime-state","$routing-state","$capture-state"]]]
+        ["projection","status-document","$runtime-state","$routing-state","$capture-state","$bridge-state"],
+        ["slot","status",null,0,"group","document",false,"",null,[["projection","status-document","$runtime-state","$routing-state","$capture-state","$bridge-state"]]]
       ]
     }
   ],

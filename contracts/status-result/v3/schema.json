@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/inem/tap-core/contracts/status-result/v3/schema.json",
+  "title": "TAP compact status result v3",
+  "type": "object",
+  "required": ["schema", "profile", "runtime", "routing", "capture", "bridge"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {"const": "tap.status-result/v3"},
+    "profile": {"type": ["string", "null"]},
+    "runtime": {"$ref": "#/$defs/runtime"},
+    "routing": {"$ref": "#/$defs/routing"},
+    "capture": {"$ref": "#/$defs/capture"},
+    "bridge": {"$ref": "#/$defs/bridge"}
+  },
+  "$defs": {
+    "known": {
+      "type": "object", "required": ["knowledge", "value"], "additionalProperties": false,
+      "properties": {"knowledge": {"const": "known"}, "value": {}}
+    },
+    "unknown": {
+      "type": "object", "required": ["knowledge", "reason", "message"], "additionalProperties": false,
+      "properties": {"knowledge": {"const": "unknown"}, "reason": {"enum": ["inspection_failed", "not_observed"]}, "message": {"type": "string"}}
+    },
+    "observation": {"oneOf": [{"$ref": "#/$defs/known"}, {"$ref": "#/$defs/unknown"}]},
+    "runtime": {
+      "type": "object", "additionalProperties": false,
+      "required": ["service_loaded", "pid", "port_owned", "port_open"],
+      "properties": {"service_loaded": {"$ref": "#/$defs/observation"}, "pid": {"$ref": "#/$defs/observation"}, "port_owned": {"$ref": "#/$defs/observation"}, "port_open": {"$ref": "#/$defs/observation"}}
+    },
+    "routing": {
+      "type": "object", "additionalProperties": false,
+      "required": ["routing", "network_recovery_pending", "system_proxy_verified"],
+      "properties": {"routing": {"$ref": "#/$defs/observation"}, "network_recovery_pending": {"$ref": "#/$defs/observation"}, "system_proxy_verified": {"$ref": "#/$defs/observation"}}
+    },
+    "capture": {
+      "type": "object", "additionalProperties": false,
+      "required": ["available", "current_process", "healthy"],
+      "properties": {"available": {"$ref": "#/$defs/observation"}, "current_process": {"$ref": "#/$defs/observation"}, "healthy": {"$ref": "#/$defs/observation"}}
+    },
+    "bridge": {
+      "type": "object", "additionalProperties": false,
+      "required": ["configured", "enabled", "healthy", "hub_liveness"],
+      "properties": {"configured": {"$ref": "#/$defs/observation"}, "enabled": {"$ref": "#/$defs/observation"}, "healthy": {"$ref": "#/$defs/observation"}, "hub_liveness": {"$ref": "#/$defs/observation"}}
+    }
+  }
+}
