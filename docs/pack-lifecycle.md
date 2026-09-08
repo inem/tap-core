@@ -200,3 +200,28 @@ that external example, and independent author reproduction. Clean-Mac release
 acceptance belongs to #15. System CA trust and a live nonce-bearing YouTube
 response remain #38 evidence. Hubless reader-only managed on/off is accepted
 for packs without handlers when `bridge.enabled=false`.
+
+### Repeat the linked HTTP/browser check
+
+Use a development checkout accessible to launchd (outside macOS-protected
+Documents/Desktop folders). The pack is installed from its artifact; Core runs
+from this checkout, so this is not installer or clean-Mac acceptance. The check
+requires an unused loopback port 18998 and explicit paths to mitmproxy 12.2.3,
+Bun 1.3.11, Node, the Playwright package directory and Chrome. Node/Playwright
+are check dependencies, not required pack runtimes.
+
+```sh
+python3 tools/check_linked_pack_live.py \
+  --pack /path/to/example.linked-http-0.1.0.tap-pack \
+  --backend /path/to/mitmdump --bun /path/to/bun \
+  --node /path/to/node --playwright /path/to/node_modules/playwright \
+  --chrome "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --output /tmp/linked-pack-live-browser.json
+```
+
+This starts a temporary origin with HTML and `/record`, installs the pack in a
+fresh profile, runs real proxy/managed launchd jobs and headless Chrome, then
+stops those jobs and the origin. It compares the displayed value and record ID
+with the capture journal and reader projection before and after off/on. The
+report records the tested checkout commit; supplied backend/browser tools are
+not proof of runtime download or platform support on a clean Mac.

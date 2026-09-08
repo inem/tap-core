@@ -1,7 +1,7 @@
 {
   "scope": "installed linked-http pack live browser; explicit loopback; not clean-Mac/CA/SSE/third-party WS",
-  "core_commit": "350f75dee1233d2fa197ff7d0b29914bb3212b63",
-  "python": "3.14.6",
+  "core_commit": "40f1f17aec995b663efab44e679cc0376e738098",
+  "python": "3.9.6",
   "macOS": "15.6.1",
   "bun": "1.3.11",
   "backend": "Mitmproxy: 12.2.3 binary",
@@ -20,20 +20,20 @@
   "install_enable_on": true,
   "browser": {
     "displayed": {
-      "record_id": "ab4ad514-0cc3-43db-a823-ee33cc2aced0",
-      "value": "ee329050b93b721f"
+      "record_id": "a1911115-0221-42e5-bb7b-ee4298f5a92d",
+      "value": "03180ee73b2dede7"
     },
-    "capture_record_id": "ab4ad514-0cc3-43db-a823-ee33cc2aced0",
-    "browser": "147.0.7727.15"
+    "capture_record_id": "a1911115-0221-42e5-bb7b-ee4298f5a92d",
+    "browser": "152.0.7977.76"
   },
   "restart_resume": true,
   "browser_after_restart": {
     "displayed": {
-      "record_id": "a404dd7a-53ba-4172-909b-9ffd13479279",
-      "value": "9c7d84c4a4e42239"
+      "record_id": "8b871f17-5973-43e3-84c7-72c24ee2c505",
+      "value": "b94ab843d9818327"
     },
-    "capture_record_id": "a404dd7a-53ba-4172-909b-9ffd13479279",
-    "browser": "147.0.7727.15"
+    "capture_record_id": "8b871f17-5973-43e3-84c7-72c24ee2c505",
+    "browser": "152.0.7977.76"
   },
   "system_settings_unchanged": true
 }
