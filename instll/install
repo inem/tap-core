@@ -239,6 +239,7 @@ print_finish_hint() {
 ────────────────────────────────────────────────────────────
   Almost done — one command left (Mac password once):
 
+    export PATH="$BIN_DIR:\$PATH"
     bash "$CHECKOUT/instll/finish-setup"
 
   That will: allow system proxy control → trust this CA → tap on.
@@ -248,6 +249,10 @@ print_finish_hint() {
 
     curl -fsSL … | TAP_ROUTING=explicit bash
     (new TAP_ROOT) or later: tap routing set explicit && tap on
+
+  Keep tap on PATH in new shells (zsh):
+
+    echo 'export PATH="$BIN_DIR:\$PATH"' >> ~/.zshrc
 ────────────────────────────────────────────────────────────
 
 EOF
