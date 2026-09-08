@@ -1,0 +1,62 @@
+{
+  "scope": "#10 slice 1 hot page assets: pack A\u2192B without proxy restart; new document + retained digest + shared bytes across origins; explicit loopback; no system proxy",
+  "commit": "0fb3072746c3c23dbc4e2bdcae0c537b6ac7f87e",
+  "platform": {
+    "macOS": "15.6.1",
+    "architecture": "arm64",
+    "python": "3.14.6"
+  },
+  "backend": "Mitmproxy: 12.2.3 binary",
+  "playwright": "1.62.1",
+  "scenario_passed": true,
+  "cleanup_verified": true,
+  "steps": {
+    "install": "ok",
+    "on": "ok",
+    "v1_injection": true,
+    "identical_bytes_both_origins": true,
+    "browser_v1": {
+      "marker": "__tapHotV1",
+      "marker_true": true,
+      "scripts": [
+        "http://127.0.0.1:65263/__tap/probe/core/d2cec32985ed81c386b3dbb3c290607260b621d3a694004fdc27921e05d19860.js?token=9e95b66d0a6b66a1a9dc4fdffacdd25db323e287dd5a99e5",
+        "http://127.0.0.1:65263/__tap/probe/core/3c382344c2eeec6f82b1143b8700b6b3aed22f9f658ff31fcf6532cf4f4e764d.js?token=9e95b66d0a6b66a1a9dc4fdffacdd25db323e287dd5a99e5"
+      ],
+      "browser": "152.0.7977.76",
+      "origin": "http://127.0.0.1:65263"
+    },
+    "hot_update": {
+      "id": "tap.check.hot-page",
+      "version": "0.2.0",
+      "enabled": true,
+      "code": "/private/var/folders/rc/jrgt0w_x4bvc1hftg6x8g7sh0000gn/T/tap-hot-assets-495gawq2/profile/packs/tap.check.hot-page/versions/0.2.0",
+      "applies": "immediately for new documents and retained content-addressed assets; open pages keep previously injected scripts until reload; reader/handler bindings still require profile on"
+    },
+    "v2_injection": true,
+    "plan_changed": true,
+    "retained_same_origin": true,
+    "retained_fetch_status": {
+      "same": 200,
+      "other_granted": 200
+    },
+    "browser_v2": {
+      "marker": "__tapHotV2",
+      "marker_true": true,
+      "scripts": [
+        "http://127.0.0.1:65263/__tap/probe/core/75102bb045a2a831c9cb2874db21128c35fbc32db17e99bb5cab0616ca3cf488.js?token=9e95b66d0a6b66a1a9dc4fdffacdd25db323e287dd5a99e5",
+        "http://127.0.0.1:65263/__tap/probe/core/3c382344c2eeec6f82b1143b8700b6b3aed22f9f658ff31fcf6532cf4f4e764d.js?token=9e95b66d0a6b66a1a9dc4fdffacdd25db323e287dd5a99e5"
+      ],
+      "browser": "152.0.7977.76",
+      "origin": "http://127.0.0.1:65263"
+    }
+  },
+  "origins": [
+    "http://127.0.0.1:65263",
+    "http://127.0.0.1:65264"
+  ],
+  "browser": "152.0.7977.76",
+  "scenario_failures": [],
+  "system_settings_unchanged": true,
+  "cleanup_errors": [],
+  "temporary_profile_removed": true
+}
