@@ -124,7 +124,10 @@ process state cannot be inspected), including Hub/readers and pending network
 recovery. It stages the new checkout outside the install root, then swaps under
 the install-root and profile locks. Checkout A (and managed/runtime backups)
 remain as `checkout.prev.*` / `update-pending.json` until B starts successfully
-(or start is skipped); a failed start runs `rollback-update`. On any apply
+(or start is skipped); a failed start runs `rollback-update` under the same
+locks after stopping B. Rollback keeps `update-pending.json` until mark/wrapper
+refresh succeeds (`phase=files_restored` is retryable); a failed rollback is
+nonzero and does not claim restore. On any apply
 failure, checkout/managed/profile.json and only replaced runtimes are restored;
 newly added runtimes are removed. Update rewrites `profile.backend` and component
 python/bun path bindings; it does **not** reset port, hub_port, exclude/allow

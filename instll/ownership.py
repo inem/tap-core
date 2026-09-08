@@ -264,71 +264,109 @@ def _pending_path(root):
     return Path(root) / 'update-pending.json'
 
 
+def _with_install_locks(root, profile_root, configured, body):
+    """Serialize terminal update transitions with the same locks as apply."""
+    sys.path.insert(0, str(root / 'checkout'))
+    from tap_core.runtime import profile_lock
+    with profile_lock(root, busy_message='Another install/update holds this root'):
+        with (profile_lock(profile_root, busy_message='Another command is changing this profile')
+              if configured else nullcontext()):
+            return body()
+
+
 def finalize_update(root):
     """Drop checkout/runtime backups after B has started (or start was skipped)."""
     root = canonical(root)
     path = _pending_path(root)
     require(path.is_file(), 'No pending update to finalize')
-    pending = json.loads(path.read_text())
-    for key in ('checkout_backup', 'managed_backup', 'previous_python', 'previous_backend',
-                'previous_bun', 'profile_backup'):
-        value = pending.get(key) or ''
-        if value:
-            _drop_path(value)
-    path.unlink(missing_ok=True)
-    require(not list(root.glob('checkout.prev.*')), 'Checkout backup survived finalize')
-    return {'ok': True, 'root': str(root)}
+    profile_root = root / 'profile'
+    configured = (profile_root / 'profile.json').is_file()
+
+    def body():
+        pending = json.loads(path.read_text())
+        for key in ('checkout_backup', 'managed_backup', 'previous_python', 'previous_backend',
+                    'previous_bun', 'profile_backup'):
+            value = pending.get(key) or ''
+            if value:
+                _drop_path(value)
+        path.unlink(missing_ok=True)
+        require(not list(root.glob('checkout.prev.*')), 'Checkout backup survived finalize')
+        return {'ok': True, 'root': str(root)}
+
+    return _with_install_locks(root, profile_root, configured, body)
 
 
 def rollback_update(root):
-    """Restore A after apply committed B but start/post-check failed."""
+    """Restore A after apply committed B but start/post-check failed.
+
+    Holds root/profile locks, stops B (and clears recovery) before replacing
+    files, and keeps update-pending.json until mark/wrapper refresh succeeds.
+    """
     import subprocess
     root = canonical(root)
     path = _pending_path(root)
     require(path.is_file(), 'No pending update to roll back')
-    pending = json.loads(path.read_text())
-    before = pending.get('before') or {}
-    checkout = root / 'checkout'
-    backup = Path(pending.get('checkout_backup') or '')
-    managed_dir = root / 'managed'
-    managed_backup = Path(pending['managed_backup']) if pending.get('managed_backup') else None
     profile_root = root / 'profile'
-    hub_port = int(pending.get('hub_port') or 0)
+    # Prefer live profile.json; during retry after files_restored it is already A.
+    configured = (profile_root / 'profile.json').is_file()
 
-    if checkout.exists() and backup.exists():
-        shutil.rmtree(checkout)
-    if backup.exists() and not checkout.exists():
-        backup.rename(checkout)
-    if managed_dir.exists() and managed_backup is not None and managed_backup.exists():
-        shutil.rmtree(managed_dir)
-    if managed_backup is not None and managed_backup.exists() and not managed_dir.exists():
-        managed_backup.rename(managed_dir)
-    for key, dest in (('created_python', root / 'python'),
-                      ('created_backend', root / 'backend/mitmproxy.app'),
-                      ('created_bun', root / 'bun/bin/bun')):
-        if pending.get(key):
-            _drop_path(pending[key])
-    _restore_path(pending.get('previous_python') or None, root / 'python')
-    _restore_path(pending.get('previous_backend') or None, root / 'backend/mitmproxy.app')
-    _restore_path(pending.get('previous_bun') or None, root / 'bun/bin/bun')
-    profile_backup = pending.get('profile_backup') or ''
-    if profile_backup and Path(profile_backup).is_file():
-        (profile_root / 'profile.json').write_bytes(Path(profile_backup).read_bytes())
-        _drop_path(profile_backup)
-    if checkout.exists() and before.get('python'):
-        helper = checkout / 'instll/write_managed.py'
-        bun = before.get('bun') or ''
-        if helper.is_file() and bun and hub_port and not managed_dir.exists():
-            subprocess.run(
+    def body():
+        pending = json.loads(path.read_text())
+        before = pending.get('before') or {}
+        require(before.get('python') and before.get('backend') and before.get('ref') and before.get('arch'),
+                'Pending update is missing ownership restore fields')
+        checkout = root / 'checkout'
+        backup = Path(pending.get('checkout_backup') or '')
+        managed_dir = root / 'managed'
+        managed_backup = Path(pending['managed_backup']) if pending.get('managed_backup') else None
+        hub_port = int(pending.get('hub_port') or 0)
+        phase = pending.get('phase') or 'applied'
+
+        if phase == 'applied':
+            # Stop B while its checkout is still current; refuse if unknown/busy.
+            if configured:
+                _ensure_profile_stopped(profile_root)
+            if checkout.exists() and backup.exists():
+                shutil.rmtree(checkout)
+            if backup.exists() and not checkout.exists():
+                backup.rename(checkout)
+            if managed_dir.exists() and managed_backup is not None and managed_backup.exists():
+                shutil.rmtree(managed_dir)
+            if managed_backup is not None and managed_backup.exists() and not managed_dir.exists():
+                managed_backup.rename(managed_dir)
+            for key in ('created_python', 'created_backend', 'created_bun'):
+                if pending.get(key):
+                    _drop_path(pending[key])
+            _restore_path(pending.get('previous_python') or None, root / 'python')
+            _restore_path(pending.get('previous_backend') or None, root / 'backend/mitmproxy.app')
+            _restore_path(pending.get('previous_bun') or None, root / 'bun/bin/bun')
+            profile_backup = pending.get('profile_backup') or ''
+            if profile_backup and Path(profile_backup).is_file():
+                (profile_root / 'profile.json').write_bytes(Path(profile_backup).read_bytes())
+            pending['phase'] = 'files_restored'
+            path.write_text(json.dumps(pending, indent=2) + '\n')
+
+        # Mark/wrapper must match A before pending is cleared.
+        if not managed_dir.exists():
+            helper = checkout / 'instll/write_managed.py'
+            bun = before.get('bun') or ''
+            require(helper.is_file() and bun and hub_port,
+                    'Cannot rebuild managed bindings during rollback')
+            result = subprocess.run(
                 [before['python'], str(helper), str(root), str(checkout), before['python'], bun,
                  str(hub_port), str(profile_root)],
-                capture_output=True, text=True, check=False)
-        try:
-            refresh(root, before['python'], before['backend'], before['ref'], before['arch'])
-        except Exception:
-            pass
-    path.unlink(missing_ok=True)
-    return {'ok': True, 'root': str(root), 'restored': True}
+                capture_output=True, text=True)
+            if result.returncode:
+                raise ValueError('rollback write_managed failed: '
+                                 + (result.stderr or result.stdout).strip())
+        refresh(root, before['python'], before['backend'], before['ref'], before['arch'])
+        profile_backup = pending.get('profile_backup') or ''
+        if profile_backup:
+            _drop_path(profile_backup)
+        path.unlink(missing_ok=True)
+        return {'ok': True, 'root': str(root), 'restored': True}
+
+    return _with_install_locks(root, profile_root, configured, body)
 
 
 def apply_checkout(root, new_checkout, python, backend, bun, ref, arch, hub_port,
@@ -442,6 +480,7 @@ def apply_checkout(root, new_checkout, python, backend, bun, ref, arch, hub_port
                     profile_prev_path.write_bytes(profile_backup)
                     profile_prev = str(profile_prev_path)
                 pending = {
+                    'phase': 'applied',
                     'checkout_backup': str(backup),
                     'managed_backup': str(managed_backup) if managed_backup is not None and managed_backup.exists() else '',
                     'previous_python': str(previous_python) if previous_python else '',

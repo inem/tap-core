@@ -231,7 +231,9 @@ fi
 POST_HELPER="$CHECKOUT/instll/ownership.py"
 if [ "$START_FAILED" = 1 ]; then
   info "start failed; restoring previous checkout"
-  "$PYTHON" "$POST_HELPER" rollback-update "$ROOT" >/dev/null || true
+  if ! "$PYTHON" "$POST_HELPER" rollback-update "$ROOT"; then
+    fail "profile start failed and rollback incomplete; inspect $ROOT/update-pending.json and retry rollback-update"
+  fi
   fail "profile start failed after update; previous checkout restored"
 fi
 # Drop A only after B applied and (when requested) started successfully.

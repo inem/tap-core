@@ -567,6 +567,101 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(list(self.root.glob('checkout.prev.*')), [])
         self.assertEqual((self.root / 'checkout/UPDATE_MARKER').read_text().strip(), 'version-b')
 
+    def test_rollback_refuses_while_profile_lock_held(self):
+        self.prepare(configured=False)
+        shutil.copytree(REPO / 'instll', self.root / 'checkout/instll', dirs_exist_ok=True)
+        shutil.copytree(REPO / 'tap_core', self.root / 'checkout/tap_core', dirs_exist_ok=True)
+        for name in ('fixtures/managed/page.js', 'fixtures/managed/handler.py',
+                     'fixtures/live-slice/reader.py'):
+            path = self.root / 'checkout' / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('fixture\n')
+        (self.root / 'checkout/tap').write_text('ok-a\n')
+        (self.root / 'checkout/UPDATE_MARKER').write_text('version-a\n')
+        backend = self.parent / 'fixture-backend-lock'
+        backend.write_text('#!/bin/sh\necho "Mitmproxy: 12.2.3"\n')
+        backend.chmod(0o700)
+        staging = self.parent / 'lock-next'
+        shutil.copytree(self.root / 'checkout', staging)
+        (staging / 'UPDATE_MARKER').write_text('version-b\n')
+        ownership.apply_checkout(
+            str(self.root), str(staging), sys.executable, str(backend),
+            sys.executable, 'b' * 40, 'arm64', '19000')
+        from tap_core.runtime import profile_lock
+        with profile_lock(self.root):
+            result = subprocess.run(
+                [sys.executable, str(self.root / 'checkout/instll/ownership.py'),
+                 'rollback-update', str(self.root)],
+                capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('holds this root', result.stderr)
+        self.assertTrue((self.root / 'update-pending.json').is_file())
+        self.assertEqual((self.root / 'checkout/UPDATE_MARKER').read_text().strip(), 'version-b')
+
+    def test_rollback_refuses_when_stop_fails(self):
+        self.prepare(configured=True)
+        shutil.copytree(REPO / 'instll', self.root / 'checkout/instll', dirs_exist_ok=True)
+        shutil.copytree(REPO / 'tap_core', self.root / 'checkout/tap_core', dirs_exist_ok=True)
+        for name in ('fixtures/managed/page.js', 'fixtures/managed/handler.py',
+                     'fixtures/live-slice/reader.py'):
+            path = self.root / 'checkout' / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('fixture\n')
+        (self.root / 'checkout/tap').write_text('ok-a\n')
+        (self.root / 'checkout/UPDATE_MARKER').write_text('version-a\n')
+        backend = self.parent / 'fixture-backend-stop'
+        backend.write_text('#!/bin/sh\necho "Mitmproxy: 12.2.3"\n')
+        backend.chmod(0o700)
+        staging = self.parent / 'stop-next'
+        shutil.copytree(self.root / 'checkout', staging)
+        (staging / 'UPDATE_MARKER').write_text('version-b\n')
+        ownership.apply_checkout(
+            str(self.root), str(staging), sys.executable, str(backend),
+            sys.executable, 'b' * 40, 'arm64', '19000')
+        with patch.object(ownership, '_ensure_profile_stopped',
+                          side_effect=ValueError('Hub still busy')):
+            with self.assertRaises(ValueError) as raised:
+                ownership.rollback_update(str(self.root))
+        self.assertIn('Hub still busy', str(raised.exception))
+        self.assertTrue((self.root / 'update-pending.json').is_file())
+        pending = json.loads((self.root / 'update-pending.json').read_text())
+        self.assertEqual(pending.get('phase'), 'applied')
+        self.assertEqual((self.root / 'checkout/UPDATE_MARKER').read_text().strip(), 'version-b')
+        self.assertEqual(len(list(self.root.glob('checkout.prev.*'))), 1)
+
+    def test_rollback_keeps_pending_when_refresh_fails(self):
+        self.prepare(configured=False)
+        shutil.copytree(REPO / 'instll', self.root / 'checkout/instll', dirs_exist_ok=True)
+        shutil.copytree(REPO / 'tap_core', self.root / 'checkout/tap_core', dirs_exist_ok=True)
+        for name in ('fixtures/managed/page.js', 'fixtures/managed/handler.py',
+                     'fixtures/live-slice/reader.py'):
+            path = self.root / 'checkout' / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('fixture\n')
+        (self.root / 'checkout/tap').write_text('ok-a\n')
+        (self.root / 'checkout/UPDATE_MARKER').write_text('version-a\n')
+        backend = self.parent / 'fixture-backend-refresh'
+        backend.write_text('#!/bin/sh\necho "Mitmproxy: 12.2.3"\n')
+        backend.chmod(0o700)
+        staging = self.parent / 'refresh-next'
+        shutil.copytree(self.root / 'checkout', staging)
+        (staging / 'UPDATE_MARKER').write_text('version-b\n')
+        ownership.apply_checkout(
+            str(self.root), str(staging), sys.executable, str(backend),
+            sys.executable, 'b' * 40, 'arm64', '19000')
+        self.assertEqual(json.loads((self.root / 'install.json').read_text())['ref'], 'b' * 40)
+        with patch.object(ownership, 'refresh', side_effect=OSError('disk full')):
+            with self.assertRaises(OSError):
+                ownership.rollback_update(str(self.root))
+        pending = json.loads((self.root / 'update-pending.json').read_text())
+        self.assertEqual(pending.get('phase'), 'files_restored')
+        self.assertEqual((self.root / 'checkout/UPDATE_MARKER').read_text().strip(), 'version-a')
+        self.assertEqual(json.loads((self.root / 'install.json').read_text())['ref'], 'b' * 40)
+        # Retry after fault clears completes recovery.
+        ownership.rollback_update(str(self.root))
+        self.assertFalse((self.root / 'update-pending.json').exists())
+        self.assertEqual(json.loads((self.root / 'install.json').read_text())['ref'], 'fixture-ref')
+
     def test_apply_drops_newly_created_runtime_on_failure(self):
         self.prepare(configured=False)
         shutil.copytree(REPO / 'instll', self.root / 'checkout/instll', dirs_exist_ok=True)
