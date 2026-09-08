@@ -1,0 +1,53 @@
+{
+  "raw_snapshot": {
+    "profile": "/fixture/profile",
+    "routing": "system",
+    "service_loaded": true,
+    "pid": 123,
+    "port_owned": true,
+    "port_open": true,
+    "network_recovery_pending": true,
+    "system_proxy_verified": false,
+    "inspection_errors": {}
+  },
+  "semantic_result": {
+    "schema": "tap.status-result/v1",
+    "profile": "/fixture/profile",
+    "runtime": {
+      "service_loaded": {
+        "knowledge": "known",
+        "value": true
+      },
+      "pid": {
+        "knowledge": "known",
+        "value": 123
+      },
+      "port_owned": {
+        "knowledge": "known",
+        "value": true
+      },
+      "port_open": {
+        "knowledge": "known",
+        "value": true
+      }
+    },
+    "routing": {
+      "routing": {
+        "knowledge": "known",
+        "value": "system"
+      },
+      "network_recovery_pending": {
+        "knowledge": "known",
+        "value": true
+      },
+      "system_proxy_verified": {
+        "knowledge": "known",
+        "value": false
+      }
+    }
+  },
+  "terminal": {
+    "width_80": "tap           ● up · PID 123\nbrowser/apps  ⚠ routing drift   (tap off)",
+    "width_24_error": "required content exceeds width 24: routing-line"
+  }
+}

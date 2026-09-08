@@ -40,6 +40,9 @@ TAP Core is being extracted from an existing working TAP installation. A first
 [development-checkout runtime](docs/runtime.md) provides isolated macOS profiles
 with the existing `install`, `on`, `off`, `status`, `doctor` and `where` command
 surface. This is not yet a packaged clean-Mac release.
+The default `tap status` JSON remains compatible; explicit
+[`semantic-json` and terminal projections](docs/status-output.md) provide a
+compact public status contract and a readable view of the same observations.
 A first [one-line installer](docs/install.md) exists for #7:
 
 ```bash
