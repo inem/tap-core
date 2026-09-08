@@ -74,6 +74,14 @@ explicitly. Core must not discover it accidentally through an author's mise or
 neighboring checkout. Pack dependency installation and clean-Mac runtime delivery
 remain acceptance work; this decision does not claim those installers exist.
 
+Command API 1 separates its `process-argv-v1` invocation protocol from an explicit
+runtime selection. The first installed binding is `host-python`, reusing Core's
+mandatory interpreter so a command-only profile does not acquire Bun merely to
+call an out-of-page HTTP API. This is not a Python-only command architecture. A
+`host-bun` binding requires a concrete version-to-executable inventory/delivery
+path; Core will not infer it from a developer's PATH. Browser page code remains
+JavaScript, and a future JS command can use the same argv/context protocol.
+
 ## Routing decision for the first release (2026-09-07)
 
 The first release uses the existing explicit HTTP(S) proxy backend: either clients

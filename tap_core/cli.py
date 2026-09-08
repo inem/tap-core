@@ -198,7 +198,50 @@ def parser():
     return result
 
 
+def _profile_and_words(argv):
+    """Read only the global profile prefix; provider argv remains untouched."""
+    profile = None
+    index = 0
+    while index < len(argv):
+        value = argv[index]
+        if value == "--profile":
+            if index + 1 >= len(argv):
+                return None, argv[index:]
+            profile = Path(argv[index + 1])
+            index += 2
+            continue
+        if value.startswith("--profile="):
+            profile = Path(value.partition("=")[2])
+            index += 1
+            continue
+        break
+    return profile, argv[index:]
+
+
+def _early_command_dispatch(argv):
+    from .commands import CORE_ROOTS, discover, dispatch, render_help
+    profile, words = _profile_and_words(argv)
+    if words in (["--help"], ["-h"]):
+        parser().print_help()
+        print()
+        render_help(discover(profile.expanduser().resolve() if profile else None))
+        return 0
+    if not words or words[0] in CORE_ROOTS - {"where"}:
+        return None
+    if profile is None:
+        return None
+    return dispatch(profile, words)
+
+
 def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    try:
+        early = _early_command_dispatch(argv)
+    except (TapError, OSError, ValueError) as error:
+        print(f"tap: {error}", file=sys.stderr)
+        return 1
+    if early is not None:
+        return early
     args = parser().parse_args(argv)
     if platform.system() != "Darwin":
         print("This extraction currently supports macOS only", file=sys.stderr)
@@ -206,28 +249,21 @@ def main(argv=None):
     root = args.profile.expanduser().resolve()
     adapter = MacOS()
     try:
-        if args.command == "install":
-            profile = Profile(root, str(args.backend.expanduser().resolve()), args.port, args.routing,
-                              args.probe_url, [str(p.expanduser().resolve()) for p in args.addon])
-            if args.bridge_config:
-                from .bridge import configuration, read_json
-                profile.bridge = configuration(read_json(args.bridge_config))
-            if args.components_config:
-                from .components import configuration
-                from .bridge import read_json
-                profile.components = configuration(read_json(args.components_config), profile)
-        else:
-            profile = Profile.load(root)
         if args.command == 'pack':
             from .components import Job
             from .pack_store import PackStore, _parse_dependency
             store = PackStore(root)
+            profile = Profile.load(root) if (root / "profile.json").is_file() else None
             if args.pack_action == 'list':
                 output = store.status()
             else:
-                with profile_lock(root):
-                    if adapter.service_loaded(profile) or (profile.components is not None
-                                                           and adapter.service_loaded(Job(profile))):
+                with profile_lock(
+                        root,
+                        busy_message="A command from this profile is still running; "
+                                     "wait before changing packs"):
+                    if profile is not None and (
+                            adapter.service_loaded(profile)
+                            or (profile.components is not None and adapter.service_loaded(Job(profile)))):
                         raise TapError('Stop this profile with off before changing packs')
                     if args.pack_action == 'install':
                         output = store.install(args.artifact)
@@ -249,6 +285,18 @@ def main(argv=None):
                         output = store.uninstall(args.id, args.version)
             print(json.dumps(output, indent=2))
             return 0
+        if args.command == "install":
+            profile = Profile(root, str(args.backend.expanduser().resolve()), args.port, args.routing,
+                              args.probe_url, [str(p.expanduser().resolve()) for p in args.addon])
+            if args.bridge_config:
+                from .bridge import configuration, read_json
+                profile.bridge = configuration(read_json(args.bridge_config))
+            if args.components_config:
+                from .components import configuration
+                from .bridge import read_json
+                profile.components = configuration(read_json(args.components_config), profile)
+        else:
+            profile = Profile.load(root)
         if args.command == 'components':
             from .components import configuration, Job
             from .bridge import read_json
@@ -289,23 +337,8 @@ def main(argv=None):
                 output = reader.run(definition(args.definition), args.max_records, args.timeout)
             print(json.dumps(output, indent=2))
             return 0
-        if args.command in ("status", "doctor", "where"):
-            if args.command == "where":
-                result = {"profile": str(root), "config": str(root / "profile.json"),
-                          "data": str(root / "data"), "state": str(root / "state"),
-                          "certificates": str(root / "certificates"), "log": str(root / "logs/capture.log"),
-                          "packs": str(root / "packs"),
-                          "resources": str(root / "resources"),
-                          "pack_registry": str(root / "state/pack-registry.json"),
-                          "launch_agent": str(profile.plist), "backend": profile.backend,
-                          "checkout": str(Path(__file__).resolve().parent.parent)}
-                if profile.components is not None:
-                    from .components import Job
-                    result['component_launch_agent'] = str(Job(profile).plist)
-                    result['component_log'] = str(root / 'logs/components.log')
-                    result['handler_logs'] = str(root / 'logs/handlers')
-            else:
-                result = doctor(profile, adapter) if args.command == "doctor" else status(profile, adapter)
+        if args.command in ("status", "doctor"):
+            result = doctor(profile, adapter) if args.command == "doctor" else status(profile, adapter)
             print(json.dumps(result, indent=2))
             return 1 if args.command == "doctor" and not result["healthy"] else 0
         if args.command == "routing":

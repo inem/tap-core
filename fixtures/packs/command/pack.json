@@ -1,0 +1,53 @@
+{
+  "manifest_version": 1,
+  "id": "fixture.command",
+  "version": "0.1.0",
+  "requires": {
+    "pack_api": 1,
+    "dependencies": []
+  },
+  "files": [
+    "command.py"
+  ],
+  "entrypoints": {
+    "command": {
+      "interface": "process-argv-v1",
+      "runtime": "host-python",
+      "file": "command.py",
+      "commands": [
+        {
+          "path": ["fixture", "echo"],
+          "summary": "Echo argv and command context for host tests",
+          "usage": "[ARG ...]",
+          "profile": "required"
+        },
+        {
+          "path": ["fixture", "fail"],
+          "summary": "Return a requested nonzero exit for host tests",
+          "usage": "EXIT_CODE",
+          "profile": "required"
+        },
+        {
+          "path": ["fixture", "wait"],
+          "summary": "Wait until a release file appears",
+          "usage": "RELEASE_FILE",
+          "profile": "required"
+        }
+      ]
+    }
+  },
+  "config": {
+    "prefix": {
+      "type": "string",
+      "default": "fixture"
+    }
+  },
+  "access": {
+    "origins": [
+      "https://fixture.example"
+    ],
+    "capabilities": [
+      "command.execute"
+    ]
+  }
+}
