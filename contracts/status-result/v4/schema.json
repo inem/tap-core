@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/inem/tap-core/contracts/status-result/v4/schema.json",
+  "title": "TAP compact status result v4",
+  "type": "object",
+  "required": ["schema", "profile", "runtime", "routing", "capture", "bridge", "components", "component_readers"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {"const": "tap.status-result/v4"},
+    "profile": {"type": ["string", "null"]},
+    "runtime": {"$ref": "#/$defs/runtime"},
+    "routing": {"$ref": "#/$defs/routing"},
+    "capture": {"$ref": "#/$defs/capture"},
+    "bridge": {"$ref": "#/$defs/bridge"},
+    "components": {"$ref": "#/$defs/components"},
+    "component_readers": {"$ref": "#/$defs/component_readers"}
+  },
+  "$defs": {
+    "known": {
+      "type": "object", "required": ["knowledge", "value"], "additionalProperties": false,
+      "properties": {"knowledge": {"const": "known"}, "value": {}}
+    },
+    "unknown": {
+      "type": "object", "required": ["knowledge", "reason", "message"], "additionalProperties": false,
+      "properties": {"knowledge": {"const": "unknown"}, "reason": {"enum": ["inspection_failed", "not_observed"]}, "message": {"type": "string"}}
+    },
+    "observation": {"oneOf": [{"$ref": "#/$defs/known"}, {"$ref": "#/$defs/unknown"}]},
+    "runtime": {
+      "type": "object", "additionalProperties": false,
+      "required": ["service_loaded", "pid", "port_owned", "port_open"],
+      "properties": {"service_loaded": {"$ref": "#/$defs/observation"}, "pid": {"$ref": "#/$defs/observation"}, "port_owned": {"$ref": "#/$defs/observation"}, "port_open": {"$ref": "#/$defs/observation"}}
+    },
+    "routing": {
+      "type": "object", "additionalProperties": false,
+      "required": ["routing", "network_recovery_pending", "system_proxy_verified"],
+      "properties": {"routing": {"$ref": "#/$defs/observation"}, "network_recovery_pending": {"$ref": "#/$defs/observation"}, "system_proxy_verified": {"$ref": "#/$defs/observation"}}
+    },
+    "capture": {
+      "type": "object", "additionalProperties": false,
+      "required": ["available", "current_process", "healthy"],
+      "properties": {"available": {"$ref": "#/$defs/observation"}, "current_process": {"$ref": "#/$defs/observation"}, "healthy": {"$ref": "#/$defs/observation"}}
+    },
+    "bridge": {
+      "type": "object", "additionalProperties": false,
+      "required": ["configured", "enabled", "healthy", "hub_liveness"],
+      "properties": {"configured": {"$ref": "#/$defs/observation"}, "enabled": {"$ref": "#/$defs/observation"}, "healthy": {"$ref": "#/$defs/observation"}, "hub_liveness": {"$ref": "#/$defs/observation"}}
+    },
+    "components": {
+      "type": "object", "additionalProperties": false,
+      "required": ["configured", "healthy", "current_process", "phase", "hub_pid", "error"],
+      "properties": {
+        "configured": {"$ref": "#/$defs/observation"},
+        "healthy": {"$ref": "#/$defs/observation"},
+        "current_process": {"$ref": "#/$defs/observation"},
+        "phase": {"$ref": "#/$defs/observation"},
+        "hub_pid": {"$ref": "#/$defs/observation"},
+        "error": {"$ref": "#/$defs/observation"}
+      }
+    },
+    "reader_observations": {
+      "type": "object", "additionalProperties": false,
+      "required": ["healthy", "phase", "progress", "failures", "error"],
+      "properties": {
+        "healthy": {"$ref": "#/$defs/observation"},
+        "phase": {"$ref": "#/$defs/observation"},
+        "progress": {"$ref": "#/$defs/observation"},
+        "failures": {"$ref": "#/$defs/observation"},
+        "error": {"$ref": "#/$defs/observation"}
+      }
+    },
+    "reader_item": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "ordinal", "observations"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "ordinal": {"type": "integer", "minimum": 1},
+        "observations": {"$ref": "#/$defs/reader_observations"}
+      }
+    },
+    "known_reader_collection": {
+      "type": "object", "additionalProperties": false,
+      "required": ["knowledge", "items"],
+      "properties": {
+        "knowledge": {"const": "known"},
+        "items": {"type": "array", "items": {"$ref": "#/$defs/reader_item"}, "maxItems": 8}
+      }
+    },
+    "component_readers": {"oneOf": [{"$ref": "#/$defs/known_reader_collection"}, {"$ref": "#/$defs/unknown"}]}
+  }
+}
