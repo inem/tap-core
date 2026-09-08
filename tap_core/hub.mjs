@@ -40,7 +40,7 @@ async function invoke(ws, request) {
   let child, timer;
   try {
     const context = {version: 1, handler_id: request.handler, origin: ws.data.origin, page_id: ws.data.page,
-      session_id: ws.data.session, request_id: request.id, config: binding.config,
+      session_id: ws.data.session, request_id: request.id, config: binding.config, profile_root: root,
       state_dir: join(root, 'state/handlers', request.handler), output_dir: join(root, 'data/handlers', request.handler),
       log_dir: join(root, 'logs/handlers', request.handler)};
     child = Bun.spawn([components.python, '-B', join(here, 'guardian.py'), String(process.pid), ...binding.command], {
