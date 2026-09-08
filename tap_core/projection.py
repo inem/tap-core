@@ -87,7 +87,9 @@ def _match(pattern, value, bindings):
             raise ProjectionError(f"invalid matcher: {pattern!r}")
         if test == "positive-int" and (type(value) is not int or value <= 0):
             return None
-        if test not in ("positive-int",):
+        if test == "non-empty-string" and (not isinstance(value, str) or not value):
+            return None
+        if test not in ("positive-int", "non-empty-string"):
             raise ProjectionError(f"unknown matcher test: {test}")
         return _match(variable, value, bindings)
     if isinstance(pattern, str) and pattern.startswith("$"):
@@ -245,8 +247,20 @@ def validate_document(document):
             raise ProjectionError(f"empty group slot: {slot.identifier}")
         if slot.optional:
             parent = by_id.get(slot.parent)
-            if parent is None or parent.parent != document.root:
-                raise ProjectionError(f"optional slot is outside a direct line group: {slot.identifier}")
+            if parent is None or parent.role != "line":
+                raise ProjectionError(f"optional slot is outside a line group: {slot.identifier}")
+        if slot.role == "line":
+            cursor = by_id.get(slot.parent)
+            while cursor is not None:
+                if cursor.role == "line":
+                    raise ProjectionError(f"nested line group: {slot.identifier}")
+                cursor = by_id.get(cursor.parent)
+        if slot.kind == "leaf":
+            cursor = by_id.get(slot.parent)
+            while cursor is not None and cursor.role != "line":
+                cursor = by_id.get(cursor.parent)
+            if cursor is None:
+                raise ProjectionError(f"leaf is outside a line group: {slot.identifier}")
     return children
 
 
@@ -295,10 +309,17 @@ def render_terminal_result(document, width=80, color=False, styles=None):
 
     lines = []
     omissions = []
-    root_children = children[document.root]
-    if any(slot.kind != "group" for slot in root_children):
-        raise ProjectionError("root children must be line groups")
-    for line in root_children:
+    def line_groups(slot):
+        if slot.role == "line":
+            return [slot]
+        if slot.kind != "group":
+            raise ProjectionError(f"non-line content outside a line group: {slot.identifier}")
+        result = []
+        for child in children[slot.identifier]:
+            result.extend(line_groups(child))
+        return result
+
+    for line in line_groups(next(slot for slot in document.slots if slot.identifier == document.root)):
         included = []
         used = 0
         for child in children[line.identifier]:

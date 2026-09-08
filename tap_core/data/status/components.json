@@ -1,0 +1,257 @@
+{
+  "schema": "tap.internal-status-material-fragment/v1",
+  "id": "managed-components",
+  "observations": {
+    "components": [
+      {"name":"configured","source":{"path":["components","configured"],"error":"components"}},
+      {"name":"healthy","source":{"path":["components","healthy"],"error":"components"}},
+      {"name":"current_process","source":{"path":["components","current_process"],"error":"components"}},
+      {"name":"phase","source":{"path":["components","phase"],"error":"components"}},
+      {"name":"hub_pid","source":{"path":["components","hub_pid"],"error":"components"}},
+      {"name":"error","source":{"path":["components","error"],"error":"components"}}
+    ]
+  },
+  "observation_collections": {
+    "component_readers": {
+      "path": ["components","readers"],
+      "error": "components",
+      "max_items": 8,
+      "fields": [
+        {"name":"healthy","path":["healthy"]},
+        {"name":"phase","path":["phase"]},
+        {"name":"progress","path":["progress"]},
+        {"name":"failures","path":["failures"]},
+        {"name":"error","path":["error"]}
+      ]
+    }
+  },
+  "semantic_rules": [
+    {
+      "id": "components-00-fallback",
+      "when": [
+        ["observation","components","configured","$_","$_"],
+        ["observation","components","healthy","$_","$_"],
+        ["observation","components","current_process","$_","$_"],
+        ["observation","components","phase","$_","$_"],
+        ["observation","components","hub_pid","$_","$_"],
+        ["observation","components","error","$_","$_"],
+        ["collection-observation","component_readers","$_","$_"]
+      ],
+      "emit": [["candidate","components","state","unknown",0,"inconsistent_component_observations",[]]]
+    },
+    {
+      "id": "components-10-absent",
+      "when": [
+        ["observation","components","configured","known",false],
+        ["observation","components","healthy","known",true],
+        ["observation","components","current_process","unknown","not_observed"],
+        ["observation","components","phase","unknown","not_observed"],
+        ["observation","components","hub_pid","unknown","not_observed"],
+        ["observation","components","error","unknown","not_observed"],
+        ["collection-observation","component_readers","unknown","not_observed"]
+      ],
+      "emit": [["candidate","components","state","absent",100,"components_not_configured",[]]]
+    },
+    {
+      "id": "components-20-inactive",
+      "when": [
+        ["observation","components","configured","known",true],
+        ["observation","components","healthy","known",false],
+        ["observation","components","current_process","unknown","not_observed"],
+        ["observation","components","phase","known","absent"],
+        ["observation","components","hub_pid","unknown","not_observed"],
+        ["observation","components","error","unknown","not_observed"],
+        ["collection-observation","component_readers","unknown","not_observed"]
+      ],
+      "emit": [["candidate","components","state","inactive",100,"controller_observation_absent",[]]]
+    },
+    {
+      "id": "components-30-starting",
+      "when": [
+        ["observation","components","configured","known",true],
+        ["observation","components","healthy","known",false],
+        ["observation","components","current_process","known",true],
+        ["observation","components","phase","known","starting"],
+        ["observation","components","hub_pid","known","$hub"],
+        ["observation","components","error","known",null],
+        ["collection-observation","component_readers","known","$count"]
+      ],
+      "emit": [["candidate","components","state","starting",100,"controller_starting",[["reader_count","$count"],["hub_pid","$hub"]]]]
+    },
+    {
+      "id": "components-40-ready",
+      "when": [
+        ["observation","components","configured","known",true],
+        ["observation","components","healthy","known",true],
+        ["observation","components","current_process","known",true],
+        ["observation","components","phase","known","ready"],
+        ["observation","components","hub_pid","known","$hub"],
+        ["observation","components","error","known",null],
+        ["collection-observation","component_readers","known","$count"]
+      ],
+      "emit": [["candidate","components","state","ready",100,"controller_and_required_probes_healthy",[["reader_count","$count"],["hub_pid","$hub"]]]]
+    },
+    {
+      "id": "components-50-degraded",
+      "when": [
+        ["observation","components","configured","known",true],
+        ["observation","components","healthy","known",false],
+        ["observation","components","current_process","known",true],
+        ["observation","components","phase","known","ready"],
+        ["observation","components","hub_pid","known","$hub"],
+        ["observation","components","error","known",null],
+        ["collection-observation","component_readers","known","$count"]
+      ],
+      "emit": [["candidate","components","state","degraded",100,"controller_or_required_probe_unhealthy",[["reader_count","$count"],["hub_pid","$hub"]]]]
+    },
+    {
+      "id": "components-60-stale",
+      "when": [
+        ["observation","components","configured","known",true],
+        ["observation","components","healthy","known",false],
+        ["observation","components","current_process","known",false],
+        ["observation","components","phase","known","$phase"],
+        ["observation","components","hub_pid","known","$hub"],
+        ["observation","components","error","known","$error"],
+        ["collection-observation","component_readers","known","$count"]
+      ],
+      "emit": [["candidate","components","state","stale",100,"controller_state_not_current",[["reader_count","$count"],["hub_pid","$hub"],["phase","$phase"]]]]
+    },
+    {
+      "id": "components-70-failed",
+      "when": [
+        ["observation","components","configured","known",true],
+        ["observation","components","healthy","known",false],
+        ["observation","components","current_process","$_","$_"],
+        ["observation","components","phase","known","failed"],
+        ["observation","components","hub_pid","known","$hub"],
+        ["observation","components","error","known",{"var":"$error","test":"non-empty-string"}],
+        ["collection-observation","component_readers","known","$count"]
+      ],
+      "emit": [["candidate","components","state","failed",200,"controller_reported_failure",[["reader_count","$count"],["hub_pid","$hub"]]]]
+    },
+    {
+      "id": "components-90-inspection-failed",
+      "when": [
+        ["observation","components","configured","unknown","inspection_failed"],
+        ["observation","components","healthy","unknown","inspection_failed"],
+        ["observation","components","current_process","unknown","inspection_failed"],
+        ["observation","components","phase","unknown","inspection_failed"],
+        ["observation","components","hub_pid","unknown","inspection_failed"],
+        ["observation","components","error","unknown","inspection_failed"],
+        ["collection-observation","component_readers","unknown","inspection_failed"]
+      ],
+      "emit": [["candidate","components","state","unknown",200,"inspection_incomplete",[]]]
+    },
+    {
+      "id": "reader-00-fallback",
+      "when": [
+        ["observation-item","component_readers","$name","$ordinal","healthy","$_","$_"],
+        ["observation-item","component_readers","$name","$ordinal","phase","$_","$_"],
+        ["observation-item","component_readers","$name","$ordinal","progress","$_","$_"],
+        ["observation-item","component_readers","$name","$ordinal","failures","$_","$_"],
+        ["observation-item","component_readers","$name","$ordinal","error","$_","$_"]
+      ],
+      "emit": [["candidate",{"format":"reader:{}","args":["$name"]},"state","unknown",0,"inconsistent_reader_observations",[["name","$name"],["ordinal","$ordinal"]]]]
+    },
+    {
+      "id": "reader-10-starting",
+      "when": [
+        ["observation-item","component_readers","$name","$ordinal","healthy","known",false],
+        ["observation-item","component_readers","$name","$ordinal","phase","known","starting"],
+        ["observation-item","component_readers","$name","$ordinal","progress","unknown","not_observed"],
+        ["observation-item","component_readers","$name","$ordinal","failures","unknown","not_observed"],
+        ["observation-item","component_readers","$name","$ordinal","error","known",null]
+      ],
+      "emit": [["candidate",{"format":"reader:{}","args":["$name"]},"state","starting",100,"reader_starting",[["name","$name"],["ordinal","$ordinal"]]]]
+    },
+    {
+      "id": "reader-20-waiting",
+      "when": [
+        ["observation-item","component_readers","$name","$ordinal","healthy","known",true],
+        ["observation-item","component_readers","$name","$ordinal","phase","known","waiting"],
+        ["observation-item","component_readers","$name","$ordinal","progress","known","$progress"],
+        ["observation-item","component_readers","$name","$ordinal","failures","unknown","not_observed"],
+        ["observation-item","component_readers","$name","$ordinal","error","known",null]
+      ],
+      "emit": [["candidate",{"format":"reader:{}","args":["$name"]},"state","waiting",100,"last_batch_succeeded",[["name","$name"],["ordinal","$ordinal"],["progress","$progress"]]]]
+    },
+    {
+      "id": "reader-30-backoff",
+      "when": [
+        ["observation-item","component_readers","$name","$ordinal","healthy","known",false],
+        ["observation-item","component_readers","$name","$ordinal","phase","known","backoff"],
+        ["observation-item","component_readers","$name","$ordinal","progress","unknown","not_observed"],
+        ["observation-item","component_readers","$name","$ordinal","failures","known",{"var":"$failures","test":"positive-int"}],
+        ["observation-item","component_readers","$name","$ordinal","error","known",{"var":"$error","test":"non-empty-string"}]
+      ],
+      "emit": [["candidate",{"format":"reader:{}","args":["$name"]},"state","backoff",100,"reader_retry_pending",[["name","$name"],["ordinal","$ordinal"],["failures","$failures"]]]]
+    },
+    {
+      "id": "reader-40-failed",
+      "when": [
+        ["observation-item","component_readers","$name","$ordinal","healthy","known",false],
+        ["observation-item","component_readers","$name","$ordinal","phase","known","failed"],
+        ["observation-item","component_readers","$name","$ordinal","progress","unknown","not_observed"],
+        ["observation-item","component_readers","$name","$ordinal","failures","known",{"var":"$failures","test":"positive-int"}],
+        ["observation-item","component_readers","$name","$ordinal","error","known",{"var":"$error","test":"non-empty-string"}]
+      ],
+      "emit": [["candidate",{"format":"reader:{}","args":["$name"]},"state","failed",100,"reader_retry_budget_exhausted",[["name","$name"],["ordinal","$ordinal"],["failures","$failures"]]]]
+    }
+  ],
+  "presentation_rules": [
+    {
+      "id": "presentation-components-00-appearances",
+      "emit": [
+        ["appearance","components","absent","○ ","absent","muted","not configured"],
+        ["appearance","components","inactive","○ ","inactive","muted","no controller observation"],
+        ["appearance","components","starting","○ ","starting","warning","controller starting"],
+        ["appearance","components","ready","● ","ready","positive","owned controller healthy"],
+        ["appearance","components","degraded","✗ ","degraded","negative","controller or required probe unhealthy"],
+        ["appearance","components","stale","⚠ ","stale","warning","state is not current"],
+        ["appearance","components","failed","✗ ","failed","negative","controller reported failure"],
+        ["appearance","components","unknown","? ","unknown","warning","inspection incomplete"],
+        ["appearance","reader","starting","○ ","starting","warning","worker starting"],
+        ["appearance","reader","waiting","● ","waiting","positive","last batch succeeded"],
+        ["appearance","reader","backoff","⚠ ","backoff","warning","retry pending"],
+        ["appearance","reader","failed","✗ ","failed","negative","retry budget exhausted"],
+        ["appearance","reader","unknown","? ","unknown","warning","observations inconsistent"]
+      ]
+    },
+    {
+      "id": "presentation-components-10-layout",
+      "when": [
+        ["meaning","components","state","$state","$reason","$attrs"],
+        ["appearance","components","$state","$indicator","$value","$style","$detail"]
+      ],
+      "emit": [
+        ["slot","components-section","status",4,"group","section",false,"",null,[["meaning","components","state","$state","$reason","$attrs"]]],
+        ["slot","components-line","components-section",0,"group","line",false,"",null,[["meaning","components","state","$state","$reason","$attrs"]]],
+        ["slot","components-label","components-line",0,"leaf","label",false,"components    ",null,[["meaning","components","state","$state","$reason","$attrs"]]],
+        ["slot","components-indicator","components-line",1,"leaf","indicator",false,"$indicator","$style",[["meaning","components","state","$state","$reason","$attrs"]]],
+        ["slot","components-value","components-line",2,"leaf","value",false,"$value","$style",[["meaning","components","state","$state","$reason","$attrs"]]],
+        ["slot","components-attachment","components-line",3,"group","support",true,"",null,[["meaning","components","state","$state","$reason","$attrs"]]],
+        ["slot","components-separator","components-attachment",0,"leaf","separator",false," · ",null,[["meaning","components","state","$state","$reason","$attrs"]]],
+        ["slot","components-detail","components-attachment",1,"leaf","detail",false,"$detail",null,[["meaning","components","state","$state","$reason","$attrs"]]]
+      ]
+    },
+    {
+      "id": "presentation-reader-10-layout",
+      "when": [
+        ["meaning","$subject","state","$state","$reason","$attrs"],
+        ["attribute","$subject","name","$name"],
+        ["attribute","$subject","ordinal","$ordinal"],
+        ["appearance","reader","$state","$indicator","$value","$style","$detail"]
+      ],
+      "emit": [
+        ["slot",{"format":"reader-{}-line","args":["$name"]},"components-section","$ordinal","group","line",false,"",null,[["meaning","$subject","state","$state","$reason","$attrs"]]],
+        ["slot",{"format":"reader-{}-label","args":["$name"]},{"format":"reader-{}-line","args":["$name"]},0,"leaf","label",false,{"format":"  {:.48}  ","args":["$name"]},null,[["meaning","$subject","state","$state","$reason","$attrs"]]],
+        ["slot",{"format":"reader-{}-indicator","args":["$name"]},{"format":"reader-{}-line","args":["$name"]},1,"leaf","indicator",false,"$indicator","$style",[["meaning","$subject","state","$state","$reason","$attrs"]]],
+        ["slot",{"format":"reader-{}-value","args":["$name"]},{"format":"reader-{}-line","args":["$name"]},2,"leaf","value",false,"$value","$style",[["meaning","$subject","state","$state","$reason","$attrs"]]],
+        ["slot",{"format":"reader-{}-attachment","args":["$name"]},{"format":"reader-{}-line","args":["$name"]},3,"group","support",true,"",null,[["meaning","$subject","state","$state","$reason","$attrs"]]],
+        ["slot",{"format":"reader-{}-separator","args":["$name"]},{"format":"reader-{}-attachment","args":["$name"]},0,"leaf","separator",false," · ",null,[["meaning","$subject","state","$state","$reason","$attrs"]]],
+        ["slot",{"format":"reader-{}-detail","args":["$name"]},{"format":"reader-{}-attachment","args":["$name"]},1,"leaf","detail",false,"$detail",null,[["meaning","$subject","state","$state","$reason","$attrs"]]]
+      ]
+    }
+  ]
+}

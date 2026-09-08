@@ -16,10 +16,10 @@ from tap_core.projection import (Atom, Derivation, Document, ProjectionConflict,
                                  render_terminal_result, select_candidates)
 from tap_core.status_view import (project_status, public_status_result,
                                   terminal_status, validate_status_result,
-                                  load_material, observe)
+                                  load_material, observe, observe_collection)
 
 
-FIXTURES = Path(__file__).parents[1] / "contracts/status-result/v3/fixtures"
+FIXTURES = Path(__file__).parents[1] / "contracts/status-result/v4/fixtures"
 
 
 def snapshot(**changes):
@@ -30,7 +30,7 @@ def snapshot(**changes):
         "inspection_errors": {},
         "capture": {"available": True, "current_process": True, "healthy": True},
         "bridge": {"configured": False, "healthy": True},
-        "components": {"healthy": True},
+        "components": {"configured": False, "healthy": True},
     }
     value.update(changes)
     return value
@@ -162,6 +162,61 @@ class StatusContractTests(unittest.TestCase):
                          {"configured", "enabled", "healthy", "hub_liveness"})
         self.assertIn("hub unchecked", render_terminal(projection.document))
 
+    def test_component_controller_state_matrix(self):
+        ready = {"configured": True, "healthy": True, "current_process": True,
+                 "phase": "ready", "hub_pid": 4321, "error": None, "readers": {}}
+        cases = [
+            ({"configured": False, "healthy": True},
+             ("absent", "components_not_configured")),
+            ({"configured": True, "healthy": False, "phase": "absent"},
+             ("inactive", "controller_observation_absent")),
+            (dict(ready, healthy=False, phase="starting"),
+             ("starting", "controller_starting")),
+            (ready, ("ready", "controller_and_required_probes_healthy")),
+            (dict(ready, healthy=False),
+             ("degraded", "controller_or_required_probe_unhealthy")),
+            (dict(ready, healthy=False, current_process=False),
+             ("stale", "controller_state_not_current")),
+            (dict(ready, healthy=False, current_process=False, phase="failed",
+                  error="Hub unavailable"),
+             ("failed", "controller_reported_failure")),
+        ]
+        for components, expected in cases:
+            with self.subTest(components=components):
+                self.assertEqual(states(snapshot(components=components))["components"], expected)
+        unknown = states(snapshot(
+            components={"configured": True, "healthy": None},
+            inspection_errors={"components": "denied"}))
+        self.assertEqual(unknown["components"], ("unknown", "inspection_incomplete"))
+
+    def test_named_reader_collection_becomes_stable_independent_meanings(self):
+        components = {"configured": True, "healthy": False, "current_process": True,
+                      "phase": "ready", "hub_pid": 4321, "error": None,
+                      "readers": {
+                          "zeta": {"healthy": False, "phase": "backoff", "failures": 1,
+                                   "error": "ReaderError: fixture"},
+                          "alpha": {"healthy": True, "phase": "waiting",
+                                    "progress": {"processed": 2}, "error": None},
+                      }}
+        result = public_status_result(snapshot(components=components))
+        self.assertEqual([(item["name"], item["ordinal"])
+                          for item in result["component_readers"]["items"]],
+                         [("alpha", 1), ("zeta", 2)])
+        projection = project_status(result)
+        meanings = {atom.arguments[0]: atom.arguments[2] for atom in projection.meanings}
+        self.assertEqual(meanings["reader:alpha"], "waiting")
+        self.assertEqual(meanings["reader:zeta"], "backoff")
+        rendered = render_terminal(projection.document)
+        self.assertLess(rendered.index("  alpha"), rendered.index("  zeta"))
+        by_id = {slot.identifier: slot for slot in projection.document.slots}
+        self.assertEqual(by_id["reader-alpha-line"].parent, "components-section")
+        self.assertEqual(by_id["reader-zeta-line"].order, 2)
+
+        for subject in ("reader:alpha", "reader:zeta"):
+            meaning = next(atom for atom in projection.meanings if atom.arguments[0] == subject)
+            candidate = projection.provenance[meaning].warrants[0]
+            self.assertEqual(len(projection.provenance[candidate].warrants), 5)
+
     def test_unapplied_bridge_is_refined_by_runtime_before_presentation(self):
         bridge = {"configured": True, "enabled": True, "healthy": False,
                   "hub_liveness": "not_checked"}
@@ -234,7 +289,7 @@ class StatusContractTests(unittest.TestCase):
         projection = project_status(public_status_result(raw))
         self.assertFalse(any(atom.arguments[:2] == ("status", "traffic")
                              for atom in projection.meanings))
-        self.assertEqual(render_terminal(projection.document).count("\n"), 3)
+        self.assertEqual(render_terminal(projection.document).count("\n"), 4)
 
     def test_absent_field_is_not_observed_instead_of_known_null(self):
         raw = snapshot()
@@ -284,6 +339,26 @@ class StatusContractTests(unittest.TestCase):
                     self.assertRaisesRegex(ProjectionError, "invalid status observation source"):
                 observe(invalid, snapshot())
 
+    def test_free_collection_operation_only_normalizes_shape_and_order(self):
+        spec = {
+            "path": ["components", "readers"], "error": "components",
+            "max_items": 8,
+            "fields": [{"name": "phase", "path": ["phase"]}],
+        }
+        raw = snapshot(components={"readers": {
+            "zeta": {"phase": "failed"}, "alpha": {"phase": "waiting"}}})
+        result = observe_collection(spec, raw)
+        self.assertEqual([(item["name"], item["ordinal"])
+                          for item in result["items"]], [("alpha", 1), ("zeta", 2)])
+        self.assertEqual(result["items"][0]["observations"]["phase"]["value"], "waiting")
+        failed = observe_collection(spec, snapshot(inspection_errors={"components": "denied"}))
+        self.assertEqual(failed["reason"], "inspection_failed")
+        with self.assertRaisesRegex(ProjectionError, "named map"):
+            observe_collection(spec, snapshot(components={"readers": []}))
+        bounded = dict(spec, max_items=1)
+        with self.assertRaisesRegex(ProjectionError, "declared bound"):
+            observe_collection(bounded, raw)
+
 
 class ProjectionKernelTests(unittest.TestCase):
     def candidate(self, value, rank, operator):
@@ -309,10 +384,10 @@ class ProjectionKernelTests(unittest.TestCase):
         result = render_terminal_result(projection.document, 24)
         self.assertEqual(result.text,
                          "tap           ● up\nbrowser/apps  ○ direct\ncapture       ● ready\n"
-                         "bridge        ○ absent")
+                         "bridge        ○ absent\ncomponents    ○ absent")
         self.assertEqual([item["slot"] for item in result.omissions],
                          ["runtime-attachment", "routing-attachment", "capture-attachment",
-                          "bridge-attachment"])
+                          "bridge-attachment", "components-attachment"])
         self.assertTrue(all(item["reason"] == "does-not-fit" for item in result.omissions))
         by_id = {slot.identifier: slot for slot in projection.document.slots}
         self.assertEqual(by_id["runtime-detail"].parent, "runtime-attachment")
@@ -400,8 +475,10 @@ class MaterialCompositionTests(unittest.TestCase):
     def test_fragments_have_distinct_section_and_assembly_owners(self):
         material = load_material()
         self.assertEqual(material["schema"], "tap.internal-status-material/v1")
-        self.assertEqual(material["result_schema"], "tap.status-result/v3")
-        self.assertEqual(set(material["observations"]), {"runtime", "routing", "capture", "bridge"})
+        self.assertEqual(material["result_schema"], "tap.status-result/v4")
+        self.assertEqual(set(material["observations"]),
+                         {"runtime", "routing", "capture", "bridge", "components"})
+        self.assertEqual(set(material["observation_collections"]), {"component_readers"})
         self.assertTrue(material["composition_rules"])
         self.assertEqual(material["document_root"], "status")
 
@@ -446,12 +523,12 @@ class StatusCliTests(unittest.TestCase):
         raw = snapshot()
         code, semantic, _ = self.invoke(raw, "--output", "semantic-json")
         self.assertEqual(code, 0)
-        self.assertEqual(json.loads(semantic)["schema"], "tap.status-result/v3")
+        self.assertEqual(json.loads(semantic)["schema"], "tap.status-result/v4")
         code, narrow, _ = self.invoke(raw, "--output", "terminal", "--width", "24", "--color", "never")
         self.assertEqual(code, 0)
         self.assertEqual(narrow,
                          "tap           ● up\nbrowser/apps  ○ direct\ncapture       ● ready\n"
-                         "bridge        ○ absent\n")
+                         "bridge        ○ absent\ncomponents    ○ absent\n")
         code, colored, _ = self.invoke(raw, "--output", "terminal", "--color", "always")
         self.assertEqual(code, 0)
         self.assertIn("\x1b[32m", colored)

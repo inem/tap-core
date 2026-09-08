@@ -1,0 +1,209 @@
+{
+  "raw_snapshot": {
+    "profile": "/fixture/profile",
+    "routing": "system",
+    "service_loaded": true,
+    "pid": 123,
+    "port_owned": true,
+    "port_open": true,
+    "network_recovery_pending": false,
+    "system_proxy_verified": false,
+    "inspection_errors": {},
+    "capture": {
+      "available": true,
+      "current_process": true,
+      "healthy": true
+    },
+    "bridge": {
+      "configured": false,
+      "healthy": true
+    },
+    "components": {
+      "configured": true,
+      "healthy": false,
+      "current_process": true,
+      "phase": "ready",
+      "hub_pid": 4321,
+      "error": null,
+      "readers": {
+        "alpha": {
+          "healthy": true,
+          "phase": "waiting",
+          "progress": {
+            "processed": 2,
+            "phase": "idle"
+          },
+          "error": null
+        },
+        "beta": {
+          "healthy": false,
+          "phase": "backoff",
+          "failures": 1,
+          "error": "ReaderError: fixture failure"
+        }
+      }
+    }
+  },
+  "semantic_result": {
+    "schema": "tap.status-result/v4",
+    "profile": "/fixture/profile",
+    "runtime": {
+      "service_loaded": {
+        "knowledge": "known",
+        "value": true
+      },
+      "pid": {
+        "knowledge": "known",
+        "value": 123
+      },
+      "port_owned": {
+        "knowledge": "known",
+        "value": true
+      },
+      "port_open": {
+        "knowledge": "known",
+        "value": true
+      }
+    },
+    "routing": {
+      "routing": {
+        "knowledge": "known",
+        "value": "system"
+      },
+      "network_recovery_pending": {
+        "knowledge": "known",
+        "value": false
+      },
+      "system_proxy_verified": {
+        "knowledge": "known",
+        "value": false
+      }
+    },
+    "capture": {
+      "available": {
+        "knowledge": "known",
+        "value": true
+      },
+      "current_process": {
+        "knowledge": "known",
+        "value": true
+      },
+      "healthy": {
+        "knowledge": "known",
+        "value": true
+      }
+    },
+    "bridge": {
+      "configured": {
+        "knowledge": "known",
+        "value": false
+      },
+      "enabled": {
+        "knowledge": "unknown",
+        "reason": "not_observed",
+        "message": "observation was not supplied"
+      },
+      "healthy": {
+        "knowledge": "known",
+        "value": true
+      },
+      "hub_liveness": {
+        "knowledge": "unknown",
+        "reason": "not_observed",
+        "message": "observation was not supplied"
+      }
+    },
+    "components": {
+      "configured": {
+        "knowledge": "known",
+        "value": true
+      },
+      "healthy": {
+        "knowledge": "known",
+        "value": false
+      },
+      "current_process": {
+        "knowledge": "known",
+        "value": true
+      },
+      "phase": {
+        "knowledge": "known",
+        "value": "ready"
+      },
+      "hub_pid": {
+        "knowledge": "known",
+        "value": 4321
+      },
+      "error": {
+        "knowledge": "known",
+        "value": null
+      }
+    },
+    "component_readers": {
+      "knowledge": "known",
+      "items": [
+        {
+          "name": "alpha",
+          "ordinal": 1,
+          "observations": {
+            "healthy": {
+              "knowledge": "known",
+              "value": true
+            },
+            "phase": {
+              "knowledge": "known",
+              "value": "waiting"
+            },
+            "progress": {
+              "knowledge": "known",
+              "value": {
+                "processed": 2,
+                "phase": "idle"
+              }
+            },
+            "failures": {
+              "knowledge": "unknown",
+              "reason": "not_observed",
+              "message": "observation was not supplied"
+            },
+            "error": {
+              "knowledge": "known",
+              "value": null
+            }
+          }
+        },
+        {
+          "name": "beta",
+          "ordinal": 2,
+          "observations": {
+            "healthy": {
+              "knowledge": "known",
+              "value": false
+            },
+            "phase": {
+              "knowledge": "known",
+              "value": "backoff"
+            },
+            "progress": {
+              "knowledge": "unknown",
+              "reason": "not_observed",
+              "message": "observation was not supplied"
+            },
+            "failures": {
+              "knowledge": "known",
+              "value": 1
+            },
+            "error": {
+              "knowledge": "known",
+              "value": "ReaderError: fixture failure"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "terminal": {
+    "width_80": "tap           ● up · PID 123\nbrowser/apps  ○ direct   (tap on)\ncapture       ● ready · writer healthy\nbridge        ○ absent · not configured\ncomponents    ✗ degraded · controller or required probe unhealthy\n  alpha  ● waiting · last batch succeeded\n  beta  ⚠ backoff · retry pending",
+    "width_24": "tap           ● up\nbrowser/apps  ○ direct\ncapture       ● ready\nbridge        ○ absent\ncomponents    ✗ degraded\n  alpha  ● waiting\n  beta  ⚠ backoff"
+  }
+}
