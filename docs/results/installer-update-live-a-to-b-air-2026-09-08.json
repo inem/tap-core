@@ -1,30 +1,30 @@
 {
-  "scope": "live empty-root install A → update B → purge; explicit routing; not Local Capture / CA trust / clean-Mac browser",
+  "scope": "live empty-root install A \u2192 update B \u2192 purge; explicit routing; not Local Capture / CA trust / clean-Mac browser",
   "host": {
     "architecture": "x86_64",
     "macos": "14.8.5",
     "python": "3.9.6",
     "platform": "macOS-14.8.5-x86_64-i386-64bit"
   },
-  "ref_a": "8973a6d02ed85c79000b95da8162c1b5725c9e48",
-  "ref_b": "214af8e142b58768c629467bae0faded0c98cc2e",
-  "sha_a": "8973a6d02ed85c79000b95da8162c1b5725c9e48",
-  "sha_b": "214af8e142b58768c629467bae0faded0c98cc2e",
+  "ref_a": "aa869b5b9b377461fdf238a6e8ec623af3bc39fc",
+  "ref_b": "3f45efa13efc87bda2fd93199136df8f8404bf32",
+  "sha_a": "aa869b5b9b377461fdf238a6e8ec623af3bc39fc",
+  "sha_b": "3f45efa13efc87bda2fd93199136df8f8404bf32",
   "ok": true,
   "cleanup_verified": true,
-  "install_ref": "8973a6d02ed85c79000b95da8162c1b5725c9e48",
+  "install_ref": "aa869b5b9b377461fdf238a6e8ec623af3bc39fc",
   "routing_before": "explicit",
   "ca_before": null,
   "doctor_after_install": {
     "healthy": true
   },
   "update_log_tail": [
-    "          \"cursor\": \"eyJ2IjoxLCJzY29wZSI6IjBiNGY1YjIxMzczNTBjZThhOTVmNWQxY2ZkZmU0NGJjMDg2ZTY4YmU2NGNhM2YzNDI2YmQ3NGE3YTY5MGNiYzQiLCJzZWdtZW50IjoiYjJkYzgwYjUzMmQ2MDAyNzI4OTczM2YxN2JlYmRiOWYzMjk4ZmU4ZjMzODRkNDU4Y2IxNTRkZmVhMjNlMGUzMyIsImxpbmUiOjMsImFuY2hvciI6IjI2OWE3YzA3MGY1MmNmZWJhYWYwZDkwYmI4Mzg0Njk5YzkwODliODhkZWFkOWE3Y2NjYzRmN2Q0ODdiZWEzNmYifQ==\",",
+    "          \"cursor\": \"eyJ2IjoxLCJzY29wZSI6IjU3OWI2ODZiNjdjMTI2ZGY1YWZlZmY3Njc0ZDhiNTMxYzIxNGUzOTgwNjMwMDMwZjY5YzgyYjRlOGEzMmQwYjIiLCJzZWdtZW50IjoiMjg4MjI5NjkwNjE0YzA0MGVmMWQ2OGUwODQ5YzQ0MWZiOTIyNGFiMTg1NzBkNzViZmMyZWMxNjU4NWVjZTlkZCIsImxpbmUiOjMsImFuY2hvciI6ImMwNTJjM2JhMThjNDU1YWY5ZDNiYzdhYzIzYjlkM2NjMTMyODhiOTBkODk5MTMzM2FkYjIxODMzZjVmZDExYmQifQ==\",",
     "          \"processed\": 3,",
     "          \"inflight\": null,",
     "          \"phase\": \"idle\",",
     "          \"error\": null,",
-    "          \"updated_at\": 1788820278.213397",
+    "          \"updated_at\": 1788844852.998655",
     "        },",
     "        \"error\": null",
     "      }",
@@ -40,7 +40,7 @@
     "  \"healthy\": true",
     "}"
   ],
-  "update_ref": "214af8e142b58768c629467bae0faded0c98cc2e",
+  "update_ref": "3f45efa13efc87bda2fd93199136df8f8404bf32",
   "routing_after": "explicit",
   "ca_after": null,
   "profile_data_retained": true,

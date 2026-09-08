@@ -1,0 +1,15 @@
+{
+  "scope": "live main\u2192tip via curl|bash update on Air",
+  "host": {
+    "architecture": "x86_64",
+    "macos": "14.8.5",
+    "python": "3.9.6"
+  },
+  "ref_before_expected": "main",
+  "ref_after": "3f45efa13efc87bda2fd93199136df8f8404bf32",
+  "expected_tip": "3f45efa13efc87bda2fd93199136df8f8404bf32",
+  "routing": "explicit",
+  "update_exit": 0,
+  "profile_data_retained": true,
+  "ok": true
+}
