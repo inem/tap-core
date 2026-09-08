@@ -16,7 +16,7 @@ from tap_core.projection import (Atom, Derivation, Document, ProjectionConflict,
                                  render_terminal_result, select_candidates)
 from tap_core.status_view import (project_status, public_status_result,
                                   terminal_status, validate_status_result,
-                                  load_material)
+                                  load_material, observe)
 
 
 FIXTURES = Path(__file__).parents[1] / "contracts/status-result/v1/fixtures"
@@ -159,6 +159,40 @@ class StatusContractTests(unittest.TestCase):
         semantic["runtime"]["port_owned"]["reason"] = "invented"
         with self.assertRaisesRegex(ProjectionError, "invalid unknown"):
             validate_status_result(semantic)
+
+    def test_same_free_operation_reads_flat_and_nested_snapshot_paths(self):
+        flat = {"path": ["service_loaded"], "error": "service_loaded"}
+        nested = {"path": ["capture", "healthy"], "error": "capture"}
+        raw = snapshot()
+        self.assertEqual(observe(flat, raw), {"knowledge": "known", "value": True})
+        self.assertEqual(observe(nested, raw), {"knowledge": "known", "value": True})
+
+    def test_nested_observation_is_data_and_uses_its_group_error_owner(self):
+        material = copy.deepcopy(load_material())
+        material["observations"]["capture_probe"] = [{
+            "name": "healthy",
+            "source": {"path": ["capture", "healthy"], "error": "capture"},
+        }]
+        known = public_status_result(snapshot(), material)
+        self.assertEqual(known["capture_probe"]["healthy"], {
+            "knowledge": "known", "value": True,
+        })
+        failed = public_status_result(
+            snapshot(inspection_errors={"capture": "cannot read health"}), material)
+        self.assertEqual(failed["capture_probe"]["healthy"], {
+            "knowledge": "unknown", "reason": "inspection_failed",
+            "message": "cannot read health",
+        })
+        absent = public_status_result(snapshot(capture={}), material)
+        self.assertEqual(absent["capture_probe"]["healthy"]["reason"], "not_observed")
+
+    def test_observation_source_shape_is_validated_at_the_operation_boundary(self):
+        for invalid in ({"path": [], "error": "capture"},
+                        {"path": ["capture", "healthy"]},
+                        {"path": "capture.healthy", "error": "capture"}):
+            with self.subTest(invalid=invalid), \
+                    self.assertRaisesRegex(ProjectionError, "invalid status observation source"):
+                observe(invalid, snapshot())
 
 
 class ProjectionKernelTests(unittest.TestCase):

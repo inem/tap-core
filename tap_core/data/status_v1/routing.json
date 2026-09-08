@@ -2,7 +2,7 @@
   "schema": "tap.internal-status-material-fragment/v1",
   "id": "routing",
   "observations": {
-    "routing": [{"name":"routing","raw":"routing"},{"name":"network_recovery_pending","raw":"network_recovery_pending"},{"name":"system_proxy_verified","raw":"system_proxy_verified"}]
+    "routing": [{"name":"routing","source":{"path":["routing"],"error":"routing"}},{"name":"network_recovery_pending","source":{"path":["network_recovery_pending"],"error":"network_recovery_pending"}},{"name":"system_proxy_verified","source":{"path":["system_proxy_verified"],"error":"system_proxy_verified"}}]
   },
   "semantic_rules": [
     {
