@@ -1,6 +1,6 @@
 {
   "scope": "hermetic local-archive update A\u2192B; explicit routing; no network mutation, Local Capture, or browser HTTPS",
-  "commit": "aa869b5b9b377461fdf238a6e8ec623af3bc39fc",
+  "commit": "51fe2c5fa49762f07eb636869b9099364436c9b2",
   "update": {
     "ref_before": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "ref_after": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",

@@ -126,50 +126,95 @@ def assert_idle(root):
     return {'ok': True, 'root': str(root)}
 
 
+def _component_job(profile):
+    if not profile.bridge or not profile.bridge.get('enabled') or profile.components is None:
+        return None
+    from tap_core.components import Job
+    return Job(profile)
+
+
+def _profile_processes_busy(adapter, profile):
+    """Proxy launchd/port or Hub/components launchd/port still live."""
+    busy = []
+    if adapter.service_loaded(profile):
+        busy.append('proxy service')
+    if adapter.port_open(profile):
+        busy.append('proxy port')
+    job = _component_job(profile)
+    if job is not None:
+        if adapter.service_loaded(job):
+            busy.append('hub service')
+        if adapter.port_open(job):
+            busy.append('hub port')
+    return busy
+
+
 def _ensure_profile_stopped(profile_root):
-    """Refuse update unless the profile service is confirmed stopped."""
+    """Refuse update unless proxy, Hub/readers and network recovery are clear."""
     from tap_core.runtime import MacOS, Profile, TapError
     from tap_core.routing import select_routing
     from tap_core.cli import mutate
     try:
         profile = Profile.load(profile_root)
         adapter = MacOS()
+        route = select_routing(profile, adapter)
     except (TapError, OSError, ValueError) as error:
         raise ValueError('Cannot inspect profile service state; refusing update: ' + str(error)) from error
     try:
-        loaded = adapter.service_loaded(profile)
-        owned = adapter.owns_port(profile) if loaded else False
-        opened = adapter.port_open(profile)
+        busy = _profile_processes_busy(adapter, profile)
+        pending = route.recovery_pending()
     except (TapError, OSError) as error:
         raise ValueError('Process state is unknown; refusing update: ' + str(error)) from error
-    if not loaded and not owned and not opened:
+    if not busy and not pending:
         return False
     try:
-        with select_routing(profile, adapter).mutation_lock():
+        with route.mutation_lock():
             mutate('off', profile, adapter)
     except (TapError, OSError, ValueError) as error:
         raise ValueError('Cannot stop profile before update: ' + str(error)) from error
     try:
-        loaded = adapter.service_loaded(profile)
-        owned = adapter.owns_port(profile) if loaded else False
-        opened = adapter.port_open(profile)
+        busy = _profile_processes_busy(adapter, profile)
+        pending = route.recovery_pending()
     except (TapError, OSError) as error:
         raise ValueError('Process state is unknown after stop; refusing update: ' + str(error)) from error
-    if loaded or owned or opened:
-        raise ValueError('Profile still running after stop; refusing update')
+    if busy:
+        raise ValueError('Profile still running after stop (' + ', '.join(busy) + '); refusing update')
+    if pending:
+        raise ValueError('Network recovery still pending after stop; refusing update')
     return True
 
 
-def _propagate_profile(root, profile_root, backend, hub_port):
-    """Point the working profile at the new backend and managed bindings."""
+def _map_runtime_arg(arg, old_python, old_bun, python, bun):
+    if arg == old_python:
+        return python
+    if arg == old_bun:
+        return bun
+    return arg
+
+
+def _propagate_profile(root, profile_root, backend, python, bun):
+    """Point profile.backend (and component runtime paths) at the new install.
+
+    Preserves port, hub_port, exclude/allow origins, and user-defined readers/
+    handlers; only rewrites known runtime path bindings.
+    """
     from tap_core.runtime import Profile
-    bridge = json.loads((root / 'managed/bridge.json').read_text())
-    components = json.loads((root / 'managed/components.json').read_text())
-    require(int(bridge.get('hub_port', -1)) == int(hub_port), 'Managed hub_port mismatch')
     profile = Profile.load(profile_root)
     profile.backend = backend
-    profile.bridge = bridge
-    profile.components = components
+    if profile.components is not None:
+        old_python = profile.components.get('python')
+        old_bun = profile.components.get('bun')
+        components = json.loads(json.dumps(profile.components))
+        components['python'] = python
+        components['bun'] = bun
+        for group in ('readers', 'handlers'):
+            for spec in components.get(group, {}).values():
+                command = spec.get('command')
+                if isinstance(command, list):
+                    spec['command'] = [
+                        _map_runtime_arg(arg, old_python, old_bun, python, bun) for arg in command
+                    ]
+        profile.components = components
     profile.save()
 
 
@@ -205,10 +250,13 @@ def _drop_path(path):
 
 
 def _restore_path(previous, destination):
+    """Restore a replaced runtime. No-op when that runtime was never staged."""
+    if previous is None:
+        return
     destination = Path(destination)
     if destination.exists():
         shutil.rmtree(destination) if destination.is_dir() else destination.unlink(missing_ok=True)
-    if previous is not None and Path(previous).exists():
+    if Path(previous).exists():
         Path(previous).rename(destination)
 
 
@@ -240,6 +288,12 @@ def apply_checkout(root, new_checkout, python, backend, bun, ref, arch, hub_port
     managed_components = root / 'managed/components.json'
     if managed_components.is_file():
         bun_for_restore = json.loads(managed_components.read_text()).get('bun') or bun
+    profile_backup = None
+    managed_backup = None
+    managed_dir = root / 'managed'
+    if managed_dir.is_dir():
+        managed_backup = root / ('managed.prev.' + str(os.getpid()))
+        require(not managed_backup.exists(), 'Leftover managed backup present; inspect before update')
 
     sys.path.insert(0, str(checkout))
     from tap_core.runtime import profile_lock
@@ -262,6 +316,7 @@ def apply_checkout(root, new_checkout, python, backend, bun, ref, arch, hub_port
               if configured else nullcontext()):
             if configured:
                 was_running = _ensure_profile_stopped(profile_root)
+                profile_backup = (profile_root / 'profile.json').read_bytes()
             try:
                 if staged_python:
                     previous_python = _promote_staged(staged_python, root / 'python')
@@ -282,21 +337,27 @@ def apply_checkout(root, new_checkout, python, backend, bun, ref, arch, hub_port
                 require(Path(python).is_file(), 'Updated interpreter is missing')
                 require(Path(bun).is_file(), 'Bun executable missing')
                 require(Path(backend).exists(), 'Backend path missing')
+                if managed_backup is not None and managed_dir.exists():
+                    managed_dir.rename(managed_backup)
                 checkout.rename(backup)
                 try:
                     new_checkout.rename(checkout)
                 except Exception:
                     if not checkout.exists() and backup.exists():
                         backup.rename(checkout)
+                    if managed_backup is not None and managed_backup.exists() and not managed_dir.exists():
+                        managed_backup.rename(managed_dir)
                     raise
                 write_managed(checkout, python, bun)
                 if configured:
-                    _propagate_profile(root, profile_root, backend, hub_port)
+                    _propagate_profile(root, profile_root, backend, python, bun)
                 data = refresh(root, python, backend, ref, arch)
                 require(data['routing'] == routing_before, 'routing changed during update')
                 ca_after = ((data.get('grants') or {}).get('ca') or {}).get('sha256') or ''
                 require(ca_after == ca_before, 'CA grant fingerprint changed during update')
                 shutil.rmtree(backup)
+                if managed_backup is not None and managed_backup.exists():
+                    shutil.rmtree(managed_backup)
                 _drop_path(previous_python)
                 _drop_path(previous_backend)
                 _drop_path(previous_bun)
@@ -305,12 +366,19 @@ def apply_checkout(root, new_checkout, python, backend, bun, ref, arch, hub_port
                     shutil.rmtree(checkout)
                 if backup.exists() and not checkout.exists():
                     backup.rename(checkout)
+                if managed_dir.exists() and managed_backup is not None and managed_backup.exists():
+                    shutil.rmtree(managed_dir)
+                if managed_backup is not None and managed_backup.exists() and not managed_dir.exists():
+                    managed_backup.rename(managed_dir)
                 _restore_path(previous_python, root / 'python')
                 _restore_path(previous_backend, root / 'backend/mitmproxy.app')
                 _restore_path(previous_bun, root / 'bun/bin/bun')
+                if profile_backup is not None:
+                    (profile_root / 'profile.json').write_bytes(profile_backup)
                 if checkout.exists():
                     try:
-                        write_managed(checkout, before['python'], bun_for_restore)
+                        if not managed_dir.exists():
+                            write_managed(checkout, before['python'], bun_for_restore)
                     except Exception:
                         pass
                     try:

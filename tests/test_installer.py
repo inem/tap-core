@@ -291,8 +291,38 @@ class InstallerTests(unittest.TestCase):
         installed = subprocess.run(['/bin/bash', str(REPO / 'instll/install')],
                                    env=env, capture_output=True, text=True)
         self.assertEqual(installed.returncode, 0, installed.stderr)
+        page = self.root / 'checkout/fixtures/managed/page.js'
+        user_reader = self.root / 'checkout/fixtures/managed/handler.py'
+        bridge = {
+            'version': 1, 'enabled': True, 'hub_port': 19111,
+            'allow_origins': ['http://127.0.0.1:18998'],
+            'exclude_origins': ['https://keep.example'],
+            'page_scripts': [str(page)],
+        }
+        components = {
+            'version': 1, 'python': sys.executable, 'bun': str(bun),
+            'readers': {
+                'projection': {
+                    'version': 1, 'revision': 'installer-managed-1',
+                    'command': [sys.executable, str(self.root / 'checkout/fixtures/live-slice/reader.py')],
+                    'config': {'url': 'http://127.0.0.1:18998/record'},
+                },
+                'custom': {
+                    'version': 1, 'revision': 'user-1',
+                    'command': [sys.executable, str(user_reader)],
+                    'config': {'keep': True},
+                },
+            },
+            'handlers': {
+                'echo': {
+                    'command': [sys.executable, str(user_reader)],
+                    'config': {'echo': True},
+                    'origins': ['http://127.0.0.1:18998'],
+                },
+            },
+        }
         Profile(self.root / 'profile', str(backend), 18999, 'explicit',
-                'http://fixture.test', []).save()
+                'http://fixture.test', [], bridge=bridge, components=components).save()
         retained = self.root / 'profile/data/retained.txt'
         retained.parent.mkdir(parents=True, exist_ok=True)
         retained.write_text('keep-me\n')
@@ -323,8 +353,14 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(leftovers, [], leftovers)
         profile = json.loads((self.root / 'profile/profile.json').read_text())
         self.assertEqual(profile['backend'], str(backend))
-        self.assertEqual(profile['bridge']['hub_port'], 19000)
+        self.assertEqual(profile['port'], 18999)
+        self.assertEqual(profile['bridge']['hub_port'], 19111)
+        self.assertEqual(profile['bridge']['exclude_origins'], ['https://keep.example'])
+        self.assertIn('custom', profile['components']['readers'])
         self.assertEqual(profile['components']['bun'], str(bun))
+        self.assertEqual(profile['components']['python'], sys.executable)
+        managed = json.loads((self.root / 'managed/bridge.json').read_text())
+        self.assertEqual(managed['hub_port'], 19000)
 
     def test_update_refuses_while_profile_lock_held(self):
         self.prepare(configured=True)
@@ -398,9 +434,103 @@ class InstallerTests(unittest.TestCase):
                 ownership._ensure_profile_stopped(self.root / 'profile')
         self.assertIn('unknown', str(ctx.exception).lower())
 
+    def test_ensure_profile_stopped_runs_off_when_only_hub_busy(self):
+        self.prepare(configured=True)
+        page = self.parent / 'page.js'
+        page.write_text('console.log(1)\n')
+        bridge = {
+            'version': 1, 'enabled': True, 'hub_port': 19111,
+            'allow_origins': ['http://127.0.0.1:18998'],
+            'exclude_origins': [], 'page_scripts': [str(page)],
+        }
+        components = {
+            'version': 1, 'python': sys.executable, 'bun': sys.executable,
+            'readers': {}, 'handlers': {},
+        }
+        Profile(self.root / 'profile', '/fixture/backend', 19998, 'explicit',
+                'http://fixture.test', [], bridge=bridge, components=components).save()
+        shutil.copytree(REPO / 'tap_core', self.root / 'checkout/tap_core', dirs_exist_ok=True)
+        calls = []
+        busy_states = [['hub service'], []]
+        with patch.object(ownership, '_profile_processes_busy',
+                          side_effect=lambda *a, **k: busy_states.pop(0)), \
+             patch('tap_core.routing.ExplicitProxyRouting.recovery_pending', return_value=False), \
+             patch('tap_core.routing.ExplicitProxyRouting.mutation_lock') as lock, \
+             patch('tap_core.cli.mutate', side_effect=lambda *a, **k: calls.append('off') or 'stopped'):
+            lock.return_value.__enter__ = lambda s: None
+            lock.return_value.__exit__ = lambda *a: None
+            self.assertTrue(ownership._ensure_profile_stopped(self.root / 'profile'))
+        self.assertEqual(calls, ['off'])
+
+    def test_restore_path_leaves_unreplaced_runtime_alone(self):
+        destination = self.parent / 'python'
+        destination.mkdir()
+        (destination / 'bin').mkdir()
+        (destination / 'bin' / 'python3').write_text('keep\n')
+        ownership._restore_path(None, destination)
+        self.assertEqual((destination / 'bin' / 'python3').read_text(), 'keep\n')
+
+    def test_apply_restores_profile_when_policy_fails_after_propagate(self):
+        self.prepare(configured=True)
+        shutil.copytree(REPO / 'instll', self.root / 'checkout/instll', dirs_exist_ok=True)
+        shutil.copytree(REPO / 'tap_core', self.root / 'checkout/tap_core', dirs_exist_ok=True)
+        for name in ('fixtures/managed/page.js', 'fixtures/managed/handler.py',
+                     'fixtures/live-slice/reader.py'):
+            path = self.root / 'checkout' / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('fixture\n')
+        (self.root / 'checkout/tap').write_text('ok-a\n')
+        page = self.root / 'checkout/fixtures/managed/page.js'
+        bridge = {
+            'version': 1, 'enabled': True, 'hub_port': 19111,
+            'allow_origins': ['http://127.0.0.1:18998'],
+            'exclude_origins': ['https://keep.example'],
+            'page_scripts': [str(page)],
+        }
+        components = {
+            'version': 1, 'python': sys.executable, 'bun': sys.executable,
+            'readers': {
+                'custom': {
+                    'version': 1, 'revision': 'user-1',
+                    'command': [sys.executable, str(page)],
+                    'config': {'keep': True},
+                },
+            },
+            'handlers': {},
+        }
+        Profile(self.root / 'profile', '/fixture/backend', 19998, 'explicit',
+                'http://fixture.test', [], bridge=bridge, components=components).save()
+        before_profile = (self.root / 'profile/profile.json').read_bytes()
+        backend = self.parent / 'fixture-backend-profile'
+        backend.write_text('#!/bin/sh\necho "Mitmproxy: 12.2.3"\n')
+        backend.chmod(0o700)
+        # Seed managed so rename-backup path works.
+        subprocess.run(
+            [sys.executable, str(REPO / 'instll/write_managed.py'), str(self.root),
+             str(self.root / 'checkout'), sys.executable, sys.executable, '19112',
+             str(self.root / 'profile')],
+            check=True, capture_output=True, text=True)
+        staging = self.parent / 'profile-next'
+        shutil.copytree(self.root / 'checkout', staging)
+        (staging / 'UPDATE_MARKER').write_text('version-b\n')
+        real_refresh = ownership.refresh
+
+        def lie_routing(*args, **kwargs):
+            data = real_refresh(*args, **kwargs)
+            return dict(data, routing='system')
+
+        with patch.object(ownership, '_ensure_profile_stopped', return_value=False), \
+             patch.object(ownership, 'refresh', side_effect=lie_routing):
+            with self.assertRaises(ValueError):
+                ownership.apply_checkout(
+                    str(self.root), str(staging), sys.executable, str(backend),
+                    sys.executable, 'b' * 40, 'arm64', '19112')
+        self.assertEqual((self.root / 'profile/profile.json').read_bytes(), before_profile)
+        self.assertEqual((self.root / 'checkout/tap').read_text(), 'ok-a\n')
+
     def test_update_uses_target_ownership_when_current_lacks_apply(self):
-        """main→B: A has no apply-checkout; B's helper still performs the swap."""
-        def pack(archive, marker, *, include_apply):
+        """main→B: current main has no verify/apply; target update still works."""
+        def pack(archive, marker, *, mainlike):
             staging = self.parent / ('tree-' + marker)
             if staging.exists():
                 shutil.rmtree(staging)
@@ -412,20 +542,20 @@ class InstallerTests(unittest.TestCase):
                 else:
                     target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copyfile(source, target)
-            if not include_apply:
-                text = (staging / 'instll/ownership.py').read_text()
-                text = text.replace('def apply_checkout', 'def apply_checkout_gone')
-                text = text.replace("'apply-checkout'", "'apply-checkout-gone'")
-                (staging / 'instll/ownership.py').write_text(text)
-                (staging / 'instll/update').write_text('#!/bin/bash\necho old-update\nexit 1\n')
+            if mainlike:
+                # Exact main ownership surface: record/remove/grants only.
+                main_ownership = subprocess.check_output(
+                    ['git', 'show', 'main:instll/ownership.py'], cwd=REPO, text=True)
+                (staging / 'instll/ownership.py').write_text(main_ownership)
+                (staging / 'instll/update').unlink(missing_ok=True)
             (staging / 'UPDATE_MARKER').write_text(marker + '\n')
             with tarfile.open(archive, 'w:gz') as out:
                 out.add(staging, arcname='tap-core-' + marker)
         archive_a = self.parent / 'mainlike.tar.gz'
         archive_b = self.parent / 'with-apply.tar.gz'
-        pack(archive_a, 'version-a', include_apply=False)
-        pack(archive_b, 'version-b', include_apply=True)
-        self.assertNotIn('def apply_checkout(', (self.parent / 'tree-version-a/instll/ownership.py').read_text())
+        pack(archive_a, 'version-a', mainlike=True)
+        pack(archive_b, 'version-b', mainlike=False)
+        self.assertNotIn("'verify'", (self.parent / 'tree-version-a/instll/ownership.py').read_text())
         fake_bin = self.parent / 'download-bin-main'
         fake_bin.mkdir()
         curl = fake_bin / 'curl'
@@ -440,7 +570,6 @@ class InstallerTests(unittest.TestCase):
         bun = self.parent / 'bun-main'
         bun.write_text('#!/bin/sh\necho 1.3.11\n')
         bun.chmod(0o700)
-        # Install uses a current update script that can consume B; seed root via A archive.
         env = {**os.environ, 'PATH': str(fake_bin) + os.pathsep + os.environ['PATH'],
                'TAP_ROOT': str(self.root), 'TAP_BIN_DIR': str(self.wrapper.parent),
                'TAP_PYTHON': sys.executable, 'TAP_BACKEND': str(backend), 'TAP_BUN': str(bun),
@@ -448,14 +577,13 @@ class InstallerTests(unittest.TestCase):
         installed = subprocess.run(['/bin/bash', str(REPO / 'instll/install')],
                                    env=env, capture_output=True, text=True)
         self.assertEqual(installed.returncode, 0, installed.stderr)
-        # Replace installed checkout with main-like tree (no apply-checkout).
         shutil.rmtree(self.root / 'checkout')
         with tarfile.open(archive_a, 'r:gz') as archive:
             archive.extractall(self.parent / 'extract-a')
         extracted = next((self.parent / 'extract-a').iterdir())
         extracted.rename(self.root / 'checkout')
-        self.assertNotIn('def apply_checkout(', (self.root / 'checkout/instll/ownership.py').read_text())
-        # Drop the target update script into place via env archive B, run REPO update.
+        self.assertNotIn("'verify'", (self.root / 'checkout/instll/ownership.py').read_text())
+        # Simulate curl|bash of the *target* update script against a main install.
         updated = subprocess.run(['/bin/bash', str(REPO / 'instll/update')],
                                  env={**env, 'TAP_CHECKOUT_ARCHIVE': str(archive_b),
                                       'TAP_REF': 'b' * 40},
