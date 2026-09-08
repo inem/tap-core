@@ -143,8 +143,13 @@ def parser():
     install.add_argument("--addon", type=Path, action="append", default=[], help="Additional trusted addon (optional)")
     install.add_argument("--bridge-config", type=Path, help="Explicit page bridge configuration JSON")
     install.add_argument("--components-config", type=Path, help="Explicit managed Hub/reader/handler development bindings")
-    for name in ("on", "off", "status", "doctor", "where", "uninstall"):
+    for name in ("on", "off", "doctor", "where", "uninstall"):
         commands.add_parser(name)
+    status_command = commands.add_parser("status")
+    status_command.add_argument("--output", choices=("raw-json", "semantic-json", "terminal"),
+                                default="raw-json")
+    status_command.add_argument("--width", type=int, default=80)
+    status_command.add_argument("--color", choices=("auto", "always", "never"), default="auto")
     routing = commands.add_parser(
         "routing",
         help="Switch this profile's routing (explicit/system) in place; install/uninstall never change routing")
@@ -343,10 +348,26 @@ def main(argv=None):
                 output = reader.run(definition(args.definition), args.max_records, args.timeout)
             print(json.dumps(output, indent=2))
             return 0
-        if args.command in ("status", "doctor"):
-            result = doctor(profile, adapter) if args.command == "doctor" else status(profile, adapter)
+        if args.command == "status":
+            result = status(profile, adapter)
+            if args.output == "raw-json":
+                print(json.dumps(result, indent=2))
+            else:
+                # Keep the compatibility path independent of optional presentation.
+                from .status_view import public_status_result, terminal_status
+                semantic = public_status_result(result)
+                if args.output == "semantic-json":
+                    print(json.dumps(semantic, indent=2))
+                else:
+                    if args.width < 1:
+                        raise TapError("Status width must be a positive integer")
+                    color = args.color == "always" or (args.color == "auto" and sys.stdout.isatty())
+                    print(terminal_status(semantic, args.width, color))
+            return 0
+        if args.command == "doctor":
+            result = doctor(profile, adapter)
             print(json.dumps(result, indent=2))
-            return 1 if args.command == "doctor" and not result["healthy"] else 0
+            return 1 if not result["healthy"] else 0
         if args.command == "routing":
             with profile_lock(root):
                 # Reload under the lock: the profile read before locking may be

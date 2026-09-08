@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/inem/tap-core/contracts/status-result/v1/schema.json",
+  "title": "TAP compact status result v1",
+  "type": "object",
+  "required": ["schema", "profile", "runtime", "routing"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {"const": "tap.status-result/v1"},
+    "profile": {"type": ["string", "null"]},
+    "runtime": {"$ref": "#/$defs/runtime"},
+    "routing": {"$ref": "#/$defs/routing"}
+  },
+  "$defs": {
+    "known": {
+      "type": "object", "required": ["knowledge", "value"], "additionalProperties": false,
+      "properties": {"knowledge": {"const": "known"}, "value": {}}
+    },
+    "unknown": {
+      "type": "object", "required": ["knowledge", "reason", "message"], "additionalProperties": false,
+      "properties": {"knowledge": {"const": "unknown"}, "reason": {"const": "inspection_failed"}, "message": {"type": "string"}}
+    },
+    "observation": {"oneOf": [{"$ref": "#/$defs/known"}, {"$ref": "#/$defs/unknown"}]},
+    "runtime": {
+      "type": "object", "additionalProperties": false,
+      "required": ["service_loaded", "pid", "port_owned", "port_open"],
+      "properties": {"service_loaded": {"$ref": "#/$defs/observation"}, "pid": {"$ref": "#/$defs/observation"}, "port_owned": {"$ref": "#/$defs/observation"}, "port_open": {"$ref": "#/$defs/observation"}}
+    },
+    "routing": {
+      "type": "object", "additionalProperties": false,
+      "required": ["routing", "network_recovery_pending", "system_proxy_verified"],
+      "properties": {"routing": {"$ref": "#/$defs/observation"}, "network_recovery_pending": {"$ref": "#/$defs/observation"}, "system_proxy_verified": {"$ref": "#/$defs/observation"}}
+    }
+  }
+}

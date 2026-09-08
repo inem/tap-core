@@ -1,0 +1,400 @@
+{
+  "schema": "tap.internal-status-material/v1",
+  "result_schema": "tap.status-result/v1",
+  "observations": {"runtime": [{"name": "service_loaded","raw": "service_loaded"},{"name": "pid","raw": "pid"},{"name": "port_owned","raw": "port_owned"},{"name": "port_open","raw": "port_open"}],"routing": [{"name": "routing","raw": "routing"},{"name": "network_recovery_pending","raw": "network_recovery_pending"},{"name": "system_proxy_verified","raw": "system_proxy_verified"}]},
+  "semantic_rules": [
+    {
+      "id": "runtime-00-fallback",
+      "when": [
+        ["observation","runtime","service_loaded","$_","$_"],
+        ["observation","runtime","pid","$_","$_"],
+        ["observation","runtime","port_owned","$_","$_"],
+        ["observation","runtime","port_open","$_","$_"]
+      ],
+      "emit": [
+        ["candidate","runtime","state","unknown",0,"inconsistent_runtime_observations",[]]
+      ]
+    },
+    {
+      "id": "runtime-10-stopped",
+      "when": [
+        ["observation","runtime","service_loaded","known",false],
+        ["observation","runtime","pid","known",null],
+        ["observation","runtime","port_owned","$_","$_"],
+        ["observation","runtime","port_open","known",false]
+      ],
+      "emit": [
+        ["candidate","runtime","state","stopped",100,"service_absent_and_port_closed",[]]
+      ]
+    },
+    {
+      "id": "runtime-20-port-conflict",
+      "when": [
+        ["observation","runtime","service_loaded","$_","$_"],
+        ["observation","runtime","pid","$_","$_"],
+        ["observation","runtime","port_owned","known",false],
+        ["observation","runtime","port_open","known",true]
+      ],
+      "emit": [
+        ["candidate","runtime","state","port-conflict",100,"listener_not_owned_by_profile",[]]
+      ]
+    },
+    {
+      "id": "runtime-30-running",
+      "when": [
+        ["observation","runtime","service_loaded","known",true],
+        ["observation","runtime","pid","known",{"var": "$pid","test": "positive-int"}],
+        ["observation","runtime","port_owned","known",true],
+        ["observation","runtime","port_open","known",true]
+      ],
+      "emit": [
+        ["candidate","runtime","state","running",100,"service_owns_listener",[["pid","$pid"]]]
+      ]
+    },
+    {
+      "id": "runtime-40-broken",
+      "when": [
+        ["observation","runtime","service_loaded","known",true],
+        ["observation","runtime","pid","known",{"var": "$pid","test": "positive-int"}],
+        ["observation","runtime","port_owned","$_","$_"],
+        ["observation","runtime","port_open","known",false]
+      ],
+      "emit": [
+        ["candidate","runtime","state","broken",100,"service_has_no_listener",[]]
+      ]
+    },
+    {
+      "id": "runtime-50-ownership-unknown",
+      "when": [
+        ["observation","runtime","service_loaded","known",true],
+        ["observation","runtime","pid","known",{"var": "$pid","test": "positive-int"}],
+        ["observation","runtime","port_owned","unknown","$_"],
+        ["observation","runtime","port_open","known",true]
+      ],
+      "emit": [
+        ["candidate","runtime","state","unknown",100,"listener_ownership_unknown",[]]
+      ]
+    },
+    {
+      "id": "runtime-60-inspection-0",
+      "when": [
+        ["observation","runtime","service_loaded","unknown","$_"],
+        ["observation","runtime","pid","$_","$_"],
+        ["observation","runtime","port_owned","$_","$_"],
+        ["observation","runtime","port_open","$_","$_"]
+      ],
+      "emit": [
+        ["candidate","runtime","state","unknown",200,"inspection_incomplete",[]]
+      ]
+    },
+    {
+      "id": "runtime-60-inspection-1",
+      "when": [
+        ["observation","runtime","pid","unknown","$_"],
+        ["observation","runtime","service_loaded","$_","$_"],
+        ["observation","runtime","port_owned","$_","$_"],
+        ["observation","runtime","port_open","$_","$_"]
+      ],
+      "emit": [
+        ["candidate","runtime","state","unknown",200,"inspection_incomplete",[]]
+      ]
+    },
+    {
+      "id": "runtime-60-inspection-2",
+      "when": [
+        ["observation","runtime","port_open","unknown","$_"],
+        ["observation","runtime","service_loaded","$_","$_"],
+        ["observation","runtime","pid","$_","$_"],
+        ["observation","runtime","port_owned","$_","$_"]
+      ],
+      "emit": [
+        ["candidate","runtime","state","unknown",200,"inspection_incomplete",[]]
+      ]
+    },
+    {
+      "id": "routing-00-fallback",
+      "when": [
+        ["observation","routing","routing","$_","$_"],
+        ["observation","routing","network_recovery_pending","$_","$_"],
+        ["observation","routing","system_proxy_verified","$_","$_"]
+      ],
+      "emit": [
+        ["candidate","routing","state","unknown",0,"inconsistent_routing_observations",[]]
+      ]
+    },
+    {
+      "id": "routing-10-client-opt-in",
+      "when": [
+        ["observation","routing","routing","known","explicit"],
+        ["observation","routing","network_recovery_pending","known",false],
+        ["observation","routing","system_proxy_verified","known","not_used"]
+      ],
+      "emit": [
+        ["candidate","routing","state","client-opt-in",100,"system_proxy_not_managed",[]]
+      ]
+    },
+    {
+      "id": "routing-20-explicit-recovery",
+      "when": [
+        ["observation","routing","routing","known","explicit"],
+        ["observation","routing","network_recovery_pending","known",true],
+        ["observation","routing","system_proxy_verified","$_","$_"]
+      ],
+      "emit": [
+        ["candidate","routing","state","recovery-required",100,"unexpected_recovery_snapshot",[]]
+      ]
+    },
+    {
+      "id": "routing-30-capturing",
+      "when": [
+        ["observation","routing","routing","known","system"],
+        ["observation","routing","network_recovery_pending","known",true],
+        ["observation","routing","system_proxy_verified","known",true]
+      ],
+      "emit": [
+        ["candidate","routing","state","capturing",100,"owned_system_proxy_verified",[]]
+      ]
+    },
+    {
+      "id": "routing-40-direct",
+      "when": [
+        ["observation","routing","routing","known","system"],
+        ["observation","routing","network_recovery_pending","known",false],
+        ["observation","routing","system_proxy_verified","known",false]
+      ],
+      "emit": [
+        ["candidate","routing","state","direct",100,"system_proxy_disabled",[]]
+      ]
+    },
+    {
+      "id": "routing-50-drift",
+      "when": [
+        ["observation","routing","routing","known","system"],
+        ["observation","routing","network_recovery_pending","known",true],
+        ["observation","routing","system_proxy_verified","known",false]
+      ],
+      "emit": [
+        ["candidate","routing","state","recovery-required",100,"owned_system_proxy_drifted",[]]
+      ]
+    },
+    {
+      "id": "routing-60-unowned",
+      "when": [
+        ["observation","routing","routing","known","system"],
+        ["observation","routing","network_recovery_pending","known",false],
+        ["observation","routing","system_proxy_verified","known",true]
+      ],
+      "emit": [
+        ["candidate","routing","state","unowned-route",100,"recovery_snapshot_missing",[]]
+      ]
+    },
+    {
+      "id": "routing-70-inspection-0",
+      "when": [
+        ["observation","routing","routing","unknown","$_"],
+        ["observation","routing","network_recovery_pending","$_","$_"],
+        ["observation","routing","system_proxy_verified","$_","$_"]
+      ],
+      "emit": [
+        ["candidate","routing","state","unknown",200,"inspection_incomplete",[]]
+      ]
+    },
+    {
+      "id": "routing-70-inspection-1",
+      "when": [
+        ["observation","routing","network_recovery_pending","unknown","$_"],
+        ["observation","routing","routing","$_","$_"],
+        ["observation","routing","system_proxy_verified","$_","$_"]
+      ],
+      "emit": [
+        ["candidate","routing","state","unknown",200,"inspection_incomplete",[]]
+      ]
+    },
+    {
+      "id": "routing-70-inspection-2",
+      "when": [
+        ["observation","routing","system_proxy_verified","unknown","$_"],
+        ["observation","routing","routing","$_","$_"],
+        ["observation","routing","network_recovery_pending","$_","$_"]
+      ],
+      "emit": [
+        ["candidate","routing","state","unknown",200,"inspection_incomplete",[]]
+      ]
+    }
+  ],
+  "presentation_rules": [
+    {
+      "id": "presentation-00-document",
+      "when": [
+        ["meaning","runtime","state","$runtime-state","$runtime-reason","$runtime-attrs"],
+        ["meaning","routing","state","$routing-state","$routing-reason","$routing-attrs"]
+      ],
+      "emit": [
+        ["projection","status-document","$runtime-state","$routing-state"],
+        ["slot","status",null,0,"group","document",false,"",null,[["projection","status-document","$runtime-state","$routing-state"]]]
+      ]
+    },
+    {
+      "id": "presentation-runtime-00-running",
+      "when": [
+        ["meaning","runtime","state","running","$reason","$attrs"],
+        ["attribute","runtime","pid","$pid"]
+      ],
+      "emit": [
+        ["slot","runtime-line","status",0,"group","line",false,"",null,[["meaning","runtime","state","running","$reason","$attrs"]]],
+        ["slot","runtime-label","runtime-line",0,"leaf","label",false,"tap           ",null,[["meaning","runtime","state","running","$reason","$attrs"]]],
+        ["slot","runtime-indicator","runtime-line",1,"leaf","indicator",false,"● ","positive",[["meaning","runtime","state","running","$reason","$attrs"]]],
+        ["slot","runtime-value","runtime-line",2,"leaf","value",false,"up","positive",[["meaning","runtime","state","running","$reason","$attrs"]]],
+        ["slot","runtime-attachment","runtime-line",3,"group","support",true,"",null,[["meaning","runtime","state","running","$reason","$attrs"]]],
+        ["slot","runtime-separator","runtime-attachment",0,"leaf","separator",false," · ",null,[["meaning","runtime","state","running","$reason","$attrs"]]],
+        ["slot","runtime-detail","runtime-attachment",1,"leaf","detail",false,{"format": "PID {}","args": ["$pid"]},null,[["meaning","runtime","state","running","$reason","$attrs"]]]
+      ]
+    },
+    {
+      "id": "presentation-runtime-01-stopped",
+      "when": [
+        ["meaning","runtime","state","stopped","$reason","$attrs"]
+      ],
+      "emit": [
+        ["slot","runtime-line","status",0,"group","line",false,"",null,[["meaning","runtime","state","stopped","$reason","$attrs"]]],
+        ["slot","runtime-label","runtime-line",0,"leaf","label",false,"tap           ",null,[["meaning","runtime","state","stopped","$reason","$attrs"]]],
+        ["slot","runtime-indicator","runtime-line",1,"leaf","indicator",false,"✗ ","negative",[["meaning","runtime","state","stopped","$reason","$attrs"]]],
+        ["slot","runtime-value","runtime-line",2,"leaf","value",false,"down","negative",[["meaning","runtime","state","stopped","$reason","$attrs"]]]
+      ]
+    },
+    {
+      "id": "presentation-runtime-02-port-conflict",
+      "when": [
+        ["meaning","runtime","state","port-conflict","$reason","$attrs"]
+      ],
+      "emit": [
+        ["slot","runtime-line","status",0,"group","line",false,"",null,[["meaning","runtime","state","port-conflict","$reason","$attrs"]]],
+        ["slot","runtime-label","runtime-line",0,"leaf","label",false,"tap           ",null,[["meaning","runtime","state","port-conflict","$reason","$attrs"]]],
+        ["slot","runtime-indicator","runtime-line",1,"leaf","indicator",false,"✗ ","negative",[["meaning","runtime","state","port-conflict","$reason","$attrs"]]],
+        ["slot","runtime-value","runtime-line",2,"leaf","value",false,"PORT STOLEN","negative",[["meaning","runtime","state","port-conflict","$reason","$attrs"]]]
+      ]
+    },
+    {
+      "id": "presentation-runtime-03-broken",
+      "when": [
+        ["meaning","runtime","state","broken","$reason","$attrs"]
+      ],
+      "emit": [
+        ["slot","runtime-line","status",0,"group","line",false,"",null,[["meaning","runtime","state","broken","$reason","$attrs"]]],
+        ["slot","runtime-label","runtime-line",0,"leaf","label",false,"tap           ",null,[["meaning","runtime","state","broken","$reason","$attrs"]]],
+        ["slot","runtime-indicator","runtime-line",1,"leaf","indicator",false,"✗ ","negative",[["meaning","runtime","state","broken","$reason","$attrs"]]],
+        ["slot","runtime-value","runtime-line",2,"leaf","value",false,"broken","negative",[["meaning","runtime","state","broken","$reason","$attrs"]]],
+        ["slot","runtime-attachment","runtime-line",3,"group","support",true,"",null,[["meaning","runtime","state","broken","$reason","$attrs"]]],
+        ["slot","runtime-separator","runtime-attachment",0,"leaf","separator",false," · ",null,[["meaning","runtime","state","broken","$reason","$attrs"]]],
+        ["slot","runtime-detail","runtime-attachment",1,"leaf","detail",false,"service has no listener",null,[["meaning","runtime","state","broken","$reason","$attrs"]]]
+      ]
+    },
+    {
+      "id": "presentation-runtime-04-unknown",
+      "when": [
+        ["meaning","runtime","state","unknown","$reason","$attrs"]
+      ],
+      "emit": [
+        ["slot","runtime-line","status",0,"group","line",false,"",null,[["meaning","runtime","state","unknown","$reason","$attrs"]]],
+        ["slot","runtime-label","runtime-line",0,"leaf","label",false,"tap           ",null,[["meaning","runtime","state","unknown","$reason","$attrs"]]],
+        ["slot","runtime-indicator","runtime-line",1,"leaf","indicator",false,"? ","warning",[["meaning","runtime","state","unknown","$reason","$attrs"]]],
+        ["slot","runtime-value","runtime-line",2,"leaf","value",false,"unknown","warning",[["meaning","runtime","state","unknown","$reason","$attrs"]]],
+        ["slot","runtime-attachment","runtime-line",3,"group","support",true,"",null,[["meaning","runtime","state","unknown","$reason","$attrs"]]],
+        ["slot","runtime-separator","runtime-attachment",0,"leaf","separator",false," · ",null,[["meaning","runtime","state","unknown","$reason","$attrs"]]],
+        ["slot","runtime-detail","runtime-attachment",1,"leaf","detail",false,"inspection incomplete",null,[["meaning","runtime","state","unknown","$reason","$attrs"]]]
+      ]
+    },
+    {
+      "id": "presentation-routing-00-client-opt-in",
+      "when": [
+        ["meaning","routing","state","client-opt-in","$reason","$attrs"]
+      ],
+      "emit": [
+        ["slot","routing-line","status",1,"group","line",false,"",null,[["meaning","routing","state","client-opt-in","$reason","$attrs"]]],
+        ["slot","routing-label","routing-line",0,"leaf","label",false,"browser/apps  ",null,[["meaning","routing","state","client-opt-in","$reason","$attrs"]]],
+        ["slot","routing-indicator","routing-line",1,"leaf","indicator",false,"○ ","muted",[["meaning","routing","state","client-opt-in","$reason","$attrs"]]],
+        ["slot","routing-value","routing-line",2,"leaf","value",false,"explicit","muted",[["meaning","routing","state","client-opt-in","$reason","$attrs"]]],
+        ["slot","routing-attachment","routing-line",3,"group","support",true,"",null,[["meaning","routing","state","client-opt-in","$reason","$attrs"]]],
+        ["slot","routing-separator","routing-attachment",0,"leaf","separator",false," · ",null,[["meaning","routing","state","client-opt-in","$reason","$attrs"]]],
+        ["slot","routing-detail","routing-attachment",1,"leaf","detail",false,"clients opt in",null,[["meaning","routing","state","client-opt-in","$reason","$attrs"]]]
+      ]
+    },
+    {
+      "id": "presentation-routing-01-capturing",
+      "when": [
+        ["meaning","routing","state","capturing","$reason","$attrs"]
+      ],
+      "emit": [
+        ["slot","routing-line","status",1,"group","line",false,"",null,[["meaning","routing","state","capturing","$reason","$attrs"]]],
+        ["slot","routing-label","routing-line",0,"leaf","label",false,"browser/apps  ",null,[["meaning","routing","state","capturing","$reason","$attrs"]]],
+        ["slot","routing-indicator","routing-line",1,"leaf","indicator",false,"● ","positive",[["meaning","routing","state","capturing","$reason","$attrs"]]],
+        ["slot","routing-value","routing-line",2,"leaf","value",false,"capturing","positive",[["meaning","routing","state","capturing","$reason","$attrs"]]],
+        ["slot","routing-attachment","routing-line",3,"group","support",true,"",null,[["meaning","routing","state","capturing","$reason","$attrs"]]],
+        ["slot","routing-separator","routing-attachment",0,"leaf","separator",false," · ",null,[["meaning","routing","state","capturing","$reason","$attrs"]]],
+        ["slot","routing-detail","routing-attachment",1,"leaf","detail",false,"system proxy",null,[["meaning","routing","state","capturing","$reason","$attrs"]]]
+      ]
+    },
+    {
+      "id": "presentation-routing-02-direct",
+      "when": [
+        ["meaning","routing","state","direct","$reason","$attrs"]
+      ],
+      "emit": [
+        ["slot","routing-line","status",1,"group","line",false,"",null,[["meaning","routing","state","direct","$reason","$attrs"]]],
+        ["slot","routing-label","routing-line",0,"leaf","label",false,"browser/apps  ",null,[["meaning","routing","state","direct","$reason","$attrs"]]],
+        ["slot","routing-indicator","routing-line",1,"leaf","indicator",false,"○ ","muted",[["meaning","routing","state","direct","$reason","$attrs"]]],
+        ["slot","routing-value","routing-line",2,"leaf","value",false,"direct","muted",[["meaning","routing","state","direct","$reason","$attrs"]]],
+        ["slot","routing-attachment","routing-line",3,"group","aside",true,"",null,[["meaning","routing","state","direct","$reason","$attrs"]]],
+        ["slot","routing-separator","routing-attachment",0,"leaf","separator",false,"   ",null,[["meaning","routing","state","direct","$reason","$attrs"]]],
+        ["slot","routing-detail","routing-attachment",1,"leaf","detail",false,"(tap on)",null,[["meaning","routing","state","direct","$reason","$attrs"]]]
+      ]
+    },
+    {
+      "id": "presentation-routing-03-recovery-required",
+      "when": [
+        ["meaning","routing","state","recovery-required","$reason","$attrs"]
+      ],
+      "emit": [
+        ["slot","routing-line","status",1,"group","line",false,"",null,[["meaning","routing","state","recovery-required","$reason","$attrs"]]],
+        ["slot","routing-label","routing-line",0,"leaf","label",false,"browser/apps  ",null,[["meaning","routing","state","recovery-required","$reason","$attrs"]]],
+        ["slot","routing-indicator","routing-line",1,"leaf","indicator",false,"⚠ ","warning",[["meaning","routing","state","recovery-required","$reason","$attrs"]]],
+        ["slot","routing-value","routing-line",2,"leaf","value",false,"routing drift","warning",[["meaning","routing","state","recovery-required","$reason","$attrs"]]],
+        ["slot","routing-attachment","routing-line",3,"group","aside",true,"",null,[["meaning","routing","state","recovery-required","$reason","$attrs"]]],
+        ["slot","routing-separator","routing-attachment",0,"leaf","separator",false,"   ",null,[["meaning","routing","state","recovery-required","$reason","$attrs"]]],
+        ["slot","routing-detail","routing-attachment",1,"leaf","detail",false,"(tap off)",null,[["meaning","routing","state","recovery-required","$reason","$attrs"]]]
+      ]
+    },
+    {
+      "id": "presentation-routing-04-unowned-route",
+      "when": [
+        ["meaning","routing","state","unowned-route","$reason","$attrs"]
+      ],
+      "emit": [
+        ["slot","routing-line","status",1,"group","line",false,"",null,[["meaning","routing","state","unowned-route","$reason","$attrs"]]],
+        ["slot","routing-label","routing-line",0,"leaf","label",false,"browser/apps  ",null,[["meaning","routing","state","unowned-route","$reason","$attrs"]]],
+        ["slot","routing-indicator","routing-line",1,"leaf","indicator",false,"⚠ ","warning",[["meaning","routing","state","unowned-route","$reason","$attrs"]]],
+        ["slot","routing-value","routing-line",2,"leaf","value",false,"capturing","warning",[["meaning","routing","state","unowned-route","$reason","$attrs"]]],
+        ["slot","routing-attachment","routing-line",3,"group","support",true,"",null,[["meaning","routing","state","unowned-route","$reason","$attrs"]]],
+        ["slot","routing-separator","routing-attachment",0,"leaf","separator",false," · ",null,[["meaning","routing","state","unowned-route","$reason","$attrs"]]],
+        ["slot","routing-detail","routing-attachment",1,"leaf","detail",false,"recovery snapshot missing",null,[["meaning","routing","state","unowned-route","$reason","$attrs"]]]
+      ]
+    },
+    {
+      "id": "presentation-routing-05-unknown",
+      "when": [
+        ["meaning","routing","state","unknown","$reason","$attrs"]
+      ],
+      "emit": [
+        ["slot","routing-line","status",1,"group","line",false,"",null,[["meaning","routing","state","unknown","$reason","$attrs"]]],
+        ["slot","routing-label","routing-line",0,"leaf","label",false,"browser/apps  ",null,[["meaning","routing","state","unknown","$reason","$attrs"]]],
+        ["slot","routing-indicator","routing-line",1,"leaf","indicator",false,"? ","warning",[["meaning","routing","state","unknown","$reason","$attrs"]]],
+        ["slot","routing-value","routing-line",2,"leaf","value",false,"unknown","warning",[["meaning","routing","state","unknown","$reason","$attrs"]]],
+        ["slot","routing-attachment","routing-line",3,"group","support",true,"",null,[["meaning","routing","state","unknown","$reason","$attrs"]]],
+        ["slot","routing-separator","routing-attachment",0,"leaf","separator",false," · ",null,[["meaning","routing","state","unknown","$reason","$attrs"]]],
+        ["slot","routing-detail","routing-attachment",1,"leaf","detail",false,"inspection incomplete",null,[["meaning","routing","state","unknown","$reason","$attrs"]]]
+      ]
+    }
+  ],
+  "document_root": "status",
+  "terminal_styles": {"positive": "\u001b[32m", "negative": "\u001b[31m", "warning": "\u001b[33m", "muted": "\u001b[2m"}
+}
