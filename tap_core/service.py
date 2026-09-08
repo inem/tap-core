@@ -10,7 +10,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tap_core.runtime import Profile, atomic_json, profile_lock
-from tap_core.components import ROOT, identity, hub_health
+from tap_core.components import ROOT, identity, hub_health, needs_hub
 from tap_core.readers import Reader
 
 
@@ -61,34 +61,38 @@ def main():
         from tap_core.pack_store import PackStore
         store = PackStore(profile.root)
         components = store.effective_components(profile.components)
-        command = [components['python'], '-B', str(ROOT / 'guardian.py'), str(os.getpid()),
-                   components['bun'], str(ROOT / 'hub.mjs'), str(profile.root)]
-        hub = subprocess.Popen(command, start_new_session=True)
+        hub = None
+        hub_pid = None
         try:
-            deadline, hub_pid = time.monotonic() + 10, None
-            while not stopping.is_set() and hub.poll() is None:
-                try:
-                    hub_pid = hub_health(profile)['pid']
-                    break
-                except OSError:
-                    if time.monotonic() >= deadline:
-                        raise RuntimeError('Hub startup timed out')
-                    stopping.wait(0.1)
-            if hub_pid is None:
-                raise RuntimeError('Hub exited before readiness')
+            if needs_hub(components):
+                command = [components['python'], '-B', str(ROOT / 'guardian.py'), str(os.getpid()),
+                           components['bun'], str(ROOT / 'hub.mjs'), str(profile.root)]
+                hub = subprocess.Popen(command, start_new_session=True)
+                deadline = time.monotonic() + 10
+                while not stopping.is_set() and hub.poll() is None:
+                    try:
+                        hub_pid = hub_health(profile)['pid']
+                        break
+                    except OSError:
+                        if time.monotonic() >= deadline:
+                            raise RuntimeError('Hub startup timed out')
+                        stopping.wait(0.1)
+                if hub_pid is None:
+                    raise RuntimeError('Hub exited before readiness')
             for name, spec in components['readers'].items():
                 rows[name] = {'healthy': False, 'phase': 'starting', 'error': None}
                 thread = threading.Thread(target=reader_loop, args=(name, spec), daemon=True)
                 threads.append(thread)
                 thread.start()
             while not stopping.is_set():
-                if hub.poll() is not None:
-                    raise RuntimeError('Hub exited; inspect components.log and use off/on')
-                try:
-                    if hub_health(profile)['pid'] != hub_pid:
-                        raise RuntimeError('Hub identity changed')
-                except OSError as error:
-                    raise RuntimeError('Hub unavailable or hung') from error
+                if hub is not None:
+                    if hub.poll() is not None:
+                        raise RuntimeError('Hub exited; inspect components.log and use off/on')
+                    try:
+                        if hub_health(profile)['pid'] != hub_pid:
+                            raise RuntimeError('Hub identity changed')
+                    except OSError as error:
+                        raise RuntimeError('Hub unavailable or hung') from error
                 report('ready', hub_pid)
                 stopping.wait(0.5)
         except Exception as error:
@@ -98,11 +102,12 @@ def main():
             stopping.set()
             for thread in threads:
                 thread.join(timeout=4)
-            try:
-                os.killpg(hub.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            hub.wait(timeout=3)
+            if hub is not None:
+                try:
+                    os.killpg(hub.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                hub.wait(timeout=3)
         return 0
 
 
