@@ -250,9 +250,9 @@ python3 tools/check_linked_pack_lifecycle.py \
 
 The input is published v0.1.0. The check locally rebuilds v0.1.1 with a hanging
 handler and v0.2.0 with a changed reader; these are test variants, not releases.
-Claims: hanging handler → `handler_timeout`; unsupported capture record → reader
-delivery `error` in components status (host rejects the record before the pack
-reader executes it); update/rollback succeeds before reader progress exists;
+Claims: hanging handler → `handler_timeout`; a valid capture record containing
+invalid JSON in its HTTP body makes the installed reader exit 1, visible as an
+`error` in components status; update/rollback succeeds before reader progress exists;
 incompatible update and rollback refuse with selected version, history,
 checkpoint and projection preserved. After stopping components, disable removes
 effective reader/handler/page bindings, then uninstall removes code and retains

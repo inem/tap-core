@@ -305,7 +305,7 @@ def main():
 
             poison = json.loads((ROOT / 'fixtures/capture/v1.jsonl').read_text().splitlines()[0])
             poison.update(record_id=str(uuid.uuid4()), url=RECORD_URL, status=200,
-                          body=json.dumps({'value': 'poison'}), record_version=99)
+                          body='{invalid-json', record_version=1)
             writer = Writer(profile_root / 'data', profile_root / 'state')
             writer.submit(poison)
             writer.close()
@@ -316,7 +316,7 @@ def main():
                 return row.get('phase') in ('failed', 'backoff') and bool(row.get('error'))
             assert wait_pred(reader_failed, 20), status(Profile.load(profile_root), adapter)
             row = status(Profile.load(profile_root), adapter)['readers'][PACK_ID]
-            assert 'Unsupported capture record version' in row['error'] or 'ValueError' in row['error']
+            assert 'Reader exited with code 1' in row['error'], row
             steps['reader_error_visible'] = True
             report['reader_error'] = row
 
