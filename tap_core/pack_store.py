@@ -196,11 +196,17 @@ class PackStore:
                     f"pack registry: enabled pack lacks version or grants for {pack_id}")
             for version, metadata in record["versions"].items():
                 require(type(version) is str and VERSION.fullmatch(version)
-                        and type(metadata) is dict and set(metadata) == {"hashes"}
+                        and type(metadata) is dict
+                        and set(metadata) <= {"hashes", "artifact_sha256", "source"}
+                        and "hashes" in metadata
                         and type(metadata["hashes"]) is dict
                         and all(type(name) is str and type(digest) is str
                                 and len(digest) == 64
-                                for name, digest in metadata["hashes"].items()),
+                                for name, digest in metadata["hashes"].items())
+                        and ("artifact_sha256" not in metadata
+                             or (type(metadata["artifact_sha256"]) is str
+                                 and len(metadata["artifact_sha256"]) == 64))
+                        and ("source" not in metadata or type(metadata["source"]) is str),
                         f"pack registry: malformed version for {pack_id}")
         return value
 
@@ -254,7 +260,7 @@ class PackStore:
         require(type(record) is dict, f"pack is not installed: {pack_id}")
         return record
 
-    def install(self, artifact):
+    def install(self, artifact, *, source=None):
         _private_directory(self._safe_profile_path(self.code))
         stage = Path(tempfile.mkdtemp(prefix=".stage-", dir=self.code))
         try:
@@ -274,7 +280,14 @@ class PackStore:
             if not target.exists():
                 _private_directory(self._safe_profile_path(target.parent))
                 stage.replace(target)
-            record["versions"][manifest["version"]] = {"hashes": hashes}
+            metadata = {"hashes": hashes, "artifact_sha256": _digest(artifact)}
+            if source is not None:
+                require(type(source) is str and bool(source), "pack source must be a nonempty string")
+                metadata["source"] = source
+            previous = record["versions"].get(manifest["version"])
+            if previous and "source" in previous and "source" not in metadata:
+                metadata["source"] = previous["source"]
+            record["versions"][manifest["version"]] = metadata
             self.save(registry)
             return {"id": manifest["id"], "version": manifest["version"],
                     "installed": True, "enabled": record["enabled"], "code": str(target),

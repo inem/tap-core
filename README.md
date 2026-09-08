@@ -75,6 +75,9 @@ requesting page, using explicit development bindings.
 [Command provider contract v1](docs/commands.md) adds declarative installed CLI
 commands through the same immutable pack lifecycle. Command-only packs can use a
 bare profile directory and do not require capture, a reader, page, Hub or WS.
+The installed wrapper can add a reviewed GitHub release with
+`tap pack add OWNER/REPO[@VERSION]`; local artifact install and explicit grants
+remain available for pack development.
 The independently released
 [`chatgpt.search`](https://github.com/inem/tap-pack-chatgpt-search) pack is the
 first applied command provider.
