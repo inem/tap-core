@@ -117,14 +117,26 @@ def load_material(path=MATERIAL):
     return material
 
 
-def _observation(snapshot, raw_name):
+def observe(spec, snapshot):
+    """Read one declared observation from a supplied snapshot carrier."""
+    if (not isinstance(spec, dict) or set(spec) != {"path", "error"}
+            or not isinstance(spec["path"], list) or not spec["path"]
+            or not all(isinstance(part, str) and part for part in spec["path"])
+            or not isinstance(spec["error"], str) or not spec["error"]):
+        raise ProjectionError("invalid status observation source")
+
     errors = snapshot.get("inspection_errors", {})
-    if raw_name in errors:
-        return {"knowledge": "unknown", "reason": "inspection_failed", "message": errors[raw_name]}
-    if raw_name not in snapshot:
-        return {"knowledge": "unknown", "reason": "not_observed",
-                "message": "observation was not supplied"}
-    return {"knowledge": "known", "value": snapshot[raw_name]}
+    if spec["error"] in errors:
+        return {"knowledge": "unknown", "reason": "inspection_failed",
+                "message": errors[spec["error"]]}
+
+    value = snapshot
+    for part in spec["path"]:
+        if not isinstance(value, dict) or part not in value:
+            return {"knowledge": "unknown", "reason": "not_observed",
+                    "message": "observation was not supplied"}
+        value = value[part]
+    return {"knowledge": "known", "value": value}
 
 
 def public_status_result(snapshot, material=None):
@@ -132,7 +144,7 @@ def public_status_result(snapshot, material=None):
     material = load_material() if material is None else material
     result = {"schema": material["result_schema"], "profile": snapshot.get("profile")}
     for group, declarations in material["observations"].items():
-        result[group] = {item["name"]: _observation(snapshot, item["raw"])
+        result[group] = {item["name"]: observe(item["source"], snapshot)
                          for item in declarations}
     return result
 
