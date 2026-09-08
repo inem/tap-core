@@ -12,6 +12,7 @@ from .page_resources import ResourceError, validate_resource
 PACK_API = 1
 ID = re.compile(r"[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*\Z")
 VERSION = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\Z")
+COMMAND_SEGMENT = re.compile(r"[a-z][a-z0-9-]*\Z")
 ROLES = {
     "reader": (("python-jsonl-v1",), "capture.read"),
     "mutator": (("mitmproxy-python",), "response.mutate"),
@@ -20,6 +21,7 @@ ROLES = {
     # snapshot of trusted scripts rather than a pretend module lifecycle.
     "page": (("browser-module-v1", "browser-scripts-v1"), "page.inject"),
     "handler": (("python-jsonl-v1",), "bridge.handle"),
+    "command": (("process-argv-v1",), "command.execute"),
 }
 TYPES = {"string": str, "integer": int, "boolean": bool}
 
@@ -148,6 +150,34 @@ def validate_manifest(manifest, root, host_api=PACK_API):
                 require((use["id"], use["version"]) in resource_index,
                         f"entrypoints.{role}.uses[]: missing provider "
                         f"{use['id']}@{use['version']}")
+        elif role == "command":
+            fields(entry, ("file", "interface", "runtime", "commands"), label=f"entrypoints.{role}")
+            require(type(entry["file"]) is str and entry["file"] in manifest["files"],
+                    f"entrypoints.{role}: file must be declared in files")
+            require(entry["runtime"] == "host-python",
+                    "entrypoints.command.runtime: supported binding is host-python")
+            require(type(entry["commands"]) is list and bool(entry["commands"]),
+                    "entrypoints.command.commands: expected nonempty array")
+            paths = set()
+            for declaration in entry["commands"]:
+                fields(declaration, ("path", "summary", "usage", "profile"),
+                       label="entrypoints.command.commands[]")
+                path = declaration["path"]
+                require(type(path) is list and 1 <= len(path) <= 8
+                        and all(type(segment) is str and COMMAND_SEGMENT.fullmatch(segment)
+                                for segment in path),
+                        "entrypoints.command.commands[].path: expected 1-8 lowercase command words")
+                command_path = tuple(path)
+                require(command_path not in paths,
+                        f"entrypoints.command.commands: duplicate path {' '.join(path)}")
+                paths.add(command_path)
+                for name, limit in (("summary", 160), ("usage", 240)):
+                    value = declaration[name]
+                    require(type(value) is str and bool(value.strip()) and len(value) <= limit
+                            and all(character.isprintable() for character in value),
+                            f"entrypoints.command.commands[].{name}: expected printable text")
+                require(declaration["profile"] == "required",
+                        "entrypoints.command.commands[].profile: v1 requires 'required'")
         else:
             fields(entry, ("file", "interface"), label=f"entrypoints.{role}")
             require(type(entry["file"]) is str and entry["file"] in manifest["files"],

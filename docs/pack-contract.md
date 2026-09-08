@@ -2,9 +2,9 @@
 
 The contract began as the preparatory #5 result based on runtime commit
 `56094c0`. `pack_api: 1` remains experimental. The current host can install an
-immutable artifact and bind `page/browser-scripts-v1` plus reader/handler
-`python-jsonl-v1`. Mutator and `page/browser-module-v1` activation have not
-shipped.
+immutable artifact and bind `page/browser-scripts-v1`, reader/handler
+`python-jsonl-v1` and command `process-argv-v1`. Mutator and
+`page/browser-module-v1` activation have not shipped.
 
 The source evidence is the legacy executable reader consuming JSONL on stdin,
 the Python mutator loader forwarding mitmproxy hooks, and the site-probe/page
@@ -61,13 +61,14 @@ dependency's provenance or install it.
 | `page`: `browser-module-v1` | Call exported `start({bridge, document})` and `stop({document})` against a document/bridge fixture. | This remains a fixture interface; an installed module loader has not shipped. |
 | `page`: `browser-scripts-v1` | Ordered `uses` declarations, each with stable `id` and exact `version`; each resolves to a top-level `resources` provider. | First installed binding: verify provider bytes, materialize the shared profile resource store, merge uses from all enabled packs per origin, deduplicate identical resources and snapshot the resulting plan at startup. Disable applies after restart; an already-open page must reload. |
 | `handler`: `python-jsonl-v1` | Python executable consuming the example's JSON request and returning JSON reply; EOF stops it. | Connect a bounded adapter to the local bridge. The Python fixture does not replace the existing Bun Hub or select its eventual execution topology. |
+| `command`: `process-argv-v1` | Selected runtime receives exact argv and `TAP_COMMAND_CONTEXT`; stdin/stdout/stderr are inherited and exit status is preserved. | Discover enabled immutable versions, render declarative help without execution, resolve conflicts and lease the selected version for the invocation. The first explicit runtime binding is `host-python`; see [command provider contract v1](commands.md). |
 
-Roles are independent: a page-only, handler-only or reader-only pack is valid.
+Roles are independent: a page-only, handler-only, reader-only or command-only pack is valid.
 The second fixture deliberately combines its HTML mutator, page and handler to
 exercise the connection shape. This does not require a local handler for every
 page injection or claim that every combination has been integrated.
 
-The host supplies `TAP_PACK_CONTEXT` as a JSON string to Python entrypoints:
+For reader/handler fixtures, the host supplies `TAP_PACK_CONTEXT` as a JSON string:
 `pack_api`, `pack_id`, `config`, and three absolute host-owned paths:
 
 - `<profile>/state/packs/<id>` for private mutable state;
@@ -80,8 +81,11 @@ host creates private profile directories before start, never places them inside
 pack code, and controls any broader filesystem access. Version changes retain
 state: an incompatible state migration must be surfaced before restarting, not
 silently erased. There is no migration runner or installer in this slice.
+Installed commands receive their provider/version, selected path, runtime,
+grants and the same owned directories through `TAP_COMMAND_CONTEXT`; the host
+creates those directories before invocation. See [commands](commands.md).
 
-Python fixture startup emits a `start` diagnostic on stderr; EOF completion emits
+Reader/handler Python fixture startup emits a `start` diagnostic on stderr; EOF completion emits
 `stop` and exits zero. Malformed input emits `error` and exits nonzero. These
 diagnostics demonstrate lifecycle outcomes, not a readiness/acknowledgement
 protocol. The host must bound startup/stop, close input on normal stop, terminate
@@ -96,7 +100,7 @@ remain bridge/page-host integration work.
 supplied origin/capability policy and exact dependency inventory. Missing grants
 or incompatible dependencies fail before code loads. It does not manufacture a
 policy from the manifest, prompt for permission, or enforce a sandbox. Trusted
-Python code can access more than its declarations; the future host must enforce
+same-user process code can access more than its declarations; the host must enforce
 the relevant routing/record/bridge boundaries. Validation does not prevent a
 file being replaced afterward: installation must provide immutable code or
 revalidate the selected files before execution.

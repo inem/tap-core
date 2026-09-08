@@ -5,9 +5,9 @@ page packs to the proven profile bridge and defines the separate
 [`tap.page-resource/v1`](../contracts/page-resource/v1/README.md) seam used by
 UI-library providers, pack authors and TAP Core. The reference
 [YouTube Copy Links pack](https://github.com/inem/tap-pack-youtube-copy-links)
-lives in its own repository. Installed `page/browser-scripts-v1` and
-`reader`/`handler` `python-jsonl-v1` bindings are in main (#45 / #57); mutator
-and `browser-module-v1` activation remain unsupported. The linked capture →
+lives in its own repository. Installed `page/browser-scripts-v1`,
+`reader`/`handler` `python-jsonl-v1` and command `process-argv-v1` bindings use
+the same immutable store; mutator and `browser-module-v1` activation remain unsupported. The linked capture →
 reader → page/handler external example is still open acceptance work.
 
 ## The development cycle
@@ -31,8 +31,9 @@ different evidence and authority:
 5. **Build** — create a deterministic `.tap-pack` containing only `pack.json` and
    its declared files. No source checkout path is retained.
 6. **Install and grant** — copy an immutable version snapshot under the profile,
-   verify every file hash, then record user grants separately. Enable affects the
-   next `on`; it cannot hot-patch an already running proxy or already executed UI.
+   verify every file hash, then record user grants separately. Service/page
+   bindings apply at the next `on`; commands apply to new invocations immediately.
+   Activation cannot hot-patch an already running proxy or executed UI.
 7. **Operate** — update atomically, roll back to a retained verified version,
    disable, and remove code without deleting pack state/data/logs.
 
@@ -120,6 +121,13 @@ Updating or rolling back a reader with an incompatible saved definition is
 refused before changing the selected version. Its checkpoint is retained; this
 slice does not implement checkpoint migration or automatic replay. Explicit
 replay remains `tap reader replay`.
+
+Command packs use the same installed versions and registry without requiring a
+bridge/components profile. `process-argv-v1` declarations are discovered without
+loading pack code, and `--help` is rendered from the manifest. A command holds the
+profile lock for its entire subprocess lifetime; pack update/rollback/disable/
+uninstall therefore refuse while it is running and apply to later invocations.
+See [command provider contract v1](commands.md).
 
 ## Build and use an external pack
 

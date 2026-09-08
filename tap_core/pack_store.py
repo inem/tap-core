@@ -1,9 +1,8 @@
 """Immutable pack artifacts and profile-local activation state.
 
-Installed host bindings: page/browser-scripts-v1, reader/python-jsonl-v1 and
-handler/python-jsonl-v1. Other manifest roles remain valid but cannot be enabled
-until their host bindings exist. No second pack store — projections feed the
-existing bridge composition and managed components surfaces.
+Installed host bindings: page/browser-scripts-v1, reader/python-jsonl-v1,
+handler/python-jsonl-v1 and command/process-argv-v1. Other manifest roles remain
+valid but cannot be enabled until their host bindings exist. No second pack store.
 """
 
 import argparse
@@ -24,7 +23,7 @@ from .packs import (ID, VERSION, PackError, check_activation, load_manifest,
 REGISTRY_VERSION = 1
 MAX_ARCHIVE_FILES = 257  # pack.json plus the manifest's 256 files
 MAX_ARCHIVE_BYTES = 32 * 1024 * 1024
-HOST_ROLES = frozenset({"page", "reader", "handler"})
+HOST_ROLES = frozenset({"page", "reader", "handler", "command"})
 
 
 def _private_directory(path):
@@ -304,8 +303,12 @@ class PackStore:
             profile = json.loads((self.root / "profile.json").read_text(encoding="utf-8"),
                                  object_pairs_hook=no_duplicate_keys)
             base = profile.get("bridge")
+        except FileNotFoundError:
+            return None
         except (OSError, UnicodeError, json.JSONDecodeError) as error:
             raise PackError(f"profile configuration: {error}") from error
+        if base is None:
+            return None
         from .bridge import configuration
         return configuration(base)
 
@@ -314,6 +317,8 @@ class PackStore:
             profile = json.loads((self.root / "profile.json").read_text(encoding="utf-8"),
                                  object_pairs_hook=no_duplicate_keys)
             return profile.get("components")
+        except FileNotFoundError:
+            return None
         except (OSError, UnicodeError, json.JSONDecodeError) as error:
             raise PackError(f"profile configuration: {error}") from error
 
@@ -335,6 +340,19 @@ class PackStore:
             require(entry.get("interface") == "python-jsonl-v1"
                     and type(entry.get("file")) is str and entry["file"] in manifest["files"],
                     f"{role} entrypoint requires python-jsonl-v1 file binding")
+        command = manifest["entrypoints"].get("command")
+        if command is not None:
+            require(command.get("interface") == "process-argv-v1"
+                    and command.get("runtime") == "host-python"
+                    and type(command.get("file")) is str
+                    and command["file"] in manifest["files"],
+                    "command entrypoint requires process-argv-v1 host-python binding")
+
+    def _validate_commands(self, registry):
+        from .commands import validate_external_command_paths
+        manifests = [(pack_id, manifest)
+                     for pack_id, _root, manifest, _record in self._enabled_packs(registry)]
+        validate_external_command_paths(manifests)
 
     def _enabled_packs(self, registry):
         enabled = []
@@ -517,13 +535,16 @@ class PackStore:
                                         "capabilities": sorted(set(capabilities)),
                                         "dependencies": dict(dependencies or {})},
                                 config=overrides)
+        self._validate_commands(candidate)
         self._effective_bridge(candidate, self._profile_bridge())
         projected = self._effective_components(candidate, self._profile_components())
         if "reader" in manifest["entrypoints"] and projected is not None:
             self._refuse_incompatible_reader_progress(pack_id, projected["readers"][pack_id])
         self.save(candidate)
+        applies = ("immediately for new command invocations; service/page bindings apply next profile on"
+                   if "command" in manifest["entrypoints"] else "next profile on")
         return {"id": pack_id, "version": version, "enabled": True,
-                "code": str(root), "applies": "next profile on"}
+                "code": str(root), "applies": applies}
 
     def update(self, artifact):
         before = self.load()
@@ -551,13 +572,16 @@ class PackStore:
         candidate_record = self._record(candidate, pack_id)
         candidate_record["history"].pop()
         candidate_record["selected"] = version
+        self._validate_commands(candidate)
         self._effective_bridge(candidate, self._profile_bridge())
         projected = self._effective_components(candidate, self._profile_components())
         if "reader" in manifest["entrypoints"] and projected is not None:
             self._refuse_incompatible_reader_progress(pack_id, projected["readers"][pack_id])
         self.save(candidate)
+        applies = ("immediately for new command invocations; service/page bindings apply next profile on"
+                   if "command" in manifest["entrypoints"] else "next profile on")
         return {"id": pack_id, "version": version, "enabled": True,
-                "code": str(root), "applies": "next profile on"}
+                "code": str(root), "applies": applies}
 
     def disable(self, pack_id):
         registry = self.load()
@@ -565,7 +589,8 @@ class PackStore:
         record["enabled"] = False
         self.save(registry)
         return {"id": pack_id, "version": record["selected"], "enabled": False,
-                "applies": "next profile on; reload open pages to remove executed UI"}
+                "applies": "immediately for command discovery; service/page bindings apply next profile on; "
+                           "reload open pages to remove executed UI"}
 
     def uninstall(self, pack_id, version=None):
         registry = self.load()
