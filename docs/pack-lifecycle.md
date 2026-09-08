@@ -189,13 +189,14 @@ An external linked pack ([`inem/tap-pack-linked-http`](https://github.com/inem/t
 now provides reader, handler and page code in a published artifact. The hermetic
 Core check, `tools/check_linked_pack.py`, proves a synthetic record submitted to
 Writer → installed reader projection → Hub handler → protocol client result,
-plus retained checkpoint and a healthy controller restart. It does not make an
-HTTP request through capture or execute the pack's page code in a browser.
+plus retained checkpoint and a healthy controller restart. Live proxied HTTP
+capture and headless browser Load → `#result` (saved projection) are covered by
+`tools/check_linked_pack_live.py` / `docs/results/linked-pack-live-browser.json`
+on explicit loopback; they do not claim CA trust, system proxy, SSE or
+third-party WS.
 
-Still required for #14: controlled HTTP capture → installed reader → browser
-page request → handler → visible saved result, observed reader/handler error
-paths and lifecycle on that external example, and independent author
-reproduction. Clean-Mac release acceptance belongs to #15. System CA trust and
-a live nonce-bearing YouTube response remain #38 evidence. Hubless reader-only
-managed on/off is accepted for packs without handlers when
-`bridge.enabled=false`.
+Still required for #14: observed reader/handler error paths and lifecycle on
+that external example, and independent author reproduction. Clean-Mac release
+acceptance belongs to #15. System CA trust and a live nonce-bearing YouTube
+response remain #38 evidence. Hubless reader-only managed on/off is accepted
+for packs without handlers when `bridge.enabled=false`.
