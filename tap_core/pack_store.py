@@ -474,9 +474,14 @@ class PackStore:
         if not projected_readers and not projected_handlers:
             return base
         require(base is not None and type(base) is dict
-                and type(base.get("python")) is str and Path(base["python"]).is_absolute()
-                and type(base.get("bun")) is str and Path(base["bun"]).is_absolute(),
-                "enabled pack readers/handlers require profile components with absolute python/bun")
+                and type(base.get("python")) is str and Path(base["python"]).is_absolute(),
+                "enabled pack readers/handlers require profile components with absolute python")
+        if projected_handlers:
+            require(type(base.get("bun")) is str and Path(base["bun"]).is_absolute(),
+                    "enabled pack handlers require absolute bun")
+        else:
+            require(type(base.get("bun")) is str,
+                    "enabled pack readers require profile components with a bun string field")
         result = json.loads(json.dumps(base))
         python = result["python"]
         for name, spec in projected_readers.items():

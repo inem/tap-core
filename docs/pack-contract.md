@@ -2,8 +2,9 @@
 
 The contract began as the preparatory #5 result based on runtime commit
 `56094c0`. `pack_api: 1` remains experimental. The current host can install an
-immutable artifact and bind `page/browser-scripts-v1`; reader, handler, mutator
-and `page/browser-module-v1` activation have not shipped.
+immutable artifact and bind `page/browser-scripts-v1` plus reader/handler
+`python-jsonl-v1`. Mutator and `page/browser-module-v1` activation have not
+shipped.
 
 The source evidence is the legacy executable reader consuming JSONL on stdin,
 the Python mutator loader forwarding mitmproxy hooks, and the site-probe/page
@@ -144,12 +145,14 @@ An external author can copy either fixture directory, change its ID and code,
 and validate it using the same command without a vendor account. A standalone
 page library can additionally publish `tap-resource.json` and validate it with
 `python3 -B -m tap_core.page_resources <provider-directory>`. The fixture
-transport is still not installed execution. Authenticated live WS, installed
-reader/handler/mutator bindings and the combined independently distributed
-example remain #10/#11/#14 integration work. Issue #5 must be assessed against
+transport is still not installed execution. Authenticated live WS, the combined
+independently distributed example and clean-Mac acceptance remain #10/#11/#14/#15
+integration work. Issue #5 must be assessed against
 that deliberately limited fixture scope; these additions do not complete #14 or
 the release acceptance scenario.
 
 The first immutable artifact store and actual `browser-scripts-v1` profile
-binding are described in [the external pack lifecycle](pack-lifecycle.md). Other
-roles still fail activation until their concrete installed bindings exist.
+binding are described in [the external pack lifecycle](pack-lifecycle.md).
+Reader/handler `python-jsonl-v1` install bindings are also described there;
+mutator and `browser-module-v1` still fail activation until their concrete
+installed bindings exist.

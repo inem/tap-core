@@ -15,14 +15,28 @@ ROOT = Path(__file__).resolve().parent
 BUN_VERSION = '1.3.11'
 
 
+def needs_hub(components, bridge=None):
+    """Hub/Bun when the page bridge is enabled (runtime.js/WS) or handlers exist."""
+    if bridge and bridge.get('enabled'):
+        return True
+    return type(components) is dict and bool(components.get('handlers'))
+
+
 def configuration(value, profile):
     if (type(value) is not dict or set(value) != {'version', 'python', 'bun', 'readers', 'handlers'}
-            or type(value['version']) is not int or value['version'] != 1
-            or not profile.bridge or not profile.bridge['enabled']):
-        raise TapError('Components require version 1, python, bun, readers, handlers and an enabled bridge')
-    for name in ('python', 'bun'):
-        if not isinstance(value[name], str) or not Path(value[name]).is_absolute():
-            raise TapError('Component runtimes require explicit absolute paths')
+            or type(value['version']) is not int or value['version'] != 1):
+        raise TapError('Components require version 1, python, bun, readers and handlers')
+    if profile.bridge is None:
+        raise TapError('Components require a bridge configuration; use enabled=false for reader-only')
+    if not isinstance(value['python'], str) or not Path(value['python']).is_absolute():
+        raise TapError('Component python requires an explicit absolute path')
+    if not isinstance(value['bun'], str):
+        raise TapError('Component bun path must be a string')
+    if value.get('handlers') and not profile.bridge['enabled']:
+        raise TapError('Handlers require an enabled bridge')
+    if needs_hub(value, profile.bridge):
+        if not Path(value['bun']).is_absolute():
+            raise TapError('Component bun requires an explicit absolute path when Hub is required')
     for name in ('readers', 'handlers'):
         if type(value[name]) is not dict or len(value[name]) > 8:
             raise TapError('At most eight named readers/handlers per development profile')
@@ -129,10 +143,15 @@ def status(profile, adapter):
     current = pid == state['pid'] and state.get('configuration') == identity(profile)
     live = False
     if current and fresh and state['healthy']:
-        try:
-            live = hub_health(profile).get('pid') == state.get('hub_pid')
-        except OSError:
-            pass
+        hub_pid = state.get('hub_pid')
+        if hub_pid is None:
+            # Reader-only controller: no Hub process to probe.
+            live = True
+        else:
+            try:
+                live = hub_health(profile).get('pid') == hub_pid
+            except OSError:
+                pass
     return dict(state, configured=True, current_process=current, healthy=bool(current and fresh and live))
 
 
@@ -153,17 +172,20 @@ def _start(profile, adapter):
         if status(profile, adapter)['healthy']:
             return
         raise StartupError('Profile components are unhealthy; inspect status/logs and use off/on')
-    if adapter.port_open(job):
+    # Pack enable/disable/update only touch the registry; refresh Hub/reader snapshot here.
+    config = prepare(profile)
+    hubful = needs_hub(config, profile.bridge)
+    if hubful and adapter.port_open(job):
         raise StartupError('Component port is occupied; its owner will not be stopped')
     if adapter.service_loaded(job):
         stop(profile, adapter)
-    # Pack enable/disable/update only touch the registry; refresh Hub/reader snapshot here.
-    config = prepare(profile)
-    for path in (config['python'], config['bun']):
-        if not Path(path).is_file() or not os.access(path, os.X_OK):
-            raise StartupError('Component runtime is not executable: ' + path)
-    if adapter.run([config['bun'], '--version']).stdout.strip() != BUN_VERSION:
-        raise StartupError('This development slice requires Bun ' + BUN_VERSION)
+    if not Path(config['python']).is_file() or not os.access(config['python'], os.X_OK):
+        raise StartupError('Component runtime is not executable: ' + config['python'])
+    if hubful:
+        if not Path(config['bun']).is_file() or not os.access(config['bun'], os.X_OK):
+            raise StartupError('Component runtime is not executable: ' + config['bun'])
+        if adapter.run([config['bun'], '--version']).stdout.strip() != BUN_VERSION:
+            raise StartupError('This development slice requires Bun ' + BUN_VERSION)
     adapter.run([config['python'], '-c', 'import sys; assert sys.version_info >= (3, 9)'])
     # Explicit manual start resets the bounded crash-restart budget.
     (profile.root / 'state/component-starts.json').unlink(missing_ok=True)
@@ -188,8 +210,11 @@ def stop(profile, adapter):
         return
     job = Job(profile)
     owned = adapter.service_loaded(job)
+    from .pack_store import PackStore
+    hubful = needs_hub(PackStore(profile.root).effective_components(profile.components),
+                       profile.bridge)
     # Existing adapter removes only this exact job and waits for its leader.
     adapter.stop(job)
     # Parent guards clean separate child groups after even an abrupt controller exit.
-    if owned and not adapter.wait(lambda: not adapter.port_open(job), seconds=5):
+    if owned and hubful and not adapter.wait(lambda: not adapter.port_open(job), seconds=5):
         raise TapError('Owned Hub did not release its port; component cleanup incomplete')

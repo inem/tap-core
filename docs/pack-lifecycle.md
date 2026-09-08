@@ -5,9 +5,10 @@ page packs to the proven profile bridge and defines the separate
 [`tap.page-resource/v1`](../contracts/page-resource/v1/README.md) seam used by
 UI-library providers, pack authors and TAP Core. The reference
 [YouTube Copy Links pack](https://github.com/inem/tap-pack-youtube-copy-links)
-lives in its own repository. Reader, handler and mutator entrypoints are not
-installed yet, and this does not complete the linked capture → reader →
-page/handler acceptance example.
+lives in its own repository. Installed `page/browser-scripts-v1` and
+`reader`/`handler` `python-jsonl-v1` bindings are in main (#45 / #57); mutator
+and `browser-module-v1` activation remain unsupported. The linked capture →
+reader → page/handler external example is still open acceptance work.
 
 ## The development cycle
 
@@ -100,9 +101,14 @@ that already ran in an open document; reload that page. Installed readers and
 handlers using `python-jsonl-v1` also bind to the existing managed host. Mutator
 activation and `browser-module-v1` remain unsupported.
 
-Reader/handler packs require an existing components configuration with explicit
-Python/Bun paths and an enabled bridge. On startup, the host refreshes the
-effective origins and handler bindings from enabled immutable pack versions.
+Reader/handler packs require an existing components configuration with an
+absolute Python path. Absolute Bun and Hub are required when the page bridge is
+**enabled** (runtime.js / WS) or when handlers are projected. Reader-only packs
+may run with `bridge.enabled=false` and without Bun/Hub: managed `on`/`off`
+starts the component controller and readers only. A components block still
+requires a bridge object (`enabled=false` is the hubless shape; `bridge: null`
+is rejected). On startup, the host refreshes the effective origins and handler
+bindings from enabled immutable pack versions.
 The component name is the pack ID; existing reader checkpoints and handler
 state/output/log directories remain under their respective `readers/<id>` and
 `handlers/<id>` roots. See [managed component protocols](managed-components.md)
@@ -112,8 +118,8 @@ standalone fixture echo format is not the managed handler protocol.
 
 Updating or rolling back a reader with an incompatible saved definition is
 refused before changing the selected version. Its checkpoint is retained; this
-slice does not implement checkpoint migration or automatic replay. Independent
-managed reader-only startup without Hub/Bun remains acceptance work in #14.
+slice does not implement checkpoint migration or automatic replay. Explicit
+replay remains `tap reader replay`.
 
 ## Build and use an external pack
 
@@ -180,7 +186,8 @@ response had a CSP header but no source nonce to reuse. Playwright ignored
 certificate errors, so this is not the clean CA-trust result.
 
 Still required for #14: the external installed combined
-capture → reader → page/handler example, reader checkpoint migration/replay policy,
-Hubless reader-only operation and independent
-author/clean-Mac reproduction. System CA trust and a live nonce-bearing YouTube
-response remain #38 evidence rather than claims of this slice.
+capture → reader → page/handler example, named transport/loss matrix for that
+example, and independent author/clean-Mac reproduction. System CA trust and a
+live nonce-bearing YouTube response remain #38 evidence rather than claims of
+this slice. Hubless reader-only managed on/off is accepted in Core for packs
+without handlers.

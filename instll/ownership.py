@@ -127,14 +127,14 @@ def assert_idle(root):
 
 
 def _component_job(profile):
-    if not profile.bridge or not profile.bridge.get('enabled') or profile.components is None:
+    if profile.components is None:
         return None
     from tap_core.components import Job
     return Job(profile)
 
 
 def _profile_processes_busy(adapter, profile):
-    """Proxy launchd/port or Hub/components launchd/port still live."""
+    """Proxy launchd/port or components controller (and Hub port when required)."""
     busy = []
     if adapter.service_loaded(profile):
         busy.append('proxy service')
@@ -143,8 +143,11 @@ def _profile_processes_busy(adapter, profile):
     job = _component_job(profile)
     if job is not None:
         if adapter.service_loaded(job):
-            busy.append('hub service')
-        if adapter.port_open(job):
+            busy.append('components service')
+        from tap_core.components import needs_hub
+        from tap_core.pack_store import PackStore
+        effective = PackStore(profile.root).effective_components(profile.components)
+        if needs_hub(effective, profile.bridge) and adapter.port_open(job):
             busy.append('hub port')
     return busy
 
