@@ -194,11 +194,15 @@ capture and headless browser Load → `#result` (saved projection) are covered b
 `tools/check_linked_pack_live.py` / `docs/results/linked-pack-live-browser.json`
 on explicit loopback; they do not claim CA trust, system proxy, SSE or
 third-party WS. Lifecycle and error paths for that pack
-(`handler_timeout`, visible reader failure, incompatible update refuse,
-disable/uninstall with retained data) are covered by
+(`handler_timeout`, visible reader delivery failure, update/rollback before
+reader progress, incompatible update/rollback refusal, and uninstall of a stopped
+pack with retained data) are covered by
 `tools/check_linked_pack_lifecycle.py` /
 `docs/results/linked-pack-lifecycle.json`.
 
+Changing a reader binding with an existing checkpoint currently refuses activation,
+including rollback. This check proves preservation on refusal, not checkpoint
+migration or a successful version change after processing records.
 Still required for #14: independent author reproduction of the linked example
 on a machine without the author's layout. Clean-Mac release acceptance belongs
 to #15. System CA trust and a live nonce-bearing YouTube response remain #38
@@ -234,7 +238,8 @@ not proof of runtime download or platform support on a clean Mac.
 
 No browser. Requires Bun 1.3.11 and the published `example.linked-http` artifact
 (or a local source tree). Exit 0 only when every claim below passes and the
-mocked controller exits cleanly:
+controller exits under a mocked launchd adapter. Controller/reader/Hub are real
+subprocesses; cleanup does not independently audit all children or listeners:
 
 ```sh
 python3 tools/check_linked_pack_lifecycle.py \
@@ -243,7 +248,14 @@ python3 tools/check_linked_pack_lifecycle.py \
   --output /tmp/linked-pack-lifecycle.json
 ```
 
+The input is published v0.1.0. The check locally rebuilds v0.1.1 with a hanging
+handler and v0.2.0 with a changed reader; these are test variants, not releases.
 Claims: hanging handler → `handler_timeout`; unsupported capture record → reader
-`error` in components status; `pack update` to an incompatible reader version
-refuses and keeps selected + checkpoint; `disable`/`uninstall` remove code and
-retain pack/reader data. Gate unit: `tests/test_linked_pack_lifecycle_check.py`.
+delivery `error` in components status (host rejects the record before the pack
+reader executes it); update/rollback succeeds before reader progress exists;
+incompatible update and rollback refuse with selected version, history,
+checkpoint and projection preserved. After stopping components, disable removes
+effective reader/handler/page bindings, then uninstall removes code and retains
+pack data plus exact reader projection/checkpoint bytes. Disable alone retains
+installed code; running processes require profile off/on and executed page UI
+requires reload. Gate unit: `tests/test_linked_pack_lifecycle_check.py`.

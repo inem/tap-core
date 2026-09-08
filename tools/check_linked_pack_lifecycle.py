@@ -20,7 +20,6 @@ import shutil
 import signal
 import subprocess
 import sys
-import tarfile
 import tempfile
 import time
 import uuid
@@ -31,7 +30,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from tap_core.capture import Writer
 from tap_core.components import Job, _start, status, stop
-from tap_core.pack_store import PackStore, PackError, build_artifact
+from tap_core.pack_store import PackStore, PackError, build_artifact, _extract_artifact
 from tap_core.packs import load_manifest
 from tap_core.runtime import Profile
 
@@ -67,8 +66,7 @@ def digest(path):
 def extract_artifact(artifact, dest):
     dest = Path(dest)
     dest.mkdir(parents=True)
-    with tarfile.open(artifact, 'r:gz') as archive:
-        archive.extractall(dest)
+    _extract_artifact(artifact, dest)
     return dest
 
 
@@ -102,6 +100,10 @@ def rewrite_pack(source, *, version, handler=None, reader=None):
 def scenario_failures(steps):
     """Pure gate used by unit tests; keep claims explicit."""
     failures = []
+    for key in ('update_rollback_before_progress', 'incompatible_rollback_refused',
+                'bindings_removed'):
+        if not steps.get(key):
+            failures.append(key)
     if not steps.get('handler_timeout'):
         failures.append('handler_timeout')
     if not steps.get('reader_error_visible'):
@@ -165,6 +167,8 @@ def main():
         'pack_id': PACK_ID,
         'scenario_passed': False,
         'cleanup_verified': False,
+        'cleanup_scope': 'controller exit with mocked launchd; no independent child/listener audit',
+        'variant_scope': '0.1.0 is published; 0.1.1/0.2.0 are locally rebuilt fault variants',
     }
 
     with tempfile.TemporaryDirectory(prefix='tap-linked-life-') as directory:
@@ -203,8 +207,14 @@ def main():
         store = PackStore(profile_root)
         grants = dict(origins=[ORIGIN],
                       capabilities=['page.inject', 'capture.read', 'bridge.handle'])
-        store.install(hang_artifact)
-        store.enable(PACK_ID, '0.1.1', **grants)
+        store.install(base_artifact)
+        store.enable(PACK_ID, '0.1.0', **grants)
+        store.update(hang_artifact)
+        assert store.load()['packs'][PACK_ID]['selected'] == '0.1.1'
+        store.rollback(PACK_ID)
+        assert store.load()['packs'][PACK_ID]['selected'] == '0.1.0'
+        steps['update_rollback_before_progress'] = True
+        store.update(hang_artifact)
 
         controller = {'proc': None}
 
@@ -311,6 +321,7 @@ def main():
             report['reader_error'] = row
 
             before_checkpoint = checkpoint.read_bytes()
+            before_projection = projection.read_bytes()
             before_selected = store.load()['packs'][PACK_ID]['selected']
             assert before_selected == '0.1.0'
 
@@ -319,6 +330,7 @@ def main():
                 store.update(incompat_artifact)
                 raise AssertionError('incompatible update should refuse')
             except PackError as error:
+                assert 'has progress under another definition' in str(error), str(error)
                 report['incompatible_update_error'] = str(error)
             after = store.load()['packs'][PACK_ID]
             assert after['selected'] == '0.1.0'
@@ -327,6 +339,20 @@ def main():
             steps['incompatible_update_refused'] = True
             steps['selected_unchanged'] = True
             steps['checkpoint_unchanged'] = True
+
+            # The previous version also has a different reader definition. Rollback
+            # must preserve current selection, history and progress on refusal.
+            before_registry = store.load()
+            try:
+                store.rollback(PACK_ID)
+                raise AssertionError('incompatible rollback should refuse')
+            except PackError as error:
+                assert 'has progress under another definition' in str(error), str(error)
+                report['incompatible_rollback_error'] = str(error)
+            assert store.load() == before_registry
+            assert checkpoint.read_bytes() == before_checkpoint
+            assert projection.read_bytes() == before_projection
+            steps['incompatible_rollback_refused'] = True
 
             # Stop before uninstall so the controller does not keep deleted code mapped.
             adapter.service_loaded.return_value = True
@@ -342,17 +368,23 @@ def main():
             sentinel = pack_data / 'retained.txt'
             sentinel.write_text('keep-me\n')
             store.disable(PACK_ID)
+            disabled = store.effective_components(Profile.load(profile_root).components)
+            assert PACK_ID not in disabled['readers'] and PACK_ID not in disabled['handlers']
+            assert not store.effective_bridge(Profile.load(profile_root).bridge)['page_scripts']
             removed = store.uninstall(PACK_ID)
             code_root = profile_root / 'packs' / PACK_ID
-            assert not code_root.exists() or not any(code_root.rglob('reader.py'))
+            assert not code_root.exists() or not any(p.is_file() for p in code_root.rglob('*'))
+            assert PACK_ID not in store.load()['packs']
             assert sentinel.is_file() and sentinel.read_text() == 'keep-me\n'
-            assert projection.is_file()
-            assert checkpoint.is_file()
+            assert projection.read_bytes() == before_projection
+            assert checkpoint.read_bytes() == before_checkpoint
+            steps['bindings_removed'] = True
             steps['uninstall_removed_code'] = True
             steps['data_retained'] = True
             report['uninstall'] = removed
 
             failures = scenario_failures(steps)
+            report['steps'] = steps
             report['scenario_failures'] = failures
             report['scenario_passed'] = not failures
         finally:
