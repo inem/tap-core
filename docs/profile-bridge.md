@@ -69,10 +69,13 @@ For allowed top-level HTML, the addon inserts the existing runtime bootstrap
 followed by configured scripts served from memory under
 `/__tap/probe/core/<sha256>.js`. Asset URLs are content-addressed: after a pack
 plan change, an already-injected document keeps fetching the same bytes for its
-old digest, while new documents receive digests from the current plan. The
-bridge re-reads the installed PackStore plan about once per second without
-restarting the proxy; a failed refresh keeps the previous plan. Open-tab
-adapter install/remove without page reload is a later #10 slice.
+old digest, while new documents receive digests from the current plan. Retained
+digests stay origin-scoped: only origins that were granted that digest (in the
+current or a previous plan) may fetch it. Identical bytes shared by two origins
+are served to each granted origin under the same digest. The bridge re-reads the
+installed PackStore plan about once per second without restarting the proxy; a
+failed refresh keeps the previous plan. Open-tab adapter install/remove without
+page reload is a later #10 slice.
 It scans script attributes (including whitespace, unquoted values and
 HTML entities) to retain an existing nonce. This is a bounded tag/attribute
 tokenizer, not a browser HTML5 tree builder. Comments and raw-text contexts do
@@ -132,6 +135,13 @@ and trusted legacy source inputs described in [the first live slice](live-slice.
 using `--output docs/profile-bridge-live-2026-09-07.json`. Only the legacy Hub,
 page runtime and adapter runtime are read from that source. Test tools remain
 optional development dependencies, not mandatory core runtimes.
+
+For #10 slice 1 (hot page assets without proxy restart), run
+`tools/check_hot_pack_assets.py` with mitmdump, Node, Playwright and Chrome; the
+report is recorded under `docs/results/hot-pack-assets-live.json`. It verifies a
+page-only pack A→B update while the proxy stays up, a new-document browser marker
+change, retained digests on the same origin, and identical bytes served to two
+granted origins.
 
 Unit tests cover credentials/origins, unsupported authorities, policy precedence,
 valid nonce syntax, foreign base URLs and unavailable diagnostic observations,

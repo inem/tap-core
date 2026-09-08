@@ -437,20 +437,106 @@ class BridgeTests(unittest.TestCase):
     def test_content_addressed_asset_survives_plan_swap(self):
         first = b'window.packA = true;'
         second = b'window.packB = true;'
-        bridge = TestBridge(config(page_scripts=[]), TOKEN, [first])
+        effective = config(allow_origins=['https://example.test', 'https://third.test'],
+                           exclude_origins=[], page_scripts=['/a.js', '/b.js'])
+        effective['page_script_origins'] = [['https://example.test'], ['https://third.test']]
+        bridge = TestBridge(effective, TOKEN, [first, second])
+        # Replace plan with only B for third.test; A retained for example.test only.
+        bridge.config = effective
+        bridge._publish_scripts([second], [['https://third.test']])
         old = digest(first)
-        injected = flow(response=Response())
-        bridge.response(injected)
-        self.assertIn(f'core/{old}.js', injected.response.body)
-        bridge._publish_scripts([second], None)
-        retained = flow(f'/__tap/probe/core/{old}.js?token=' + TOKEN)
+        retained = flow(f'/__tap/probe/core/{old}.js?token=' + TOKEN, host='example.test')
         bridge.requestheaders(retained)
         self.assertEqual(retained.response.status_code, 200)
         self.assertEqual(retained.response.content, first)
-        fresh = flow(response=Response('<html><body>next</body></html>'))
+        leaked = flow(f'/__tap/probe/core/{old}.js?token=' + TOKEN, host='third.test')
+        bridge.requestheaders(leaked)
+        self.assertEqual(leaked.response.status_code, 404)
+        fresh = flow(host='third.test', response=Response('<html><body>next</body></html>'))
         bridge.response(fresh)
         self.assertIn(f'core/{digest(second)}.js', fresh.response.body)
         self.assertNotIn(f'core/{old}.js', fresh.response.body)
+
+    def test_identical_bytes_are_fetchable_for_each_granted_origin(self):
+        body = b'window.shared = true;'
+        effective = config(allow_origins=['https://example.test', 'https://third.test'],
+                           exclude_origins=[], page_scripts=['/one.js', '/two.js'])
+        effective['page_script_origins'] = [['https://example.test'], ['https://third.test']]
+        bridge = TestBridge(effective, TOKEN, [body, body])
+        self.assertEqual(bridge.script_digests[0], bridge.script_digests[1])
+        for host in ('example.test', 'third.test'):
+            with self.subTest(host=host):
+                page = flow(host=host, response=Response())
+                bridge.response(page)
+                self.assertIn(f'core/{digest(body)}.js', page.response.body)
+                asset = flow(f'/__tap/probe/core/{digest(body)}.js?token=' + TOKEN, host=host)
+                bridge.requestheaders(asset)
+                self.assertEqual(asset.response.status_code, 200)
+                self.assertEqual(asset.response.content, body)
+
+    def test_handler_pack_enable_while_running_rolls_back_registry(self):
+        import sys
+        from tap_core.pack_store import PackStore, build_artifact
+        linked = Path(__file__).resolve().parents[1] / 'fixtures/packs/installed-linked'
+        components = {
+            'version': 1, 'python': sys.executable, 'bun': '/usr/bin/true',
+            'readers': {}, 'handlers': {},
+        }
+        self.profile.bridge = config(allow_origins=[], exclude_origins=[], page_scripts=[])
+        self.profile.components = components
+        self.profile.save()
+        store = PackStore(self.root)
+        artifact = self.root / 'linked.tap-pack'
+        build_artifact(linked, artifact)
+        store.install(artifact)
+        argv = ['--profile', str(self.root), 'pack', 'enable', 'fixture.installed-linked',
+                '--version', '0.1.0',
+                '--grant-origin', 'https://fixture.example',
+                '--grant-capability', 'page.inject',
+                '--grant-capability', 'capture.read',
+                '--grant-capability', 'bridge.handle']
+        with patch.object(MacOS, 'service_loaded', side_effect=lambda target: True):
+            self.assertEqual(main(argv), 1)
+        record = store.load()['packs']['fixture.installed-linked']
+        self.assertFalse(record['enabled'])
+        projected = store.effective_components(components)
+        self.assertNotIn('fixture.installed-linked', projected['readers'])
+        self.assertNotIn('fixture.installed-linked', projected['handlers'])
+
+    def test_handler_pack_add_while_running_rolls_back_empty_registry(self):
+        """First pack add with no registry file must not leave the pack enabled."""
+        import sys
+        from tap_core.pack_store import PackStore, build_artifact
+        linked = Path(__file__).resolve().parents[1] / 'fixtures/packs/installed-linked'
+        components = {
+            'version': 1, 'python': sys.executable, 'bun': '/usr/bin/true',
+            'readers': {}, 'handlers': {},
+        }
+        self.profile.bridge = config(allow_origins=[], exclude_origins=[], page_scripts=[])
+        self.profile.components = components
+        self.profile.save()
+        self.assertFalse((self.root / 'state/pack-registry.json').is_file())
+        artifact = self.root / 'linked.tap-pack'
+        build_artifact(linked, artifact)
+
+        def fake_add(profile_root, source, assume_yes=False):
+            store = PackStore(profile_root)
+            installed = store.install(artifact)
+            enabled = store.enable('fixture.installed-linked', '0.1.0',
+                                   origins=['https://fixture.example'],
+                                   capabilities=['page.inject', 'capture.read', 'bridge.handle'])
+            return {**installed, **enabled, 'source': source}
+
+        argv = ['--profile', str(self.root), 'pack', 'add', 'owner/linked-http', '--yes']
+        with patch.object(MacOS, 'service_loaded', side_effect=lambda target: True), \
+             patch('tap_core.pack_add.add', side_effect=fake_add):
+            self.assertEqual(main(argv), 1)
+        store = PackStore(self.root)
+        registry = store.load()
+        self.assertNotIn('fixture.installed-linked', registry.get('packs', {}))
+        projected = store.effective_components(components)
+        self.assertNotIn('fixture.installed-linked', projected['readers'])
+        self.assertNotIn('fixture.installed-linked', projected['handlers'])
 
     def test_failed_plan_refresh_keeps_previous_assets(self):
         script = self.root / 'page.js'

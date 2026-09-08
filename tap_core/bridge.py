@@ -499,22 +499,35 @@ class Bridge:
         self.component_token = None
         self.script_digests = []
         self.assets = {}
+        self.asset_origins = {}
         self._profile_root = None
         self._plan_checked_at = 0.0
         if scripts is not None:
             self._publish_scripts(scripts, self.script_origins)
 
     def _publish_scripts(self, scripts, script_origins):
+        """Publish plan scripts; retain prior digest→origin grants for old HTML."""
         digests = []
         assets = dict(self.assets)
-        for body in scripts:
+        asset_origins = {digest: set(origins) for digest, origins in self.asset_origins.items()}
+        for index, body in enumerate(scripts):
             digest = hashlib.sha256(body).hexdigest()
             assets[digest] = body
             digests.append(digest)
+            if script_origins is None:
+                granted = set(self.config['allow_origins']) if self.config else set()
+            else:
+                granted = set(script_origins[index])
+            asset_origins.setdefault(digest, set()).update(granted)
         self.scripts = list(scripts)
         self.script_digests = digests
         self.script_origins = script_origins
         self.assets = assets
+        self.asset_origins = asset_origins
+
+    def _asset_allowed(self, digest, origin):
+        granted = self.asset_origins.get(digest)
+        return granted is not None and origin in granted
 
     def _write_runtime_state(self):
         if self._profile_root is None or self.config is None:
@@ -621,18 +634,11 @@ class Bridge:
         if asset:
             digest = asset.group(1)
             body = self.assets.get(digest)
-            # Content-addressed: retained digests remain fetchable after a plan
-            # swap so an already-injected HTML document cannot receive a different
-            # script under the same URL. Current-plan origin scope still applies
-            # when the digest is part of the active plan.
-            if body is None:
+            # Content-addressed bytes are retained after a plan swap, but only
+            # origins that were granted that digest (now or previously) may fetch it.
+            if body is None or not self._asset_allowed(digest, origin):
                 self.reply(flow, 404)
                 return
-            if self.script_origins is not None and digest in self.script_digests:
-                index = self.script_digests.index(digest)
-                if origin not in self.script_origins[index]:
-                    self.reply(flow, 404)
-                    return
             self.reply(flow, 200, body, 'application/javascript; charset=utf-8')
             return
         request.scheme, request.host, request.port = 'http', '127.0.0.1', self.config['hub_port']
@@ -672,8 +678,15 @@ class Bridge:
         asset_root = html.escape(self.origin(flow.request) + PREFIX, quote=True)
         scripts = [f'<script id="{MARKER}"{nonce_attr} data-tap-token="{self.token}" '
                    f'src="{asset_root}runtime.js?token={self.token}"></script>']
-        digests = [digest for index, digest in enumerate(self.script_digests)
-                   if self.script_origins is None or origin in self.script_origins[index]]
+        digests = []
+        seen = set()
+        for index, digest in enumerate(self.script_digests):
+            if self.script_origins is not None and origin not in self.script_origins[index]:
+                continue
+            if digest in seen:
+                continue
+            seen.add(digest)
+            digests.append(digest)
         scripts += [f'<script{nonce_attr} src="{asset_root}core/{digest}.js?token={self.token}"></script>'
                     for digest in digests]
         position = parsed.body_end if parsed.body_end is not None else len(body)

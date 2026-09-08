@@ -269,7 +269,7 @@ def main(argv=None):
                         profile is not None
                         and (adapter.service_loaded(profile)
                              or (profile.components is not None and adapter.service_loaded(Job(profile)))))
-                    registry_before = copy.deepcopy(store.load()) if (root / 'state/pack-registry.json').is_file() else None
+                    registry_before = copy.deepcopy(store.load())
                     before_components = (
                         store.effective_components(profile.components)
                         if running and profile is not None and profile.components is not None else None)
@@ -297,8 +297,7 @@ def main(argv=None):
                     if running and profile is not None and profile.components is not None:
                         after_components = store.effective_components(profile.components)
                         if before_components != after_components:
-                            if registry_before is not None:
-                                store.save(registry_before)
+                            store.save(registry_before)
                             raise TapError(
                                 'Stop this profile with off before changing reader/handler packs; '
                                 'page-only pack changes may apply while the proxy is running')
