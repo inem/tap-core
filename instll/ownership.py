@@ -675,9 +675,8 @@ def revoke_grants(root, data, runner=None):
 
 
 def grant_recovery_commands(root, data, errors=(), purge='0'):
-    """Copy-paste recovery lines for incomplete grant cleanup or leftover drop-ins."""
+    """Retry grant cleanup without bypassing ownership/fingerprint checks."""
     root = Path(root)
-    grants = data.get('grants') or {}
     uninstall = root / 'checkout/instll/uninstall'
     lines = [
         'Grant cleanup needs an interactive admin shell. Run:',
@@ -685,18 +684,8 @@ def grant_recovery_commands(root, data, errors=(), purge='0'):
         '  TAP_PURGE=%s TAP_ROOT=%s bash %s'
         % (shlex.quote(str(purge)), shlex.quote(str(root)), shlex.quote(str(uninstall))),
     ]
-    # Prefer concrete rm/security lines so a stuck sudoers/CA grant can be cleared
-    # even when retrying uninstall is awkward.
-    sudoers = (grants.get('sudoers') or {}).get('path')
-    if sudoers:
-        lines.append('  sudo rm -f ' + shlex.quote(str(sudoers)))
-    ca = (grants.get('ca') or {}).get('cert')
-    if ca and Path(ca).is_file():
-        lines.append('  sudo /usr/bin/security remove-trusted-cert -d ' + shlex.quote(str(ca)))
-    legacy = Path('/etc/sudoers.d/tap-core')
-    if legacy.exists() and str(legacy) != str(sudoers or ''):
-        lines.append('  sudo rm -f ' + shlex.quote(str(legacy))
-                     + '   # legacy/manual drop-in (not the tagged install path)')
+    lines.append('If ownership or fingerprint checks still fail, inspect the reported mismatch; '
+                 'retry does not override those checks.')
     if errors:
         lines.append('Details: ' + '; '.join(errors))
     lines.append('Installation retained until grants are cleared.')
@@ -765,9 +754,9 @@ def remove(root, purge):
                 print('Profile service removed; ' + (
                     'installation purged' if purge == '1' else 'data and runtime retained'))
                 if leftovers:
-                    print('tap-core: sudoers drop-in still present; remove with:', file=sys.stderr)
+                    print('tap-core: sudoers drop-in still present; inspect ownership before manual cleanup:', file=sys.stderr)
                     for path in leftovers:
-                        print('  sudo rm -f ' + shlex.quote(str(path)), file=sys.stderr)
+                        print('  ' + str(path), file=sys.stderr)
 
 
 

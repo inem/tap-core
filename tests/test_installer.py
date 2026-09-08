@@ -1005,20 +1005,24 @@ class InstallerTests(unittest.TestCase):
         self.assertTrue(self.wrapper.is_file())
         self.assertTrue((self.root / 'install.json').is_file())
 
-    def test_grant_recovery_commands_print_sudo_rm_and_retry(self):
+    def test_grant_recovery_commands_keep_ownership_checks_on_retry(self):
         self.prepare()
         cert = self.root / 'ca.pem'
         cert.write_text('-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n')
         ownership.grant_sudoers(str(self.root), '/etc/sudoers.d/tap-core-fixture', 'abc', 'TAP_CORE_PROXY_X')
         ownership.grant_ca(str(self.root), str(cert), 'dead')
         data = json.loads((self.root / 'install.json').read_text())
-        lines = ownership.grant_recovery_commands(self.root, data, ['sudoers read failed'], purge='1')
+        lines = ownership.grant_recovery_commands(
+            self.root, data, ['sudoers file present but not owned/matched',
+                              'CA fingerprint mismatch'], purge='1')
         text = '\n'.join(lines)
         self.assertIn('sudo -v', text)
         self.assertIn('TAP_PURGE=1', text)
-        self.assertIn('sudo rm -f /etc/sudoers.d/tap-core-fixture', text)
-        self.assertIn('remove-trusted-cert -d', text)
-        self.assertIn(shlex.quote(str(cert)), text)
+        self.assertIn(shlex.quote(str(self.root / 'checkout/instll/uninstall')), text)
+        self.assertIn('sudoers file present but not owned/matched', text)
+        self.assertIn('CA fingerprint mismatch', text)
+        self.assertNotIn('sudo rm', text)
+        self.assertNotIn('remove-trusted-cert', text)
 
     def test_enable_system_proxy_sudo_refuses_symlink_and_edited_dropin(self):
         self.prepare()

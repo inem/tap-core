@@ -6,7 +6,7 @@
 # That installs /etc/sudoers.d/tap-core-<tag>, not a shared tap-core file.
 #
 # Manual install is unsupported for uninstall matching; if you already created
-# /etc/sudoers.d/tap-core by hand, remove it with: sudo rm -f /etc/sudoers.d/tap-core
+# /etc/sudoers.d/tap-core by hand, inspect its ownership and users before cleanup.
 
 Cmnd_Alias TAP_CORE_PROXY = /usr/sbin/networksetup -setwebproxy *, \
                             /usr/sbin/networksetup -setsecurewebproxy *, \
