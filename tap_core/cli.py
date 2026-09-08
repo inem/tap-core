@@ -179,6 +179,9 @@ def parser():
     pack = commands.add_parser("pack", help="Install and activate external pack artifacts")
     pack_actions = pack.add_subparsers(dest="pack_action", required=True)
     pack_actions.add_parser("list")
+    pack_add = pack_actions.add_parser("add", help="Download, verify, consent to and enable a GitHub release")
+    pack_add.add_argument("source", help="OWNER/REPO or OWNER/REPO@MAJOR.MINOR.PATCH")
+    pack_add.add_argument("--yes", action="store_true", help="Accept the displayed access request non-interactively")
     pack_install = pack_actions.add_parser("install")
     pack_install.add_argument("artifact", type=Path)
     pack_update = pack_actions.add_parser("update")
@@ -265,7 +268,10 @@ def main(argv=None):
                             adapter.service_loaded(profile)
                             or (profile.components is not None and adapter.service_loaded(Job(profile)))):
                         raise TapError('Stop this profile with off before changing packs')
-                    if args.pack_action == 'install':
+                    if args.pack_action == 'add':
+                        from .pack_add import add
+                        output = add(root, args.source, assume_yes=args.yes)
+                    elif args.pack_action == 'install':
                         output = store.install(args.artifact)
                     elif args.pack_action == 'update':
                         output = store.update(args.artifact)

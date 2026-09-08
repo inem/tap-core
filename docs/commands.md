@@ -121,6 +121,26 @@ whether retained paths include credentials and how to erase them intentionally.
 
 ## Build, install and verify
 
+An installed Core wrapper already supplies its normal profile. The user-facing
+path downloads a GitHub release, verifies the ordinary artifact, displays the
+publisher/purpose/requested access and enables it after consent:
+
+```sh
+tap pack add OWNER/REPO
+tap pack add OWNER/REPO@1.2.3  # exact version, including an intentional prerelease
+```
+
+Without a version, `add` selects the highest non-draft, non-prerelease semantic
+release in the first 100 GitHub releases. It requires exactly one asset named
+`*-VERSION.tap-pack`, records `github:OWNER/REPO@VERSION` plus the artifact
+SHA-256 in the existing registry, and grants exactly the manifest request. It
+does not imply sandboxing. Repeating the same resolved source/digest/grants is a
+no-op and does not ask again. Download, validation or refusal happens before
+install/enable; a later activation failure cannot replace the previous selected
+version. `--yes` is available for an already reviewed non-interactive run.
+
+Local files and explicit grants remain the author/developer path:
+
 ```sh
 PYTHONPATH=/absolute/tap-core \
 python3 -B -m tap_core.pack_store build /absolute/pack \
@@ -144,8 +164,10 @@ acceptance.
 
 ## Deliberate v1 limits
 
-Only `host-python` and profile-local installed commands are bound. There is no
-global pack store, shell entrypoint, command completion schema, per-command grant
-subset, sandbox, background consumer, general result renderer, marketplace or
-migration of the remaining Core CLI. Result-to-presentation work continues in
-#52. A second concrete runtime extends runtime selection, not the argv protocol.
+Only GitHub Releases are resolved by `pack add`; there is no marketplace or
+catalog. Only `host-python` and profile-local installed commands are bound.
+There is no global pack store, shell entrypoint, command completion schema,
+per-command grant subset, sandbox, background consumer, general result renderer
+or migration of the remaining Core CLI. Result-to-presentation work continues
+in #52. A second concrete runtime extends runtime selection, not the argv
+protocol.
