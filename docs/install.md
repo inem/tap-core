@@ -133,6 +133,20 @@ newly added runtimes are removed. Update rewrites `profile.backend` and componen
 python/bun path bindings; it does **not** reset port, hub_port, exclude/allow
 origins, or user-defined readers/handlers. Installer defaults stay in `managed/`.
 
+If rollback reports an incomplete recovery, clear the reported cause and run:
+
+```sh
+bash "$HOME/.tap-core/update-recovery/rollback"
+```
+
+Use the same install root if customized. This retained helper includes its Python
+modules and uses A's interpreter path; it survives restoring an older checkout
+that has no update commands. It is removed after successful rollback/finalize.
+Pending phase replacement is atomic, and retrying an already restored runtime
+preserves it. This is retry after reported operation failures, not a guarantee
+against power loss at every filesystem operation. Full crash/reboot, system
+routing and HTTPS trust acceptance remain in #7/#6.
+
 Existing `main` installs without `instll/update` can still move forward by
 running the **target** update script:
 

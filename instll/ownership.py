@@ -254,6 +254,9 @@ def _restore_path(previous, destination):
     if previous is None:
         return
     destination = Path(destination)
+    if not Path(previous).exists():
+        require(destination.exists(), 'Runtime and its backup are both missing: ' + str(destination))
+        return  # An earlier rollback attempt already moved this backup back.
     if destination.exists():
         shutil.rmtree(destination) if destination.is_dir() else destination.unlink(missing_ok=True)
     if Path(previous).exists():
@@ -264,9 +267,40 @@ def _pending_path(root):
     return Path(root) / 'update-pending.json'
 
 
+def _save_pending(root, pending):
+    path = _pending_path(root)
+    temporary = path.with_suffix('.tmp')
+    try:
+        temporary.write_text(json.dumps(pending, indent=2) + '\n')
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _prepare_recovery(root, checkout, python):
+    """Keep B's recovery code available even after restoring a pre-update A."""
+    recovery = root / 'update-recovery'
+    require(not recovery.exists(), 'Leftover update-recovery; inspect before update')
+    recovery.mkdir(mode=0o700)
+    try:
+        shutil.copyfile(checkout / 'instll/ownership.py', recovery / 'ownership.py')
+        shutil.copytree(checkout / 'tap_core', recovery / 'tap_core',
+                        ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+        # A's interpreter path exists before promotion and again after restoration.
+        # Do not retain a staging path that the updater's EXIT trap will remove.
+        command = shlex.join([python, str(recovery / 'ownership.py'),
+                              'rollback-update', str(root)])
+        (recovery / 'rollback').write_text('#!/bin/bash\nexec ' + command + '\n')
+    except Exception:
+        _drop_path(recovery)
+        raise
+
+
 def _with_install_locks(root, profile_root, configured, body):
     """Serialize terminal update transitions with the same locks as apply."""
-    sys.path.insert(0, str(root / 'checkout'))
+    helper_root = Path(__file__).resolve().parent
+    sys.path.insert(0, str(helper_root if (helper_root / 'tap_core').is_dir()
+                           else root / 'checkout'))
     from tap_core.runtime import profile_lock
     with profile_lock(root, busy_message='Another install/update holds this root'):
         with (profile_lock(profile_root, busy_message='Another command is changing this profile')
@@ -291,6 +325,7 @@ def finalize_update(root):
                 _drop_path(value)
         path.unlink(missing_ok=True)
         require(not list(root.glob('checkout.prev.*')), 'Checkout backup survived finalize')
+        _drop_path(root / 'update-recovery')
         return {'ok': True, 'root': str(root)}
 
     return _with_install_locks(root, profile_root, configured, body)
@@ -344,7 +379,7 @@ def rollback_update(root):
             if profile_backup and Path(profile_backup).is_file():
                 (profile_root / 'profile.json').write_bytes(Path(profile_backup).read_bytes())
             pending['phase'] = 'files_restored'
-            path.write_text(json.dumps(pending, indent=2) + '\n')
+            _save_pending(root, pending)
 
         # Mark/wrapper must match A before pending is cleared.
         if not managed_dir.exists():
@@ -364,6 +399,7 @@ def rollback_update(root):
         if profile_backup:
             _drop_path(profile_backup)
         path.unlink(missing_ok=True)
+        _drop_path(root / 'update-recovery')
         return {'ok': True, 'root': str(root), 'restored': True}
 
     return _with_install_locks(root, profile_root, configured, body)
@@ -430,6 +466,7 @@ def apply_checkout(root, new_checkout, python, backend, bun, ref, arch, hub_port
             if configured:
                 was_running = _ensure_profile_stopped(profile_root)
                 profile_backup = (profile_root / 'profile.json').read_bytes()
+            _prepare_recovery(root, new_checkout, before['python'])
             try:
                 if staged_python:
                     previous_python = _promote_staged(staged_python, root / 'python')
@@ -499,7 +536,7 @@ def apply_checkout(root, new_checkout, python, backend, bun, ref, arch, hub_port
                         'bun': bun_for_restore,
                     },
                 }
-                _pending_path(root).write_text(json.dumps(pending, indent=2) + '\n')
+                _save_pending(root, pending)
                 # A stays until finalize-update after B starts successfully.
             except Exception:
                 if checkout.exists() and backup.exists():
@@ -527,6 +564,7 @@ def apply_checkout(root, new_checkout, python, backend, bun, ref, arch, hub_port
                     try:
                         refresh(root, before['python'], before['backend'],
                                 before['ref'], before['arch'])
+                        _drop_path(root / 'update-recovery')
                     except Exception:
                         pass
                 raise

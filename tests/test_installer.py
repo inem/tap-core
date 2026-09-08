@@ -629,7 +629,7 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual((self.root / 'checkout/UPDATE_MARKER').read_text().strip(), 'version-b')
         self.assertEqual(len(list(self.root.glob('checkout.prev.*'))), 1)
 
-    def test_rollback_keeps_pending_when_refresh_fails(self):
+    def prepare_recovery_candidate(self):
         self.prepare(configured=False)
         shutil.copytree(REPO / 'instll', self.root / 'checkout/instll', dirs_exist_ok=True)
         shutil.copytree(REPO / 'tap_core', self.root / 'checkout/tap_core', dirs_exist_ok=True)
@@ -646,6 +646,12 @@ class InstallerTests(unittest.TestCase):
         staging = self.parent / 'refresh-next'
         shutil.copytree(self.root / 'checkout', staging)
         (staging / 'UPDATE_MARKER').write_text('version-b\n')
+        return backend, staging
+
+    def test_rollback_keeps_pending_when_refresh_fails(self):
+        backend, staging = self.prepare_recovery_candidate()
+        shutil.copyfile(REPO / 'tests/fixtures/installer/ownership-pre-update.py',
+                        self.root / 'checkout/instll/ownership.py')
         ownership.apply_checkout(
             str(self.root), str(staging), sys.executable, str(backend),
             sys.executable, 'b' * 40, 'arm64', '19000')
@@ -657,10 +663,47 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(pending.get('phase'), 'files_restored')
         self.assertEqual((self.root / 'checkout/UPDATE_MARKER').read_text().strip(), 'version-a')
         self.assertEqual(json.loads((self.root / 'install.json').read_text())['ref'], 'b' * 40)
-        # Retry after fault clears completes recovery.
-        ownership.rollback_update(str(self.root))
+        # A does not provide rollback-update. A fresh process must use the
+        # retained helper, not a B module left loaded in this test process.
+        result = subprocess.run(
+            ['/bin/bash', str(self.root / 'update-recovery/rollback')],
+            capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse((self.root / 'update-pending.json').exists())
+        self.assertFalse((self.root / 'update-recovery').exists())
         self.assertEqual(json.loads((self.root / 'install.json').read_text())['ref'], 'fixture-ref')
+
+    def test_rollback_retry_preserves_runtime_after_phase_write_failure(self):
+        backend, staging = self.prepare_recovery_candidate()
+        bun = self.root / 'bun/bin/bun'
+        bun.parent.mkdir(parents=True)
+        bun.write_text('A runtime\n')
+        candidate = self.parent / 'B-bun'
+        candidate.write_text('B runtime\n')
+        ownership.apply_checkout(
+            str(self.root), str(staging), sys.executable, str(backend),
+            sys.executable, 'b' * 40, 'arm64', '19000', staged_bun=str(candidate))
+        original_replace = Path.replace
+
+        def fail_phase(path, destination):
+            if Path(destination) == self.root / 'update-pending.json':
+                raise OSError('phase write failed')
+            return original_replace(path, destination)
+
+        with patch.object(Path, 'replace', fail_phase):
+            with self.assertRaisesRegex(OSError, 'phase write failed'):
+                ownership.rollback_update(str(self.root))
+        self.assertEqual(bun.read_text(), 'A runtime\n')
+        pending = json.loads((self.root / 'update-pending.json').read_text())
+        self.assertEqual(pending['phase'], 'applied')
+        result = subprocess.run(
+            ['/bin/bash', str(self.root / 'update-recovery/rollback')],
+            capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(bun.read_text(), 'A runtime\n')
+        self.assertEqual(json.loads((self.root / 'install.json').read_text())['ref'], 'fixture-ref')
+        self.assertFalse((self.root / 'update-pending.json').exists())
+        self.assertFalse((self.root / 'update-recovery').exists())
 
     def test_apply_drops_newly_created_runtime_on_failure(self):
         self.prepare(configured=False)
@@ -1030,4 +1073,3 @@ esac
         self.assertIn('| TAP_ROUTING=explicit bash', text)
         self.assertNotIn('TAP_ROUTING=explicit curl', text)
         self.assertIn('tap routing set explicit', text)
-

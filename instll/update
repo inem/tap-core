@@ -231,8 +231,8 @@ fi
 POST_HELPER="$CHECKOUT/instll/ownership.py"
 if [ "$START_FAILED" = 1 ]; then
   info "start failed; restoring previous checkout"
-  if ! "$PYTHON" "$POST_HELPER" rollback-update "$ROOT"; then
-    fail "profile start failed and rollback incomplete; inspect $ROOT/update-pending.json and retry rollback-update"
+  if ! /bin/bash "$ROOT/update-recovery/rollback"; then
+    fail "profile start failed and rollback incomplete; retry: bash \"$ROOT/update-recovery/rollback\""
   fi
   fail "profile start failed after update; previous checkout restored"
 fi
