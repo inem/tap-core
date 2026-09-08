@@ -462,6 +462,22 @@ class InstallerTests(unittest.TestCase):
             self.assertTrue(ownership._ensure_profile_stopped(self.root / 'profile'))
         self.assertEqual(calls, ['off'])
 
+    def test_pre_hubless_checkout_still_detects_hub_busy(self):
+        """Missing needs_hub (pre-hubless A) must fall back to Hub-required."""
+        import builtins
+        real = builtins.__import__
+
+        def hooked(name, globals=None, locals=None, fromlist=(), level=0):
+            if fromlist and 'needs_hub' in fromlist:
+                raise ImportError('pre-hubless checkout')
+            return real(name, globals, locals, fromlist, level)
+
+        with patch('builtins.__import__', hooked):
+            self.assertTrue(ownership._components_need_hub(
+                {'version': 1, 'python': sys.executable, 'bun': sys.executable,
+                 'readers': {}, 'handlers': {}},
+                None))
+
     def test_restore_path_leaves_unreplaced_runtime_alone(self):
         destination = self.parent / 'python'
         destination.mkdir()
@@ -988,6 +1004,25 @@ class InstallerTests(unittest.TestCase):
         self.assertTrue(self.root.is_dir())
         self.assertTrue(self.wrapper.is_file())
         self.assertTrue((self.root / 'install.json').is_file())
+
+    def test_grant_recovery_commands_keep_ownership_checks_on_retry(self):
+        self.prepare()
+        cert = self.root / 'ca.pem'
+        cert.write_text('-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n')
+        ownership.grant_sudoers(str(self.root), '/etc/sudoers.d/tap-core-fixture', 'abc', 'TAP_CORE_PROXY_X')
+        ownership.grant_ca(str(self.root), str(cert), 'dead')
+        data = json.loads((self.root / 'install.json').read_text())
+        lines = ownership.grant_recovery_commands(
+            self.root, data, ['sudoers file present but not owned/matched',
+                              'CA fingerprint mismatch'], purge='1')
+        text = '\n'.join(lines)
+        self.assertIn('sudo -v', text)
+        self.assertIn('TAP_PURGE=1', text)
+        self.assertIn(shlex.quote(str(self.root / 'checkout/instll/uninstall')), text)
+        self.assertIn('sudoers file present but not owned/matched', text)
+        self.assertIn('CA fingerprint mismatch', text)
+        self.assertNotIn('sudo rm', text)
+        self.assertNotIn('remove-trusted-cert', text)
 
     def test_enable_system_proxy_sudo_refuses_symlink_and_edited_dropin(self):
         self.prepare()

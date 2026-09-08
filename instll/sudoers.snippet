@@ -1,13 +1,12 @@
 # tap-core: allow `tap on/off` / routing to flip the system proxy without a password.
 # Scoped to ONLY the proxy subcommands of networksetup — nothing else.
 #
-# Prefer the helper (substitutes your user and syntax-checks the drop-in):
+# Prefer the helper (substitutes your user, unique drop-in path, visudo check):
 #   bash "$HOME/.tap-core/checkout/instll/enable-system-proxy-sudo"
+# That installs /etc/sudoers.d/tap-core-<tag>, not a shared tap-core file.
 #
-# Or install manually:
-#   sudo visudo -f /etc/sudoers.d/tap-core
-# paste the two directive lines below (replace __TAP_USER__), save.
-# visudo refuses a bad file, so a typo cannot lock you out of sudo.
+# Manual install is unsupported for uninstall matching; if you already created
+# /etc/sudoers.d/tap-core by hand, inspect its ownership and users before cleanup.
 
 Cmnd_Alias TAP_CORE_PROXY = /usr/sbin/networksetup -setwebproxy *, \
                             /usr/sbin/networksetup -setsecurewebproxy *, \

@@ -144,12 +144,20 @@ def _profile_processes_busy(adapter, profile):
     if job is not None:
         if adapter.service_loaded(job):
             busy.append('components service')
-        from tap_core.components import needs_hub
         from tap_core.pack_store import PackStore
         effective = PackStore(profile.root).effective_components(profile.components)
-        if needs_hub(effective, profile.bridge) and adapter.port_open(job):
+        if _components_need_hub(effective, profile.bridge) and adapter.port_open(job):
             busy.append('hub port')
     return busy
+
+
+def _components_need_hub(effective, bridge):
+    """Hub liveness for busy checks; tolerate pre-hubless install trees."""
+    try:
+        from tap_core.components import needs_hub
+        return needs_hub(effective, bridge)
+    except ImportError:
+        return True
 
 
 def _ensure_profile_stopped(profile_root):
@@ -446,7 +454,11 @@ def apply_checkout(root, new_checkout, python, backend, bun, ref, arch, hub_port
         managed_backup = root / ('managed.prev.' + str(os.getpid()))
         require(not managed_backup.exists(), 'Leftover managed backup present; inspect before update')
 
+    # Prefer the target checkout on sys.path: apply runs from B's ownership helper
+    # while the live install still has A's tree. A may lack symbols B needs
+    # (e.g. needs_hub) during stop/inspect before the swap.
     sys.path.insert(0, str(checkout))
+    sys.path.insert(0, str(new_checkout))
     from tap_core.runtime import profile_lock
 
     def write_managed(target_checkout, python_path, bun_path):
@@ -662,6 +674,37 @@ def revoke_grants(root, data, runner=None):
     return errors
 
 
+def grant_recovery_commands(root, data, errors=(), purge='0'):
+    """Retry grant cleanup without bypassing ownership/fingerprint checks."""
+    root = Path(root)
+    uninstall = root / 'checkout/instll/uninstall'
+    lines = [
+        'Grant cleanup needs an interactive admin shell. Run:',
+        '  sudo -v',
+        '  TAP_PURGE=%s TAP_ROOT=%s bash %s'
+        % (shlex.quote(str(purge)), shlex.quote(str(root)), shlex.quote(str(uninstall))),
+    ]
+    lines.append('If ownership or fingerprint checks still fail, inspect the reported mismatch; '
+                 'retry does not override those checks.')
+    if errors:
+        lines.append('Details: ' + '; '.join(errors))
+    lines.append('Installation retained until grants are cleared.')
+    return lines
+
+
+def leftover_sudoers_paths(root, data):
+    """Known sudoers paths that may still exist after revoke (tagged + legacy)."""
+    paths = []
+    recorded = ((data.get('grants') or {}).get('sudoers') or {}).get('path')
+    for candidate in (recorded, '/etc/sudoers.d/tap-core'):
+        if not candidate:
+            continue
+        path = Path(candidate)
+        if path.exists() and path not in paths:
+            paths.append(path)
+    return paths
+
+
 def remove(root, purge):
     root = canonical(root)
     require(root not in (Path('/'), Path.home().resolve()), 'Refusing broad install root')
@@ -700,16 +743,20 @@ def remove(root, purge):
                 grant_errors = revoke_grants(root, data)
                 check_wrapper()
                 if grant_errors:
+                    for line in grant_recovery_commands(root, data, grant_errors, purge=purge):
+                        print('tap-core: ' + line, file=sys.stderr)
                     raise ValueError(
-                        'grant cleanup incomplete: ' + '; '.join(grant_errors)
-                        + '; run: sudo -v && TAP_ROOT=' + str(root)
-                        + ' bash ' + str(root / 'checkout/instll/uninstall')
-                        + ' — marker/CA/runtime retained')
+                        'grant cleanup incomplete; installation retained — see commands above')
+                leftovers = leftover_sudoers_paths(root, data)
                 wrapper.unlink(missing_ok=True)
                 if purge == '1':
                     shutil.rmtree(root)
                 print('Profile service removed; ' + (
                     'installation purged' if purge == '1' else 'data and runtime retained'))
+                if leftovers:
+                    print('tap-core: sudoers drop-in still present; inspect ownership before manual cleanup:', file=sys.stderr)
+                    for path in leftovers:
+                        print('  ' + str(path), file=sys.stderr)
 
 
 
