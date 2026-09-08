@@ -1005,6 +1005,21 @@ class InstallerTests(unittest.TestCase):
         self.assertTrue(self.wrapper.is_file())
         self.assertTrue((self.root / 'install.json').is_file())
 
+    def test_grant_recovery_commands_print_sudo_rm_and_retry(self):
+        self.prepare()
+        cert = self.root / 'ca.pem'
+        cert.write_text('-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n')
+        ownership.grant_sudoers(str(self.root), '/etc/sudoers.d/tap-core-fixture', 'abc', 'TAP_CORE_PROXY_X')
+        ownership.grant_ca(str(self.root), str(cert), 'dead')
+        data = json.loads((self.root / 'install.json').read_text())
+        lines = ownership.grant_recovery_commands(self.root, data, ['sudoers read failed'], purge='1')
+        text = '\n'.join(lines)
+        self.assertIn('sudo -v', text)
+        self.assertIn('TAP_PURGE=1', text)
+        self.assertIn('sudo rm -f /etc/sudoers.d/tap-core-fixture', text)
+        self.assertIn('remove-trusted-cert -d', text)
+        self.assertIn(shlex.quote(str(cert)), text)
+
     def test_enable_system_proxy_sudo_refuses_symlink_and_edited_dropin(self):
         self.prepare()
         shutil.copyfile(REPO / 'instll/enable-system-proxy-sudo', self.root / 'checkout/instll/enable-system-proxy-sudo')

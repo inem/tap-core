@@ -674,6 +674,48 @@ def revoke_grants(root, data, runner=None):
     return errors
 
 
+def grant_recovery_commands(root, data, errors=(), purge='0'):
+    """Copy-paste recovery lines for incomplete grant cleanup or leftover drop-ins."""
+    root = Path(root)
+    grants = data.get('grants') or {}
+    uninstall = root / 'checkout/instll/uninstall'
+    lines = [
+        'Grant cleanup needs an interactive admin shell. Run:',
+        '  sudo -v',
+        '  TAP_PURGE=%s TAP_ROOT=%s bash %s'
+        % (shlex.quote(str(purge)), shlex.quote(str(root)), shlex.quote(str(uninstall))),
+    ]
+    # Prefer concrete rm/security lines so a stuck sudoers/CA grant can be cleared
+    # even when retrying uninstall is awkward.
+    sudoers = (grants.get('sudoers') or {}).get('path')
+    if sudoers:
+        lines.append('  sudo rm -f ' + shlex.quote(str(sudoers)))
+    ca = (grants.get('ca') or {}).get('cert')
+    if ca and Path(ca).is_file():
+        lines.append('  sudo /usr/bin/security remove-trusted-cert -d ' + shlex.quote(str(ca)))
+    legacy = Path('/etc/sudoers.d/tap-core')
+    if legacy.exists() and str(legacy) != str(sudoers or ''):
+        lines.append('  sudo rm -f ' + shlex.quote(str(legacy))
+                     + '   # legacy/manual drop-in (not the tagged install path)')
+    if errors:
+        lines.append('Details: ' + '; '.join(errors))
+    lines.append('Installation retained until grants are cleared.')
+    return lines
+
+
+def leftover_sudoers_paths(root, data):
+    """Known sudoers paths that may still exist after revoke (tagged + legacy)."""
+    paths = []
+    recorded = ((data.get('grants') or {}).get('sudoers') or {}).get('path')
+    for candidate in (recorded, '/etc/sudoers.d/tap-core'):
+        if not candidate:
+            continue
+        path = Path(candidate)
+        if path.exists() and path not in paths:
+            paths.append(path)
+    return paths
+
+
 def remove(root, purge):
     root = canonical(root)
     require(root not in (Path('/'), Path.home().resolve()), 'Refusing broad install root')
@@ -712,16 +754,20 @@ def remove(root, purge):
                 grant_errors = revoke_grants(root, data)
                 check_wrapper()
                 if grant_errors:
+                    for line in grant_recovery_commands(root, data, grant_errors, purge=purge):
+                        print('tap-core: ' + line, file=sys.stderr)
                     raise ValueError(
-                        'grant cleanup incomplete: ' + '; '.join(grant_errors)
-                        + '; run: sudo -v && TAP_ROOT=' + str(root)
-                        + ' bash ' + str(root / 'checkout/instll/uninstall')
-                        + ' — marker/CA/runtime retained')
+                        'grant cleanup incomplete; installation retained — see commands above')
+                leftovers = leftover_sudoers_paths(root, data)
                 wrapper.unlink(missing_ok=True)
                 if purge == '1':
                     shutil.rmtree(root)
                 print('Profile service removed; ' + (
                     'installation purged' if purge == '1' else 'data and runtime retained'))
+                if leftovers:
+                    print('tap-core: sudoers drop-in still present; remove with:', file=sys.stderr)
+                    for path in leftovers:
+                        print('  sudo rm -f ' + shlex.quote(str(path)), file=sys.stderr)
 
 
 
