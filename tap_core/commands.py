@@ -208,7 +208,7 @@ def _private_runtime_directory(store, path):
     return path
 
 
-def _run_pack(command, profile_root, argv):
+def _run_pack(command, profile_root, argv, lease_fd=None):
     from .pack_store import PackStore
     profile_root = Path(profile_root).expanduser().resolve()
     store = PackStore(profile_root)
@@ -240,6 +240,7 @@ def _run_pack(command, profile_root, argv):
         process = subprocess.Popen(
             [sys.executable, "-B", str(executable), *argv], cwd=state,
             env=environment, stdin=None, stdout=None, stderr=None,
+            pass_fds=(() if lease_fd is None else (lease_fd,)),
         )
         returncode = process.wait()
     except KeyboardInterrupt:
@@ -253,12 +254,12 @@ def _run_pack(command, profile_root, argv):
     return 128 + (-returncode) if returncode < 0 else returncode
 
 
-def execute(command, profile_root, argv):
+def execute(command, profile_root, argv, lease_fd=None):
     if command.source == "builtin":
         if command.path == ("where",):
             return _where(profile_root, argv)
         raise TapError(f"Unknown built-in command provider: {command.label}")
-    return _run_pack(command, profile_root, argv)
+    return _run_pack(command, profile_root, argv, lease_fd=lease_fd)
 
 
 def dispatch(profile_root, words):
@@ -279,9 +280,9 @@ def dispatch(profile_root, words):
         return execute(command, profile_root, argv)
     with profile_lock(
             profile_root,
-            busy_message="A command from this profile is still running; pack changes wait for it to finish"):
+            busy_message="A command from this profile is still running; pack changes wait for it to finish") as lease:
         current = discover(profile_root).commands.get(command.path)
         if current is None or (current.provider_id, current.provider_version) != (
                 command.provider_id, command.provider_version):
             raise TapError("Command provider changed before invocation; retry the command")
-        return execute(current, profile_root, argv)
+        return execute(current, profile_root, argv, lease_fd=lease.fileno())

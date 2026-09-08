@@ -30,6 +30,8 @@ if path == ("fixture", "fail"):
 
 if path == ("fixture", "wait"):
     release = Path(sys.argv[1])
+    if len(sys.argv) > 2:
+        Path(sys.argv[2]).write_text(str(os.getpid()))
     print("ready", flush=True)
     while not release.exists():
         time.sleep(0.02)

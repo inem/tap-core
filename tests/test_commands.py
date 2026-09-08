@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -164,6 +165,21 @@ class CommandHostTests(unittest.TestCase):
         self.assertIsNone(call.kwargs["stdout"])
         self.assertIsNone(call.kwargs["stderr"])
 
+    def test_real_sigint_stops_provider_and_returns_130(self):
+        self.install_enable()
+        release = self.root / "interrupt-release"
+        process = subprocess.Popen(
+            [sys.executable, "-B", str(ROOT / "tap"), "--profile", str(self.profile),
+             "fixture", "wait", str(release)], text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        self.addCleanup(release.touch)
+        self.addCleanup(lambda: process.poll() is None and process.kill())
+        self.assertEqual(process.stdout.readline().strip(), "ready")
+        process.send_signal(signal.SIGINT)
+        _stdout, stderr = process.communicate(timeout=5)
+        self.assertEqual(process.returncode, 130, stderr)
+
     def test_running_invocation_holds_version_lease_against_disable(self):
         self.install_enable()
         release = self.root / "release"
@@ -184,6 +200,36 @@ class CommandHostTests(unittest.TestCase):
         disabled = self.run_tap("pack", "disable", "fixture.command")
         self.assertEqual(disabled.returncode, 0, disabled.stderr)
         self.assertFalse(PackStore(self.profile).status()["packs"]["fixture.command"]["enabled"])
+
+    def test_provider_keeps_lease_after_dispatcher_is_terminated(self):
+        self.install_enable()
+        release = self.root / "orphan-release"
+        pid_file = self.root / "provider.pid"
+        dispatcher = subprocess.Popen(
+            [sys.executable, "-B", str(ROOT / "tap"), "--profile", str(self.profile),
+             "fixture", "wait", str(release), str(pid_file)], text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        self.addCleanup(release.touch)
+        self.addCleanup(lambda: dispatcher.poll() is None and dispatcher.kill())
+        self.assertEqual(dispatcher.stdout.readline().strip(), "ready")
+        provider_pid = int(pid_file.read_text())
+        dispatcher.terminate()
+        dispatcher.wait(timeout=5)
+        dispatcher.stdout.close()
+        dispatcher.stderr.close()
+        os.kill(provider_pid, 0)
+        blocked = self.run_tap("pack", "disable", "fixture.command")
+        self.assertEqual(blocked.returncode, 1)
+        self.assertIn("still running", blocked.stderr)
+        release.touch()
+        for _attempt in range(100):
+            disabled = self.run_tap("pack", "disable", "fixture.command")
+            if disabled.returncode == 0:
+                break
+            import time
+            time.sleep(0.02)
+        self.assertEqual(disabled.returncode, 0, disabled.stderr)
 
     def test_broken_external_code_does_not_block_core_recovery_path(self):
         profile = Profile(self.profile, "/fixture/mitmdump", 19001, "explicit",
