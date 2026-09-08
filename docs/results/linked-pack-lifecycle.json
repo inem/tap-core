@@ -1,6 +1,6 @@
 {
   "scope": "example.linked-http lifecycle/errors; no browser, CA, SSE, or third-party WS",
-  "core_commit": "29607397c9d58b2c4aedd6255de4fedb9c1db444",
+  "core_commit": "40cb2456f4a5c7d057efbe154275994e300f66be",
   "python": "3.9.6",
   "bun": "1.3.11",
   "pack_id": "example.linked-http",
@@ -21,11 +21,11 @@
   "reader_error": {
     "healthy": false,
     "phase": "backoff",
-    "error": "RecordError: Unsupported capture record version",
+    "error": "ReaderError: Reader exited with code 1; cursor was not advanced",
     "failures": 1
   },
-  "incompatible_update_error": "reader 'example.linked-http' has progress under another definition; run `tap reader replay example.linked-http` with the new binding, or remove /private/var/folders/rc/jrgt0w_x4bvc1hftg6x8g7sh0000gn/T/tap-linked-life-i7rix77n/profile/state/readers/example.linked-http/checkpoint.json, then enable/update again \u2014 checkpoint was not reset",
-  "incompatible_rollback_error": "reader 'example.linked-http' has progress under another definition; run `tap reader replay example.linked-http` with the new binding, or remove /private/var/folders/rc/jrgt0w_x4bvc1hftg6x8g7sh0000gn/T/tap-linked-life-i7rix77n/profile/state/readers/example.linked-http/checkpoint.json, then enable/update again \u2014 checkpoint was not reset",
+  "incompatible_update_error": "reader 'example.linked-http' has progress under another definition; run `tap reader replay example.linked-http` with the new binding, or remove /private/var/folders/rc/jrgt0w_x4bvc1hftg6x8g7sh0000gn/T/tap-linked-life-gzf1vyib/profile/state/readers/example.linked-http/checkpoint.json, then enable/update again \u2014 checkpoint was not reset",
+  "incompatible_rollback_error": "reader 'example.linked-http' has progress under another definition; run `tap reader replay example.linked-http` with the new binding, or remove /private/var/folders/rc/jrgt0w_x4bvc1hftg6x8g7sh0000gn/T/tap-linked-life-gzf1vyib/profile/state/readers/example.linked-http/checkpoint.json, then enable/update again \u2014 checkpoint was not reset",
   "uninstall": {
     "id": "example.linked-http",
     "removed_versions": [
