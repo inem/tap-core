@@ -241,11 +241,37 @@ def validate_document(document):
             raise ProjectionError(f"leaf slot has children: {slot.identifier}")
         if slot.kind == "group" and slot.text:
             raise ProjectionError(f"group slot contains text: {slot.identifier}")
+        if slot.kind == "group" and not children[slot.identifier]:
+            raise ProjectionError(f"empty group slot: {slot.identifier}")
         if slot.optional:
             parent = by_id.get(slot.parent)
             if parent is None or parent.parent != document.root:
                 raise ProjectionError(f"optional slot is outside a direct line group: {slot.identifier}")
     return children
+
+
+def validate_conservation(claims, meanings, document, supplied_operator):
+    """Require the document to use every meaning and meanings to preserve inputs."""
+    sourced = {source for slot in document.slots for source in slot.sources}
+    unsourced = [meaning.identifier() for meaning in meanings if meaning.identifier() not in sourced]
+    if unsourced:
+        raise ProjectionError(f"selected meaning is not sourced by document: {unsourced}")
+
+    reachable = set()
+    frontier = list(meanings)
+    while frontier:
+        atom = frontier.pop()
+        if atom in reachable:
+            continue
+        reachable.add(atom)
+        derivation = claims.get(atom)
+        if derivation is None:
+            raise ProjectionError(f"missing derivation for reachable atom: {atom.identifier()}")
+        frontier.extend(derivation.warrants)
+    supplied = {atom for atom, derivation in claims.items() if derivation.operator == supplied_operator}
+    dropped = sorted((atom.identifier() for atom in supplied - reachable))
+    if dropped:
+        raise ProjectionError(f"supplied observation is not preserved by selected meanings: {dropped}")
 
 
 def render_terminal_result(document, width=80, color=False, styles=None):

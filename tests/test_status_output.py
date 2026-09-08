@@ -1,4 +1,5 @@
 from contextlib import redirect_stderr, redirect_stdout
+import copy
 from dataclasses import replace
 import io
 import json
@@ -12,7 +13,8 @@ from tap_core.projection import (Atom, Derivation, Document, ProjectionConflict,
                                  evaluate_rules, render_terminal,
                                  render_terminal_result, select_candidates)
 from tap_core.status_view import (project_status, public_status_result,
-                                  terminal_status, validate_status_result)
+                                  terminal_status, validate_status_result,
+                                  load_material)
 
 
 FIXTURES = Path(__file__).parents[1] / "contracts/status-result/v1/fixtures"
@@ -97,6 +99,20 @@ class StatusContractTests(unittest.TestCase):
         self.assertEqual(unknown["runtime"][0], "unknown")
         self.assertEqual(drift["routing"][0], "recovery-required")
 
+    def test_absent_field_is_not_observed_instead_of_known_null(self):
+        raw = snapshot()
+        del raw["port_owned"]
+        semantic = public_status_result(raw)
+        self.assertEqual(semantic["runtime"]["port_owned"], {
+            "knowledge": "unknown", "reason": "not_observed",
+            "message": "observation was not supplied",
+        })
+        validate_status_result(semantic)
+        self.assertEqual(states(raw)["runtime"], ("unknown", "listener_ownership_unknown"))
+        semantic["runtime"]["port_owned"]["reason"] = "invented"
+        with self.assertRaisesRegex(ProjectionError, "invalid unknown"):
+            validate_status_result(semantic)
+
 
 class ProjectionKernelTests(unittest.TestCase):
     def candidate(self, value, rank, operator):
@@ -154,6 +170,31 @@ class ProjectionKernelTests(unittest.TestCase):
         with self.assertRaisesRegex(ProjectionError, "cycle"):
             render_terminal(replace(projection.document, slots=tuple(slots)))
 
+    def test_empty_group_is_rejected(self):
+        projection = project_status(public_status_result(snapshot()))
+        slots = tuple(slot for slot in projection.document.slots
+                      if slot.parent != "runtime-attachment")
+        with self.assertRaisesRegex(ProjectionError, "empty group"):
+            render_terminal(replace(projection.document, slots=slots))
+
+    def test_document_cannot_silently_drop_a_selected_meaning(self):
+        material = copy.deepcopy(load_material())
+        material["presentation_rules"] = [
+            rule for rule in material["presentation_rules"]
+            if rule["id"] != "presentation-routing-02-direct"
+        ]
+        with self.assertRaisesRegex(ProjectionError, "meaning is not sourced"):
+            project_status(public_status_result(snapshot(), material), material)
+
+    def test_selected_meanings_must_preserve_every_supplied_observation(self):
+        material = copy.deepcopy(load_material())
+        running = next(rule for rule in material["semantic_rules"]
+                       if rule["id"] == "runtime-30-running")
+        running["when"] = [pattern for pattern in running["when"]
+                           if pattern[2] != "port_owned"]
+        with self.assertRaisesRegex(ProjectionError, "observation is not preserved"):
+            project_status(public_status_result(snapshot(), material), material)
+
     def test_synthetic_non_product_document_uses_same_evaluator_and_renderer(self):
         fact = Atom.from_value(["reading", "forecast", "mild"])
         claims = evaluate_rules({fact: Derivation("fixture", tuple())}, [{
@@ -176,8 +217,11 @@ class ProjectionKernelTests(unittest.TestCase):
 
 
 class StatusCliTests(unittest.TestCase):
-    def invoke(self, raw, *arguments):
-        out, err = io.StringIO(), io.StringIO()
+    def invoke(self, raw, *arguments, tty=False):
+        class Output(io.StringIO):
+            def isatty(self):
+                return tty
+        out, err = Output(), io.StringIO()
         with patch("tap_core.cli.platform.system", return_value="Darwin"), \
                 patch("tap_core.cli.Profile.load"), patch("tap_core.cli.status", return_value=raw), \
                 redirect_stdout(out), redirect_stderr(err):
@@ -200,6 +244,24 @@ class StatusCliTests(unittest.TestCase):
         self.assertEqual(narrow, "tap           ● up\nbrowser/apps  ○ direct\n")
         code, colored, _ = self.invoke(raw, "--output", "terminal", "--color", "always")
         self.assertEqual(code, 0)
+        self.assertIn("\x1b[32m", colored)
+
+    def test_raw_and_semantic_json_ignore_width_color_and_tty(self):
+        raw = snapshot()
+        baseline_raw = self.invoke(raw)[1]
+        decorated_raw = self.invoke(raw, "--width", "1", "--color", "always", tty=True)[1]
+        self.assertEqual(decorated_raw, baseline_raw)
+        baseline_semantic = self.invoke(raw, "--output", "semantic-json")[1]
+        decorated_semantic = self.invoke(
+            raw, "--output", "semantic-json", "--width", "1", "--color", "always", tty=True)[1]
+        self.assertEqual(decorated_semantic, baseline_semantic)
+        self.assertNotIn("\x1b[", decorated_semantic)
+
+    def test_color_auto_follows_tty_for_terminal_only(self):
+        raw = snapshot()
+        plain = self.invoke(raw, "--output", "terminal", "--color", "auto", tty=False)[1]
+        colored = self.invoke(raw, "--output", "terminal", "--color", "auto", tty=True)[1]
+        self.assertNotIn("\x1b[", plain)
         self.assertIn("\x1b[32m", colored)
 
     def test_presentation_failure_does_not_poison_later_raw_output(self):

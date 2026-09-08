@@ -4,7 +4,8 @@ import json
 from pathlib import Path
 
 from .projection import (Atom, Derivation, ProjectionError, document_from_claims,
-                         evaluate_rules, render_terminal, select_candidates)
+                         evaluate_rules, render_terminal, select_candidates,
+                         validate_conservation)
 
 
 MATERIAL = Path(__file__).with_name("data") / "status_projection_v1.json"
@@ -33,7 +34,10 @@ def _observation(snapshot, raw_name):
     errors = snapshot.get("inspection_errors", {})
     if raw_name in errors:
         return {"knowledge": "unknown", "reason": "inspection_failed", "message": errors[raw_name]}
-    return {"knowledge": "known", "value": snapshot.get(raw_name)}
+    if raw_name not in snapshot:
+        return {"knowledge": "unknown", "reason": "not_observed",
+                "message": "observation was not supplied"}
+    return {"knowledge": "known", "value": snapshot[raw_name]}
 
 
 def public_status_result(snapshot, material=None):
@@ -61,8 +65,11 @@ def validate_status_result(result, material=None):
                 raise ProjectionError("invalid observation")
             if observation["knowledge"] == "known" and set(observation) != {"knowledge", "value"}:
                 raise ProjectionError("invalid known observation")
-            if observation["knowledge"] == "unknown" and set(observation) != {"knowledge", "reason", "message"}:
-                raise ProjectionError("invalid unknown observation")
+            if observation["knowledge"] == "unknown":
+                if (set(observation) != {"knowledge", "reason", "message"}
+                        or observation["reason"] not in ("inspection_failed", "not_observed")
+                        or not isinstance(observation["message"], str)):
+                    raise ProjectionError("invalid unknown observation")
 
 
 def _facts(result):
@@ -88,6 +95,7 @@ def project_status(result, material=None):
     interpreted = {**semantic, **selected}
     presented = evaluate_rules(interpreted, material["presentation_rules"])
     document = document_from_claims(presented, material["document_root"])
+    validate_conservation(presented, meanings, document, "supplied-status-result")
     return StatusProjection(result, meanings, document, presented)
 
 
