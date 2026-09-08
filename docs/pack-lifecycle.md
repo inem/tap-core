@@ -193,13 +193,21 @@ plus retained checkpoint and a healthy controller restart. Live proxied HTTP
 capture and headless browser Load → `#result` (saved projection) are covered by
 `tools/check_linked_pack_live.py` / `docs/results/linked-pack-live-browser.json`
 on explicit loopback; they do not claim CA trust, system proxy, SSE or
-third-party WS.
+third-party WS. Lifecycle and error paths for that pack
+(`handler_timeout`, visible reader delivery failure, update/rollback before
+reader progress, incompatible update/rollback refusal, and uninstall of a stopped
+pack with retained data) are covered by
+`tools/check_linked_pack_lifecycle.py` /
+`docs/results/linked-pack-lifecycle.json`.
 
-Still required for #14: observed reader/handler error paths and lifecycle on
-that external example, and independent author reproduction. Clean-Mac release
-acceptance belongs to #15. System CA trust and a live nonce-bearing YouTube
-response remain #38 evidence. Hubless reader-only managed on/off is accepted
-for packs without handlers when `bridge.enabled=false`.
+Changing a reader binding with an existing checkpoint currently refuses activation,
+including rollback. This check proves preservation on refusal, not checkpoint
+migration or a successful version change after processing records.
+Still required for #14: independent author reproduction of the linked example
+on a machine without the author's layout. Clean-Mac release acceptance belongs
+to #15. System CA trust and a live nonce-bearing YouTube response remain #38
+evidence. Hubless reader-only managed on/off is accepted for packs without
+handlers when `bridge.enabled=false`.
 
 ### Repeat the linked HTTP/browser check
 
@@ -225,3 +233,29 @@ stops those jobs and the origin. It compares the displayed value and record ID
 with the capture journal and reader projection before and after off/on. The
 report records the tested checkout commit; supplied backend/browser tools are
 not proof of runtime download or platform support on a clean Mac.
+
+### Repeat the linked lifecycle/error check
+
+No browser. Requires Bun 1.3.11 and the published `example.linked-http` artifact
+(or a local source tree). Exit 0 only when every claim below passes and the
+controller exits under a mocked launchd adapter. Controller/reader/Hub are real
+subprocesses; cleanup does not independently audit all children or listeners:
+
+```sh
+python3 tools/check_linked_pack_lifecycle.py \
+  --pack /path/to/example.linked-http-0.1.0.tap-pack \
+  --bun /path/to/bun \
+  --output /tmp/linked-pack-lifecycle.json
+```
+
+The input is published v0.1.0. The check locally rebuilds v0.1.1 with a hanging
+handler and v0.2.0 with a changed reader; these are test variants, not releases.
+Claims: hanging handler → `handler_timeout`; a valid capture record containing
+invalid JSON in its HTTP body makes the installed reader exit 1, visible as an
+`error` in components status; update/rollback succeeds before reader progress exists;
+incompatible update and rollback refuse with selected version, history,
+checkpoint and projection preserved. After stopping components, disable removes
+effective reader/handler/page bindings, then uninstall removes code and retains
+pack data plus exact reader projection/checkpoint bytes. Disable alone retains
+installed code; running processes require profile off/on and executed page UI
+requires reload. Gate unit: `tests/test_linked_pack_lifecycle_check.py`.

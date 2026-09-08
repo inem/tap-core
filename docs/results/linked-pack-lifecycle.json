@@ -1,0 +1,55 @@
+{
+  "scope": "example.linked-http lifecycle/errors; no browser, CA, SSE, or third-party WS",
+  "core_commit": "40cb2456f4a5c7d057efbe154275994e300f66be",
+  "python": "3.9.6",
+  "bun": "1.3.11",
+  "pack_id": "example.linked-http",
+  "scenario_passed": true,
+  "cleanup_verified": true,
+  "cleanup_scope": "controller exit with mocked launchd; no independent child/listener audit",
+  "variant_scope": "0.1.0 is published; 0.1.1/0.2.0 are locally rebuilt fault variants",
+  "artifact_source": "pack",
+  "artifact_sha256": "b1b59ab9645533a8bae6795d720309d05f3163fb51000fb1066bfee43d118dec",
+  "handler_timeout": {
+    "ok": false,
+    "error": {
+      "code": "handler_timeout",
+      "message": "Handler failed or completion is uncertain",
+      "completion": "unknown"
+    }
+  },
+  "reader_error": {
+    "healthy": false,
+    "phase": "backoff",
+    "error": "ReaderError: Reader exited with code 1; cursor was not advanced",
+    "failures": 1
+  },
+  "incompatible_update_error": "reader 'example.linked-http' has progress under another definition; run `tap reader replay example.linked-http` with the new binding, or remove /private/var/folders/rc/jrgt0w_x4bvc1hftg6x8g7sh0000gn/T/tap-linked-life-gzf1vyib/profile/state/readers/example.linked-http/checkpoint.json, then enable/update again \u2014 checkpoint was not reset",
+  "incompatible_rollback_error": "reader 'example.linked-http' has progress under another definition; run `tap reader replay example.linked-http` with the new binding, or remove /private/var/folders/rc/jrgt0w_x4bvc1hftg6x8g7sh0000gn/T/tap-linked-life-gzf1vyib/profile/state/readers/example.linked-http/checkpoint.json, then enable/update again \u2014 checkpoint was not reset",
+  "uninstall": {
+    "id": "example.linked-http",
+    "removed_versions": [
+      "0.1.0",
+      "0.1.1",
+      "0.2.0"
+    ],
+    "code_removed": true,
+    "shared_resources_retained": true,
+    "state_retained": true,
+    "data_retained": true,
+    "logs_retained": true
+  },
+  "steps": {
+    "update_rollback_before_progress": true,
+    "handler_timeout": true,
+    "reader_error_visible": true,
+    "incompatible_update_refused": true,
+    "selected_unchanged": true,
+    "checkpoint_unchanged": true,
+    "incompatible_rollback_refused": true,
+    "bindings_removed": true,
+    "uninstall_removed_code": true,
+    "data_retained": true
+  },
+  "scenario_failures": []
+}
