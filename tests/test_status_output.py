@@ -19,7 +19,7 @@ from tap_core.status_view import (project_status, public_status_result,
                                   load_material, observe)
 
 
-FIXTURES = Path(__file__).parents[1] / "contracts/status-result/v1/fixtures"
+FIXTURES = Path(__file__).parents[1] / "contracts/status-result/v2/fixtures"
 
 
 def snapshot(**changes):
@@ -27,7 +27,8 @@ def snapshot(**changes):
         "profile": "/fixture/profile", "routing": "system", "service_loaded": True,
         "pid": 123, "port_owned": True, "port_open": True,
         "network_recovery_pending": False, "system_proxy_verified": False,
-        "inspection_errors": {}, "capture": {"healthy": True},
+        "inspection_errors": {},
+        "capture": {"available": True, "current_process": True, "healthy": True},
         "bridge": {"healthy": True}, "components": {"healthy": True},
     }
     value.update(changes)
@@ -95,6 +96,35 @@ class StatusContractTests(unittest.TestCase):
                 self.assertEqual(states(snapshot(**{field: None, "inspection_errors": {field: "denied"}}))["routing"],
                                  ("unknown", "inspection_incomplete"))
 
+    def test_capture_state_matrix(self):
+        cases = [
+            ({"available": True, "current_process": True, "healthy": True},
+             ("ready", "current_writer_healthy")),
+            ({"available": False, "current_process": False, "healthy": False},
+             ("absent", "health_record_absent")),
+            ({"available": True, "current_process": False, "healthy": False},
+             ("stale", "health_record_not_current")),
+            ({"available": True, "current_process": True, "healthy": False},
+             ("degraded", "current_writer_unhealthy")),
+            ({"available": True, "current_process": False, "healthy": True},
+             ("unknown", "inconsistent_capture_observations")),
+        ]
+        for capture, expected in cases:
+            with self.subTest(capture=capture):
+                self.assertEqual(states(snapshot(capture=capture))["capture"], expected)
+        unknown = states(snapshot(
+            capture={"available": None, "current_process": None, "healthy": None},
+            inspection_errors={"capture": "denied"}))
+        self.assertEqual(unknown["capture"], ("unknown", "inspection_incomplete"))
+
+    def test_capture_meaning_preserves_all_three_writer_observations(self):
+        projection = project_status(public_status_result(snapshot()))
+        meaning = next(atom for atom in projection.meanings if atom.arguments[0] == "capture")
+        candidate = projection.provenance[meaning].warrants[0]
+        warrants = projection.provenance[candidate].warrants
+        self.assertEqual({atom.arguments[1] for atom in warrants},
+                         {"available", "current_process", "healthy"})
+
     def test_unknown_is_not_stopped_and_drift_is_not_direct(self):
         unknown = states(snapshot(service_loaded=None, inspection_errors={"service_loaded": "denied"}))
         drift = states(snapshot(network_recovery_pending=True, system_proxy_verified=False))
@@ -144,7 +174,7 @@ class StatusContractTests(unittest.TestCase):
         projection = project_status(public_status_result(raw))
         self.assertFalse(any(atom.arguments[:2] == ("status", "traffic")
                              for atom in projection.meanings))
-        self.assertEqual(render_terminal(projection.document).count("\n"), 1)
+        self.assertEqual(render_terminal(projection.document).count("\n"), 2)
 
     def test_absent_field_is_not_observed_instead_of_known_null(self):
         raw = snapshot()
@@ -217,9 +247,10 @@ class ProjectionKernelTests(unittest.TestCase):
     def test_real_nested_traversal_and_explicit_omission(self):
         projection = project_status(public_status_result(snapshot()))
         result = render_terminal_result(projection.document, 24)
-        self.assertEqual(result.text, "tap           ● up\nbrowser/apps  ○ direct")
+        self.assertEqual(result.text,
+                         "tap           ● up\nbrowser/apps  ○ direct\ncapture       ● ready")
         self.assertEqual([item["slot"] for item in result.omissions],
-                         ["runtime-attachment", "routing-attachment"])
+                         ["runtime-attachment", "routing-attachment", "capture-attachment"])
         self.assertTrue(all(item["reason"] == "does-not-fit" for item in result.omissions))
         by_id = {slot.identifier: slot for slot in projection.document.slots}
         self.assertEqual(by_id["runtime-detail"].parent, "runtime-attachment")
@@ -299,14 +330,16 @@ class ProjectionKernelTests(unittest.TestCase):
 
 class MaterialCompositionTests(unittest.TestCase):
     def copied_material(self):
-        directory = Path(tempfile.mkdtemp()) / "status_v1"
-        shutil.copytree(Path(__file__).parents[1] / "tap_core/data/status_v1", directory)
+        directory = Path(tempfile.mkdtemp()) / "status"
+        shutil.copytree(Path(__file__).parents[1] / "tap_core/data/status", directory)
         self.addCleanup(shutil.rmtree, directory.parent)
         return directory
 
     def test_fragments_have_distinct_section_and_assembly_owners(self):
         material = load_material()
-        self.assertEqual(set(material["observations"]), {"runtime", "routing"})
+        self.assertEqual(material["schema"], "tap.internal-status-material/v1")
+        self.assertEqual(material["result_schema"], "tap.status-result/v2")
+        self.assertEqual(set(material["observations"]), {"runtime", "routing", "capture"})
         self.assertTrue(material["composition_rules"])
         self.assertEqual(material["document_root"], "status")
 
@@ -351,10 +384,11 @@ class StatusCliTests(unittest.TestCase):
         raw = snapshot()
         code, semantic, _ = self.invoke(raw, "--output", "semantic-json")
         self.assertEqual(code, 0)
-        self.assertEqual(json.loads(semantic)["schema"], "tap.status-result/v1")
+        self.assertEqual(json.loads(semantic)["schema"], "tap.status-result/v2")
         code, narrow, _ = self.invoke(raw, "--output", "terminal", "--width", "24", "--color", "never")
         self.assertEqual(code, 0)
-        self.assertEqual(narrow, "tap           ● up\nbrowser/apps  ○ direct\n")
+        self.assertEqual(narrow,
+                         "tap           ● up\nbrowser/apps  ○ direct\ncapture       ● ready\n")
         code, colored, _ = self.invoke(raw, "--output", "terminal", "--color", "always")
         self.assertEqual(code, 0)
         self.assertIn("\x1b[32m", colored)

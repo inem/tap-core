@@ -1,0 +1,168 @@
+{
+  "schema": "tap.internal-status-material-fragment/v1",
+  "id": "capture",
+  "observations": {
+    "capture": [
+      {"name":"available","source":{"path":["capture","available"],"error":"capture"}},
+      {"name":"current_process","source":{"path":["capture","current_process"],"error":"capture"}},
+      {"name":"healthy","source":{"path":["capture","healthy"],"error":"capture"}}
+    ]
+  },
+  "semantic_rules": [
+    {
+      "id": "capture-00-fallback",
+      "when": [
+        ["observation","capture","available","$_","$_"],
+        ["observation","capture","current_process","$_","$_"],
+        ["observation","capture","healthy","$_","$_"]
+      ],
+      "emit": [
+        ["candidate","capture","state","unknown",0,"inconsistent_capture_observations",[]]
+      ]
+    },
+    {
+      "id": "capture-10-ready",
+      "when": [
+        ["observation","capture","available","known",true],
+        ["observation","capture","current_process","known",true],
+        ["observation","capture","healthy","known",true]
+      ],
+      "emit": [
+        ["candidate","capture","state","ready",100,"current_writer_healthy",[]]
+      ]
+    },
+    {
+      "id": "capture-20-absent",
+      "when": [
+        ["observation","capture","available","known",false],
+        ["observation","capture","current_process","known",false],
+        ["observation","capture","healthy","known",false]
+      ],
+      "emit": [
+        ["candidate","capture","state","absent",100,"health_record_absent",[]]
+      ]
+    },
+    {
+      "id": "capture-30-stale",
+      "when": [
+        ["observation","capture","available","known",true],
+        ["observation","capture","current_process","known",false],
+        ["observation","capture","healthy","known",false]
+      ],
+      "emit": [
+        ["candidate","capture","state","stale",100,"health_record_not_current",[]]
+      ]
+    },
+    {
+      "id": "capture-40-degraded",
+      "when": [
+        ["observation","capture","available","known",true],
+        ["observation","capture","current_process","known",true],
+        ["observation","capture","healthy","known",false]
+      ],
+      "emit": [
+        ["candidate","capture","state","degraded",100,"current_writer_unhealthy",[]]
+      ]
+    },
+    {
+      "id": "capture-90-inspection-0",
+      "when": [
+        ["observation","capture","available","unknown","$_"],
+        ["observation","capture","current_process","$_","$_"],
+        ["observation","capture","healthy","$_","$_"]
+      ],
+      "emit": [
+        ["candidate","capture","state","unknown",200,"inspection_incomplete",[]]
+      ]
+    },
+    {
+      "id": "capture-90-inspection-1",
+      "when": [
+        ["observation","capture","current_process","unknown","$_"],
+        ["observation","capture","available","$_","$_"],
+        ["observation","capture","healthy","$_","$_"]
+      ],
+      "emit": [
+        ["candidate","capture","state","unknown",200,"inspection_incomplete",[]]
+      ]
+    },
+    {
+      "id": "capture-90-inspection-2",
+      "when": [
+        ["observation","capture","healthy","unknown","$_"],
+        ["observation","capture","available","$_","$_"],
+        ["observation","capture","current_process","$_","$_"]
+      ],
+      "emit": [
+        ["candidate","capture","state","unknown",200,"inspection_incomplete",[]]
+      ]
+    }
+  ],
+  "presentation_rules": [
+    {
+      "id": "presentation-capture-00-ready",
+      "when": [["meaning","capture","state","ready","$reason","$attrs"]],
+      "emit": [
+        ["slot","capture-line","status",2,"group","line",false,"",null,[["meaning","capture","state","ready","$reason","$attrs"]]],
+        ["slot","capture-label","capture-line",0,"leaf","label",false,"capture       ",null,[["meaning","capture","state","ready","$reason","$attrs"]]],
+        ["slot","capture-indicator","capture-line",1,"leaf","indicator",false,"● ","positive",[["meaning","capture","state","ready","$reason","$attrs"]]],
+        ["slot","capture-value","capture-line",2,"leaf","value",false,"ready","positive",[["meaning","capture","state","ready","$reason","$attrs"]]],
+        ["slot","capture-attachment","capture-line",3,"group","support",true,"",null,[["meaning","capture","state","ready","$reason","$attrs"]]],
+        ["slot","capture-separator","capture-attachment",0,"leaf","separator",false," · ",null,[["meaning","capture","state","ready","$reason","$attrs"]]],
+        ["slot","capture-detail","capture-attachment",1,"leaf","detail",false,"writer healthy",null,[["meaning","capture","state","ready","$reason","$attrs"]]]
+      ]
+    },
+    {
+      "id": "presentation-capture-10-absent",
+      "when": [["meaning","capture","state","absent","$reason","$attrs"]],
+      "emit": [
+        ["slot","capture-line","status",2,"group","line",false,"",null,[["meaning","capture","state","absent","$reason","$attrs"]]],
+        ["slot","capture-label","capture-line",0,"leaf","label",false,"capture       ",null,[["meaning","capture","state","absent","$reason","$attrs"]]],
+        ["slot","capture-indicator","capture-line",1,"leaf","indicator",false,"○ ","muted",[["meaning","capture","state","absent","$reason","$attrs"]]],
+        ["slot","capture-value","capture-line",2,"leaf","value",false,"absent","muted",[["meaning","capture","state","absent","$reason","$attrs"]]],
+        ["slot","capture-attachment","capture-line",3,"group","support",true,"",null,[["meaning","capture","state","absent","$reason","$attrs"]]],
+        ["slot","capture-separator","capture-attachment",0,"leaf","separator",false," · ",null,[["meaning","capture","state","absent","$reason","$attrs"]]],
+        ["slot","capture-detail","capture-attachment",1,"leaf","detail",false,"no health record",null,[["meaning","capture","state","absent","$reason","$attrs"]]]
+      ]
+    },
+    {
+      "id": "presentation-capture-20-stale",
+      "when": [["meaning","capture","state","stale","$reason","$attrs"]],
+      "emit": [
+        ["slot","capture-line","status",2,"group","line",false,"",null,[["meaning","capture","state","stale","$reason","$attrs"]]],
+        ["slot","capture-label","capture-line",0,"leaf","label",false,"capture       ",null,[["meaning","capture","state","stale","$reason","$attrs"]]],
+        ["slot","capture-indicator","capture-line",1,"leaf","indicator",false,"⚠ ","warning",[["meaning","capture","state","stale","$reason","$attrs"]]],
+        ["slot","capture-value","capture-line",2,"leaf","value",false,"stale","warning",[["meaning","capture","state","stale","$reason","$attrs"]]],
+        ["slot","capture-attachment","capture-line",3,"group","support",true,"",null,[["meaning","capture","state","stale","$reason","$attrs"]]],
+        ["slot","capture-separator","capture-attachment",0,"leaf","separator",false," · ",null,[["meaning","capture","state","stale","$reason","$attrs"]]],
+        ["slot","capture-detail","capture-attachment",1,"leaf","detail",false,"health record is not current",null,[["meaning","capture","state","stale","$reason","$attrs"]]]
+      ]
+    },
+    {
+      "id": "presentation-capture-30-degraded",
+      "when": [["meaning","capture","state","degraded","$reason","$attrs"]],
+      "emit": [
+        ["slot","capture-line","status",2,"group","line",false,"",null,[["meaning","capture","state","degraded","$reason","$attrs"]]],
+        ["slot","capture-label","capture-line",0,"leaf","label",false,"capture       ",null,[["meaning","capture","state","degraded","$reason","$attrs"]]],
+        ["slot","capture-indicator","capture-line",1,"leaf","indicator",false,"✗ ","negative",[["meaning","capture","state","degraded","$reason","$attrs"]]],
+        ["slot","capture-value","capture-line",2,"leaf","value",false,"degraded","negative",[["meaning","capture","state","degraded","$reason","$attrs"]]],
+        ["slot","capture-attachment","capture-line",3,"group","support",true,"",null,[["meaning","capture","state","degraded","$reason","$attrs"]]],
+        ["slot","capture-separator","capture-attachment",0,"leaf","separator",false," · ",null,[["meaning","capture","state","degraded","$reason","$attrs"]]],
+        ["slot","capture-detail","capture-attachment",1,"leaf","detail",false,"writer unhealthy",null,[["meaning","capture","state","degraded","$reason","$attrs"]]]
+      ]
+    },
+    {
+      "id": "presentation-capture-40-unknown",
+      "when": [["meaning","capture","state","unknown","$reason","$attrs"]],
+      "emit": [
+        ["slot","capture-line","status",2,"group","line",false,"",null,[["meaning","capture","state","unknown","$reason","$attrs"]]],
+        ["slot","capture-label","capture-line",0,"leaf","label",false,"capture       ",null,[["meaning","capture","state","unknown","$reason","$attrs"]]],
+        ["slot","capture-indicator","capture-line",1,"leaf","indicator",false,"? ","warning",[["meaning","capture","state","unknown","$reason","$attrs"]]],
+        ["slot","capture-value","capture-line",2,"leaf","value",false,"unknown","warning",[["meaning","capture","state","unknown","$reason","$attrs"]]],
+        ["slot","capture-attachment","capture-line",3,"group","support",true,"",null,[["meaning","capture","state","unknown","$reason","$attrs"]]],
+        ["slot","capture-separator","capture-attachment",0,"leaf","separator",false," · ",null,[["meaning","capture","state","unknown","$reason","$attrs"]]],
+        ["slot","capture-detail","capture-attachment",1,"leaf","detail",false,"inspection incomplete",null,[["meaning","capture","state","unknown","$reason","$attrs"]]]
+      ]
+    }
+  ]
+}

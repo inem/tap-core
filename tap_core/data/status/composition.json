@@ -50,7 +50,7 @@
         ["meaning","status","traffic","broken","$reason","$attrs"]
       ],
       "emit": [
-        ["slot","traffic-alert-line","status",2,"group","line",false,"",null,[["meaning","status","traffic","broken","$reason","$attrs"]]],
+        ["slot","traffic-alert-line","status",3,"group","line",false,"",null,[["meaning","status","traffic","broken","$reason","$attrs"]]],
         ["slot","traffic-alert-indicator","traffic-alert-line",0,"leaf","indicator",false,"⚠  ","warning",[["meaning","status","traffic","broken","$reason","$attrs"]]],
         ["slot","traffic-alert-value","traffic-alert-line",1,"leaf","value",false,"traffic broken — system proxy points at unavailable TAP","warning",[["meaning","status","traffic","broken","$reason","$attrs"]]]
       ]
@@ -61,7 +61,7 @@
         ["meaning","status","traffic","unowned","$reason","$attrs"]
       ],
       "emit": [
-        ["slot","traffic-alert-line","status",2,"group","line",false,"",null,[["meaning","status","traffic","unowned","$reason","$attrs"]]],
+        ["slot","traffic-alert-line","status",3,"group","line",false,"",null,[["meaning","status","traffic","unowned","$reason","$attrs"]]],
         ["slot","traffic-alert-indicator","traffic-alert-line",0,"leaf","indicator",false,"⚠  ","warning",[["meaning","status","traffic","unowned","$reason","$attrs"]]],
         ["slot","traffic-alert-value","traffic-alert-line",1,"leaf","value",false,"traffic routed to unowned listener","warning",[["meaning","status","traffic","unowned","$reason","$attrs"]]]
       ]
@@ -72,7 +72,7 @@
         ["meaning","status","traffic","unverified","$reason","$attrs"]
       ],
       "emit": [
-        ["slot","traffic-alert-line","status",2,"group","line",false,"",null,[["meaning","status","traffic","unverified","$reason","$attrs"]]],
+        ["slot","traffic-alert-line","status",3,"group","line",false,"",null,[["meaning","status","traffic","unverified","$reason","$attrs"]]],
         ["slot","traffic-alert-indicator","traffic-alert-line",0,"leaf","indicator",false,"?  ","warning",[["meaning","status","traffic","unverified","$reason","$attrs"]]],
         ["slot","traffic-alert-value","traffic-alert-line",1,"leaf","value",false,"capture unverified — system proxy remains active","warning",[["meaning","status","traffic","unverified","$reason","$attrs"]]]
       ]

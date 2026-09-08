@@ -8,7 +8,7 @@ from .projection import (Atom, Derivation, ProjectionError, document_from_claims
                          validate_conservation)
 
 
-MATERIAL = Path(__file__).with_name("data") / "status_v1" / "manifest.json"
+MATERIAL = Path(__file__).with_name("data") / "status" / "manifest.json"
 _FRAGMENT_SCHEMA = "tap.internal-status-material-fragment/v1"
 _MATERIAL_KEYS = {"schema", "result_schema", "observations", "semantic_rules",
                   "composition_rules", "presentation_rules", "document_root",

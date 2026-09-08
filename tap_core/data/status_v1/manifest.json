@@ -1,5 +1,0 @@
-{
-  "schema": "tap.internal-status-material-manifest/v1",
-  "result_schema": "tap.status-result/v1",
-  "fragments": ["runtime.json","routing.json","composition.json","document.json"]
-}
