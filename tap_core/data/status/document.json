@@ -7,11 +7,12 @@
       "id": "presentation-00-document",
       "when": [
         ["meaning","runtime","state","$runtime-state","$runtime-reason","$runtime-attrs"],
-        ["meaning","routing","state","$routing-state","$routing-reason","$routing-attrs"]
+        ["meaning","routing","state","$routing-state","$routing-reason","$routing-attrs"],
+        ["meaning","capture","state","$capture-state","$capture-reason","$capture-attrs"]
       ],
       "emit": [
-        ["projection","status-document","$runtime-state","$routing-state"],
-        ["slot","status",null,0,"group","document",false,"",null,[["projection","status-document","$runtime-state","$routing-state"]]]
+        ["projection","status-document","$runtime-state","$routing-state","$capture-state"],
+        ["slot","status",null,0,"group","document",false,"",null,[["projection","status-document","$runtime-state","$routing-state","$capture-state"]]]
       ]
     }
   ],

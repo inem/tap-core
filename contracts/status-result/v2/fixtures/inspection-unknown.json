@@ -1,0 +1,75 @@
+{
+  "raw_snapshot": {
+    "profile": "/fixture/profile",
+    "routing": "system",
+    "service_loaded": null,
+    "pid": 123,
+    "port_owned": true,
+    "port_open": true,
+    "network_recovery_pending": false,
+    "system_proxy_verified": false,
+    "inspection_errors": {
+      "service_loaded": "fixture inspection denied"
+    },
+    "capture": {
+      "available": true,
+      "current_process": true,
+      "healthy": true
+    }
+  },
+  "semantic_result": {
+    "schema": "tap.status-result/v2",
+    "profile": "/fixture/profile",
+    "runtime": {
+      "service_loaded": {
+        "knowledge": "unknown",
+        "reason": "inspection_failed",
+        "message": "fixture inspection denied"
+      },
+      "pid": {
+        "knowledge": "known",
+        "value": 123
+      },
+      "port_owned": {
+        "knowledge": "known",
+        "value": true
+      },
+      "port_open": {
+        "knowledge": "known",
+        "value": true
+      }
+    },
+    "routing": {
+      "routing": {
+        "knowledge": "known",
+        "value": "system"
+      },
+      "network_recovery_pending": {
+        "knowledge": "known",
+        "value": false
+      },
+      "system_proxy_verified": {
+        "knowledge": "known",
+        "value": false
+      }
+    },
+    "capture": {
+      "available": {
+        "knowledge": "known",
+        "value": true
+      },
+      "current_process": {
+        "knowledge": "known",
+        "value": true
+      },
+      "healthy": {
+        "knowledge": "known",
+        "value": true
+      }
+    }
+  },
+  "terminal": {
+    "width_80": "tap           ? unknown · inspection incomplete\nbrowser/apps  ○ direct   (tap on)\ncapture       ● ready · writer healthy",
+    "width_24": "tap           ? unknown\nbrowser/apps  ○ direct\ncapture       ● ready"
+  }
+}

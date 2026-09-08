@@ -1,0 +1,72 @@
+{
+  "raw_snapshot": {
+    "profile": "/fixture/profile",
+    "routing": "system",
+    "service_loaded": true,
+    "pid": 123,
+    "port_owned": true,
+    "port_open": true,
+    "network_recovery_pending": true,
+    "system_proxy_verified": false,
+    "inspection_errors": {},
+    "capture": {
+      "available": true,
+      "current_process": true,
+      "healthy": true
+    }
+  },
+  "semantic_result": {
+    "schema": "tap.status-result/v2",
+    "profile": "/fixture/profile",
+    "runtime": {
+      "service_loaded": {
+        "knowledge": "known",
+        "value": true
+      },
+      "pid": {
+        "knowledge": "known",
+        "value": 123
+      },
+      "port_owned": {
+        "knowledge": "known",
+        "value": true
+      },
+      "port_open": {
+        "knowledge": "known",
+        "value": true
+      }
+    },
+    "routing": {
+      "routing": {
+        "knowledge": "known",
+        "value": "system"
+      },
+      "network_recovery_pending": {
+        "knowledge": "known",
+        "value": true
+      },
+      "system_proxy_verified": {
+        "knowledge": "known",
+        "value": false
+      }
+    },
+    "capture": {
+      "available": {
+        "knowledge": "known",
+        "value": true
+      },
+      "current_process": {
+        "knowledge": "known",
+        "value": true
+      },
+      "healthy": {
+        "knowledge": "known",
+        "value": true
+      }
+    }
+  },
+  "terminal": {
+    "width_80": "tap           ● up · PID 123\nbrowser/apps  ⚠ routing drift   (tap off)\ncapture       ● ready · writer healthy",
+    "width_24_error": "required content exceeds width 24: routing-line"
+  }
+}
