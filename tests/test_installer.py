@@ -462,6 +462,22 @@ class InstallerTests(unittest.TestCase):
             self.assertTrue(ownership._ensure_profile_stopped(self.root / 'profile'))
         self.assertEqual(calls, ['off'])
 
+    def test_pre_hubless_checkout_still_detects_hub_busy(self):
+        """Missing needs_hub (pre-hubless A) must fall back to Hub-required."""
+        import builtins
+        real = builtins.__import__
+
+        def hooked(name, globals=None, locals=None, fromlist=(), level=0):
+            if fromlist and 'needs_hub' in fromlist:
+                raise ImportError('pre-hubless checkout')
+            return real(name, globals, locals, fromlist, level)
+
+        with patch('builtins.__import__', hooked):
+            self.assertTrue(ownership._components_need_hub(
+                {'version': 1, 'python': sys.executable, 'bun': sys.executable,
+                 'readers': {}, 'handlers': {}},
+                None))
+
     def test_restore_path_leaves_unreplaced_runtime_alone(self):
         destination = self.parent / 'python'
         destination.mkdir()

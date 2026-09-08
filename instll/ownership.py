@@ -144,12 +144,20 @@ def _profile_processes_busy(adapter, profile):
     if job is not None:
         if adapter.service_loaded(job):
             busy.append('components service')
-        from tap_core.components import needs_hub
         from tap_core.pack_store import PackStore
         effective = PackStore(profile.root).effective_components(profile.components)
-        if needs_hub(effective, profile.bridge) and adapter.port_open(job):
+        if _components_need_hub(effective, profile.bridge) and adapter.port_open(job):
             busy.append('hub port')
     return busy
+
+
+def _components_need_hub(effective, bridge):
+    """Hub liveness for busy checks; tolerate pre-hubless install trees."""
+    try:
+        from tap_core.components import needs_hub
+        return needs_hub(effective, bridge)
+    except ImportError:
+        return True
 
 
 def _ensure_profile_stopped(profile_root):
@@ -446,7 +454,11 @@ def apply_checkout(root, new_checkout, python, backend, bun, ref, arch, hub_port
         managed_backup = root / ('managed.prev.' + str(os.getpid()))
         require(not managed_backup.exists(), 'Leftover managed backup present; inspect before update')
 
+    # Prefer the target checkout on sys.path: apply runs from B's ownership helper
+    # while the live install still has A's tree. A may lack symbols B needs
+    # (e.g. needs_hub) during stop/inspect before the swap.
     sys.path.insert(0, str(checkout))
+    sys.path.insert(0, str(new_checkout))
     from tap_core.runtime import profile_lock
 
     def write_managed(target_checkout, python_path, bun_path):
