@@ -1,8 +1,10 @@
 """Policy/credential/body safety at native hook boundaries, no network mutation."""
+import hashlib
 import json
 import os
 from pathlib import Path
 import runpy
+import shutil
 from types import SimpleNamespace
 import tempfile
 import time
@@ -14,6 +16,10 @@ from tap_core.runtime import Profile, MacOS, TapError
 from tap_core.cli import main, bridge_status, doctor
 
 TOKEN = 'a' * 48
+
+
+def digest(body):
+    return hashlib.sha256(body if isinstance(body, bytes) else body.encode()).hexdigest()
 
 
 def config(**extra):
@@ -200,7 +206,8 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(f.response.body, before)
 
     def test_serves_configured_asset_without_forwarding_to_hub(self):
-        f = flow('/__tap/probe/core/0.js?token=' + TOKEN)
+        asset = digest(b'window.fixture = true;')
+        f = flow(f'/__tap/probe/core/{asset}.js?token=' + TOKEN)
         self.bridge.requestheaders(f)
         self.assertEqual(f.response.content, b'window.fixture = true;')
         self.assertEqual(f.request.host, 'example.test')
@@ -213,13 +220,13 @@ class BridgeTests(unittest.TestCase):
         bridge = TestBridge(effective, TOKEN, [b'one', b'two'])
         first = flow(host='example.test', response=Response())
         bridge.response(first)
-        self.assertIn('core/0.js', first.response.body)
-        self.assertNotIn('core/1.js', first.response.body)
+        self.assertIn(f'core/{digest(b"one")}.js', first.response.body)
+        self.assertNotIn(f'core/{digest(b"two")}.js', first.response.body)
         second = flow(host='third.test', response=Response())
         bridge.response(second)
-        self.assertNotIn('core/0.js', second.response.body)
-        self.assertIn('core/1.js', second.response.body)
-        denied_asset = flow('/__tap/probe/core/1.js?token=' + TOKEN, host='example.test')
+        self.assertNotIn(f'core/{digest(b"one")}.js', second.response.body)
+        self.assertIn(f'core/{digest(b"two")}.js', second.response.body)
+        denied_asset = flow(f'/__tap/probe/core/{digest(b"two")}.js?token=' + TOKEN, host='example.test')
         bridge.requestheaders(denied_asset)
         self.assertEqual(denied_asset.response.status_code, 404)
 
@@ -231,7 +238,7 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(f.response.body, once)
         self.assertEqual(once.count('id="tap-probe-bootstrap"'), 1)
         self.assertEqual(once.count('nonce="YWJjZA=="'), 3)
-        self.assertLess(once.index('runtime.js?'), once.index('core/0.js?'))
+        self.assertLess(once.index('runtime.js?'), once.index(f'core/{digest(b"window.fixture = true;")}.js?'))
         self.assertNotIn('etag', f.response.headers)
         self.assertEqual(f.response.headers['cache-control'], 'no-store')
 
@@ -426,3 +433,255 @@ class BridgeTests(unittest.TestCase):
         with patch.object(MacOS, 'service_loaded', return_value=False):
             self.assertEqual(main(argv), 0)
         self.assertFalse(Profile.load(self.root).bridge['enabled'])
+
+    def test_content_addressed_asset_survives_plan_swap(self):
+        first = b'window.packA = true;'
+        second = b'window.packB = true;'
+        effective = config(allow_origins=['https://example.test', 'https://third.test'],
+                           exclude_origins=[], page_scripts=['/a.js', '/b.js'])
+        effective['page_script_origins'] = [['https://example.test'], ['https://third.test']]
+        bridge = TestBridge(effective, TOKEN, [first, second])
+        # Replace plan with only B for third.test; A retained for example.test only.
+        bridge.config = effective
+        bridge._publish_scripts([second], [['https://third.test']])
+        old = digest(first)
+        retained = flow(f'/__tap/probe/core/{old}.js?token=' + TOKEN, host='example.test')
+        bridge.requestheaders(retained)
+        self.assertEqual(retained.response.status_code, 200)
+        self.assertEqual(retained.response.content, first)
+        leaked = flow(f'/__tap/probe/core/{old}.js?token=' + TOKEN, host='third.test')
+        bridge.requestheaders(leaked)
+        self.assertEqual(leaked.response.status_code, 404)
+        fresh = flow(host='third.test', response=Response('<html><body>next</body></html>'))
+        bridge.response(fresh)
+        self.assertIn(f'core/{digest(second)}.js', fresh.response.body)
+        self.assertNotIn(f'core/{old}.js', fresh.response.body)
+
+    def test_identical_bytes_are_fetchable_for_each_granted_origin(self):
+        body = b'window.shared = true;'
+        effective = config(allow_origins=['https://example.test', 'https://third.test'],
+                           exclude_origins=[], page_scripts=['/one.js', '/two.js'])
+        effective['page_script_origins'] = [['https://example.test'], ['https://third.test']]
+        bridge = TestBridge(effective, TOKEN, [body, body])
+        self.assertEqual(bridge.script_digests[0], bridge.script_digests[1])
+        for host in ('example.test', 'third.test'):
+            with self.subTest(host=host):
+                page = flow(host=host, response=Response())
+                bridge.response(page)
+                self.assertIn(f'core/{digest(body)}.js', page.response.body)
+                asset = flow(f'/__tap/probe/core/{digest(body)}.js?token=' + TOKEN, host=host)
+                bridge.requestheaders(asset)
+                self.assertEqual(asset.response.status_code, 200)
+                self.assertEqual(asset.response.content, body)
+
+    def test_handler_pack_enable_while_running_rolls_back_registry(self):
+        import sys
+        from tap_core.pack_store import PackStore, build_artifact
+        linked = Path(__file__).resolve().parents[1] / 'fixtures/packs/installed-linked'
+        components = {
+            'version': 1, 'python': sys.executable, 'bun': '/usr/bin/true',
+            'readers': {}, 'handlers': {},
+        }
+        self.profile.bridge = config(allow_origins=[], exclude_origins=[], page_scripts=[])
+        self.profile.components = components
+        self.profile.save()
+        store = PackStore(self.root)
+        artifact = self.root / 'linked.tap-pack'
+        build_artifact(linked, artifact)
+        store.install(artifact)
+        argv = ['--profile', str(self.root), 'pack', 'enable', 'fixture.installed-linked',
+                '--version', '0.1.0',
+                '--grant-origin', 'https://fixture.example',
+                '--grant-capability', 'page.inject',
+                '--grant-capability', 'capture.read',
+                '--grant-capability', 'bridge.handle']
+        with patch.object(MacOS, 'service_loaded', side_effect=lambda target: True):
+            self.assertEqual(main(argv), 1)
+        record = store.load()['packs']['fixture.installed-linked']
+        self.assertFalse(record['enabled'])
+        projected = store.effective_components(components)
+        self.assertNotIn('fixture.installed-linked', projected['readers'])
+        self.assertNotIn('fixture.installed-linked', projected['handlers'])
+
+    def test_handler_pack_add_while_running_never_publishes_enabled_plan(self):
+        """First pack add must refuse before enabling; bridge must not observe the grant."""
+        import copy
+        import sys
+        from tap_core.pack_store import PackStore, build_artifact
+        linked = Path(__file__).resolve().parents[1] / 'fixtures/packs/installed-linked'
+        components = {
+            'version': 1, 'python': sys.executable, 'bun': '/usr/bin/true',
+            'readers': {}, 'handlers': {},
+        }
+        self.profile.bridge = config(allow_origins=[], exclude_origins=[], page_scripts=[])
+        self.profile.components = components
+        self.profile.save()
+        self.assertFalse((self.root / 'state/pack-registry.json').is_file())
+        artifact = self.root / 'linked.tap-pack'
+        build_artifact(linked, artifact)
+        bridge = Bridge()
+        with patch.dict(os.environ, {'TAP_CORE_PROFILE': str(self.root)}):
+            bridge.load(None)
+        self.assertFalse(bridge.allowed('https://fixture.example'))
+
+        published_enabled = []
+
+        def fake_add(profile_root, source, assume_yes=False, live=False):
+            store = PackStore(profile_root)
+            installed = store.install(artifact)
+            enabled = store.enable('fixture.installed-linked', '0.1.0',
+                                   origins=['https://fixture.example'],
+                                   capabilities=['page.inject', 'capture.read', 'bridge.handle'],
+                                   live=live)
+            return {**installed, **enabled, 'source': source}
+
+        original_save = PackStore.save
+
+        def save_and_refresh(store, value):
+            packs = value.get('packs') or {}
+            linked_record = packs.get('fixture.installed-linked')
+            if linked_record and linked_record.get('enabled'):
+                published_enabled.append(copy.deepcopy(linked_record))
+                original_save(store, value)
+                bridge._plan_checked_at = 0
+                bridge.refresh_plan(force=True)
+                return
+            return original_save(store, value)
+
+        argv = ['--profile', str(self.root), 'pack', 'add', 'owner/linked-http', '--yes']
+        with patch.object(MacOS, 'service_loaded', side_effect=lambda target: True), \
+             patch('tap_core.pack_add.add', side_effect=fake_add), \
+             patch.object(PackStore, 'save', save_and_refresh):
+            self.assertEqual(main(argv), 1)
+        self.assertEqual(published_enabled, [])
+        store = PackStore(self.root)
+        record = store.load()['packs']['fixture.installed-linked']
+        self.assertFalse(record['enabled'])
+        bridge._plan_checked_at = 0
+        bridge.refresh_plan(force=True)
+        self.assertFalse(bridge.allowed('https://fixture.example'))
+        projected = store.effective_components(components)
+        self.assertNotIn('fixture.installed-linked', projected['readers'])
+        self.assertNotIn('fixture.installed-linked', projected['handlers'])
+
+    def test_refused_handler_enable_never_observable_by_bridge_refresh(self):
+        import copy
+        import sys
+        from tap_core.pack_store import PackStore, build_artifact
+        linked = Path(__file__).resolve().parents[1] / 'fixtures/packs/installed-linked'
+        components = {
+            'version': 1, 'python': sys.executable, 'bun': '/usr/bin/true',
+            'readers': {}, 'handlers': {},
+        }
+        self.profile.bridge = config(allow_origins=[], exclude_origins=[], page_scripts=[])
+        self.profile.components = components
+        self.profile.save()
+        store = PackStore(self.root)
+        artifact = self.root / 'linked.tap-pack'
+        build_artifact(linked, artifact)
+        store.install(artifact)
+        bridge = Bridge()
+        with patch.dict(os.environ, {'TAP_CORE_PROFILE': str(self.root)}):
+            bridge.load(None)
+        self.assertFalse(bridge.allowed('https://fixture.example'))
+        published_enabled = []
+        original_save = PackStore.save
+
+        def save_and_refresh(store_self, value):
+            packs = value.get('packs') or {}
+            linked_record = packs.get('fixture.installed-linked')
+            if linked_record and linked_record.get('enabled'):
+                published_enabled.append(copy.deepcopy(linked_record))
+                original_save(store_self, value)
+                bridge._plan_checked_at = 0
+                bridge.refresh_plan(force=True)
+                return
+            return original_save(store_self, value)
+
+        argv = ['--profile', str(self.root), 'pack', 'enable', 'fixture.installed-linked',
+                '--version', '0.1.0',
+                '--grant-origin', 'https://fixture.example',
+                '--grant-capability', 'page.inject',
+                '--grant-capability', 'capture.read',
+                '--grant-capability', 'bridge.handle']
+        with patch.object(MacOS, 'service_loaded', side_effect=lambda target: True), \
+             patch.object(PackStore, 'save', save_and_refresh):
+            self.assertEqual(main(argv), 1)
+        self.assertEqual(published_enabled, [])
+        self.assertFalse(store.load()['packs']['fixture.installed-linked']['enabled'])
+        bridge._plan_checked_at = 0
+        bridge.refresh_plan(force=True)
+        self.assertFalse(bridge.allowed('https://fixture.example'))
+
+    def test_failed_plan_refresh_keeps_previous_assets(self):
+        script = self.root / 'page.js'
+        script.write_text('window.keep = true;\n')
+        self.profile.bridge = config(page_scripts=[str(script)],
+                                     allow_origins=['https://example.test'],
+                                     exclude_origins=[])
+        self.profile.save()
+        bridge = Bridge()
+        with patch.dict(os.environ, {'TAP_CORE_PROFILE': str(self.root)}):
+            bridge.load(None)
+        bridge.reply = TestBridge.reply.__get__(bridge, Bridge)
+        before = list(bridge.script_digests)
+        self.assertEqual(len(before), 1)
+        with patch('tap_core.bridge.effective_configuration', side_effect=ValueError('broken pack')):
+            bridge._plan_checked_at = 0
+            self.assertFalse(bridge.refresh_plan(force=True))
+        self.assertEqual(bridge.script_digests, before)
+        asset = flow(f'/__tap/probe/core/{before[0]}.js?token=' + bridge.token)
+        bridge.requestheaders(asset)
+        self.assertEqual(asset.response.status_code, 200)
+        self.assertEqual(asset.response.content, b'window.keep = true;\n')
+
+    def test_plan_refresh_picks_up_enabled_pack_without_reload(self):
+        from tap_core.pack_store import PackStore, build_artifact
+        source = Path(__file__).resolve().parents[1] / 'fixtures/packs/installed-page'
+        self.profile.bridge = config(allow_origins=[], exclude_origins=[], page_scripts=[])
+        self.profile.save()
+        store = PackStore(self.root)
+        artifact = self.root / 'page.tap-pack'
+        build_artifact(source, artifact)
+        store.install(artifact)
+        store.enable('fixture.installed-page', '0.1.0',
+                     origins=['https://fixture.example'], capabilities=['page.inject'])
+        bridge = Bridge()
+        with patch.dict(os.environ, {'TAP_CORE_PROFILE': str(self.root)}):
+            bridge.load(None)
+        bridge.reply = TestBridge.reply.__get__(bridge, Bridge)
+        first = flow(host='fixture.example', response=Response())
+        bridge.response(first)
+        self.assertIn('/__tap/probe/core/', first.response.body)
+        digests_v1 = list(bridge.script_digests)
+        self.assertTrue(digests_v1)
+
+        v2 = self.root / 'page-v2'
+        shutil.copytree(source, v2)
+        manifest = json.loads((v2 / 'pack.json').read_text())
+        manifest['version'] = '0.2.0'
+        with (v2 / 'feature.js').open('a') as handle:
+            handle.write('\nwindow.featureV2 = true;\n')
+        feature = next(resource for resource in manifest['resources']
+                       if resource['id'] == 'fixture.feature')
+        feature['version'] = '0.2.0'
+        feature['sha256'] = hashlib.sha256((v2 / 'feature.js').read_bytes()).hexdigest()
+        feature['source_revision'] = 'sha256:' + feature['sha256']
+        manifest['entrypoints']['page']['uses'][1]['version'] = '0.2.0'
+        (v2 / 'pack.json').write_text(json.dumps(manifest, indent=2) + '\n')
+        second = self.root / 'page-v2.tap-pack'
+        build_artifact(v2, second)
+        store.update(second)
+        bridge._plan_checked_at = 0
+        self.assertTrue(bridge.refresh_plan(force=True))
+        digests_v2 = list(bridge.script_digests)
+        self.assertNotEqual(digests_v1, digests_v2)
+        fresh = flow(host='fixture.example', response=Response('<html><body>v2</body></html>'))
+        bridge.response(fresh)
+        for old in digests_v1:
+            if old not in digests_v2:
+                self.assertNotIn(f'core/{old}.js', fresh.response.body)
+                retained = flow(f'/__tap/probe/core/{old}.js?token=' + bridge.token,
+                                host='fixture.example')
+                bridge.requestheaders(retained)
+                self.assertEqual(retained.response.status_code, 200)

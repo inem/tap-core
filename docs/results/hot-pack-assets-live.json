@@ -1,0 +1,85 @@
+{
+  "scope": "#10 slice 1 hot page assets: pack A\u2192B\u2192disable without proxy restart; new document + retained digest + shared bytes across origins; explicit loopback; no system proxy",
+  "commit": "8cd335c3e17f8d24d2cc53d50d1303d1dff7ce78",
+  "platform": {
+    "macOS": "15.6.1",
+    "architecture": "arm64",
+    "python": "3.9.6"
+  },
+  "backend": "Mitmproxy: 12.2.3 binary",
+  "playwright": "1.62.1",
+  "scenario_passed": true,
+  "cleanup_verified": true,
+  "steps": {
+    "install": "ok",
+    "on": "ok",
+    "proxy_pids": {
+      "before_update": 67798,
+      "after_update": 67798,
+      "after_disable": 67798
+    },
+    "v1_injection": true,
+    "identical_bytes_both_origins": true,
+    "browser_v1": {
+      "marker": "__tapHotV1",
+      "marker_true": true,
+      "markers_absent": false,
+      "scripts": [
+        "http://127.0.0.1:55515/__tap/probe/core/d2cec32985ed81c386b3dbb3c290607260b621d3a694004fdc27921e05d19860.js?token=085a7cd4f1f1a40f77e3ea3b27375f1e2ce7ff75bafc8658",
+        "http://127.0.0.1:55515/__tap/probe/core/3c382344c2eeec6f82b1143b8700b6b3aed22f9f658ff31fcf6532cf4f4e764d.js?token=085a7cd4f1f1a40f77e3ea3b27375f1e2ce7ff75bafc8658"
+      ],
+      "browser": "152.0.7977.76",
+      "origin": "http://127.0.0.1:55515"
+    },
+    "hot_update": {
+      "id": "tap.check.hot-page",
+      "version": "0.2.0",
+      "enabled": true,
+      "code": "/private/var/folders/rc/jrgt0w_x4bvc1hftg6x8g7sh0000gn/T/tap-hot-assets-qug7fozj/profile/packs/tap.check.hot-page/versions/0.2.0",
+      "applies": "immediately for new documents and retained content-addressed assets; open pages keep previously injected scripts until reload; reader/handler bindings still require profile on"
+    },
+    "v2_injection": true,
+    "plan_changed": true,
+    "retained_same_origin": true,
+    "retained_fetch_status": {
+      "same": 200,
+      "other_granted": 200
+    },
+    "browser_v2": {
+      "marker": "__tapHotV2",
+      "marker_true": true,
+      "markers_absent": false,
+      "scripts": [
+        "http://127.0.0.1:55515/__tap/probe/core/75102bb045a2a831c9cb2874db21128c35fbc32db17e99bb5cab0616ca3cf488.js?token=085a7cd4f1f1a40f77e3ea3b27375f1e2ce7ff75bafc8658",
+        "http://127.0.0.1:55515/__tap/probe/core/3c382344c2eeec6f82b1143b8700b6b3aed22f9f658ff31fcf6532cf4f4e764d.js?token=085a7cd4f1f1a40f77e3ea3b27375f1e2ce7ff75bafc8658"
+      ],
+      "browser": "152.0.7977.76",
+      "origin": "http://127.0.0.1:55515"
+    },
+    "hot_disable": {
+      "id": "tap.check.hot-page",
+      "version": "0.2.0",
+      "enabled": false,
+      "applies": "immediately for new documents and retained content-addressed assets; open pages keep previously injected scripts until reload; reader/handler bindings still require profile on"
+    },
+    "browser_disabled": {
+      "marker": "__tapHotV2",
+      "marker_true": false,
+      "markers_absent": true,
+      "scripts": [],
+      "browser": "152.0.7977.76",
+      "origin": "http://127.0.0.1:55515"
+    },
+    "disable_no_injection": true,
+    "proxy_pid_unchanged": true
+  },
+  "origins": [
+    "http://127.0.0.1:55515",
+    "http://127.0.0.1:55516"
+  ],
+  "browser": "152.0.7977.76",
+  "scenario_failures": [],
+  "system_settings_unchanged": true,
+  "cleanup_errors": [],
+  "temporary_profile_removed": true
+}

@@ -269,17 +269,19 @@ def main(argv=None):
                         root,
                         busy_message="A command from this profile is still running; "
                                      "wait before changing packs"):
-                    if profile is not None and (
-                            adapter.service_loaded(profile)
-                            or (profile.components is not None and adapter.service_loaded(Job(profile)))):
-                        raise TapError('Stop this profile with off before changing packs')
+                    # Reader/handler projection is refused before registry publish so a
+                    # concurrent bridge refresh cannot observe a rejected plan.
+                    live = (
+                        profile is not None
+                        and (adapter.service_loaded(profile)
+                             or (profile.components is not None and adapter.service_loaded(Job(profile)))))
                     if args.pack_action == 'add':
                         from .pack_add import add
-                        output = add(root, args.source, assume_yes=args.yes)
+                        output = add(root, args.source, assume_yes=args.yes, live=live)
                     elif args.pack_action == 'install':
                         output = store.install(args.artifact)
                     elif args.pack_action == 'update':
-                        output = store.update(args.artifact)
+                        output = store.update(args.artifact, live=live)
                     elif args.pack_action == 'enable':
                         from .bridge import read_json
                         config = read_json(args.config) if args.config else None
@@ -287,13 +289,19 @@ def main(argv=None):
                                               origins=args.grant_origin,
                                               capabilities=args.grant_capability,
                                               dependencies=_parse_dependency(args.dependency),
-                                              config=config)
+                                              config=config, live=live)
                     elif args.pack_action == 'rollback':
-                        output = store.rollback(args.id)
+                        output = store.rollback(args.id, live=live)
                     elif args.pack_action == 'disable':
-                        output = store.disable(args.id)
+                        output = store.disable(args.id, live=live)
                     else:
                         output = store.uninstall(args.id, args.version)
+                    if isinstance(output, dict) and 'applies' in output and live:
+                        output = dict(output)
+                        output['applies'] = (
+                            'immediately for new documents and retained content-addressed assets; '
+                            'open pages keep previously injected scripts until reload; '
+                            'reader/handler bindings still require profile on')
             print(json.dumps(output, indent=2))
             return 0
         if args.command == "install":

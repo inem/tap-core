@@ -97,8 +97,10 @@ rollback and offline startup cannot change when an upstream URL changes. The
 provider publishes the reusable UI/site adapter, each pack declares what it uses,
 and Core implements validation, storage, composition and origin-scoped delivery.
 
-Disable prevents injection after the next `off`/`on`. It cannot revoke JavaScript
-that already ran in an open document; reload that page. Installed readers and
+Disable prevents injection into **new** documents after the bridge refreshes its
+pack plan (about once per second while the proxy is running for page-only
+changes). It cannot revoke JavaScript that already ran in an open document;
+reload that page. Installed readers and
 handlers using `python-jsonl-v1` also bind to the existing managed host. Mutator
 activation and `browser-module-v1` remain unsupported.
 

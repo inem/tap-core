@@ -527,8 +527,20 @@ class PackStore:
             result["handlers"][name] = spec
         return result
 
+    def _refuse_live_component_change(self, before_registry, candidate):
+        """Refuse before save when a running profile would change reader/handler bindings."""
+        base = self._profile_components()
+        if base is None:
+            return
+        before = self._effective_components(before_registry, base)
+        after = self._effective_components(candidate, base)
+        if before != after:
+            raise PackError(
+                'Stop this profile with off before changing reader/handler packs; '
+                'page-only pack changes may apply while the proxy is running')
+
     def enable(self, pack_id, version=None, *, origins=(), capabilities=(), dependencies=None,
-               config=None):
+               config=None, live=False):
         registry = self.load()
         record = self._record(registry, pack_id)
         if version is None:
@@ -553,13 +565,26 @@ class PackStore:
         projected = self._effective_components(candidate, self._profile_components())
         if "reader" in manifest["entrypoints"] and projected is not None:
             self._refuse_incompatible_reader_progress(pack_id, projected["readers"][pack_id])
+        if live:
+            self._refuse_live_component_change(registry, candidate)
         self.save(candidate)
-        applies = ("immediately for new command invocations; service/page bindings apply next profile on"
-                   if "command" in manifest["entrypoints"] else "next profile on")
+        roles = set(manifest["entrypoints"])
+        if roles & {"reader", "handler"}:
+            applies = "next profile on"
+        elif "page" in roles:
+            applies = ("immediately for new documents without proxy restart; "
+                       "open pages keep previously injected scripts until reload")
+        elif "command" in roles:
+            applies = "immediately for new command invocations"
+        else:
+            applies = "next profile on"
+        if "command" in roles and "page" in roles and not (roles & {"reader", "handler"}):
+            applies = ("immediately for new command invocations and new documents without proxy restart; "
+                       "open pages keep previously injected scripts until reload")
         return {"id": pack_id, "version": version, "enabled": True,
                 "code": str(root), "applies": applies}
 
-    def update(self, artifact):
+    def update(self, artifact, *, live=False):
         before = self.load()
         installed = self.install(artifact)
         record = before["packs"].get(installed["id"])
@@ -567,10 +592,11 @@ class PackStore:
             grants = record["grants"]
             return self.enable(installed["id"], installed["version"],
                                origins=grants["origins"], capabilities=grants["capabilities"],
-                               dependencies=grants["dependencies"], config=record["config"])
+                               dependencies=grants["dependencies"], config=record["config"],
+                               live=live)
         return installed
 
-    def rollback(self, pack_id):
+    def rollback(self, pack_id, *, live=False):
         registry = self.load()
         record = self._record(registry, pack_id)
         require(record["enabled"], "rollback requires an enabled pack")
@@ -590,16 +616,32 @@ class PackStore:
         projected = self._effective_components(candidate, self._profile_components())
         if "reader" in manifest["entrypoints"] and projected is not None:
             self._refuse_incompatible_reader_progress(pack_id, projected["readers"][pack_id])
+        if live:
+            self._refuse_live_component_change(registry, candidate)
         self.save(candidate)
-        applies = ("immediately for new command invocations; service/page bindings apply next profile on"
-                   if "command" in manifest["entrypoints"] else "next profile on")
+        roles = set(manifest["entrypoints"])
+        if roles & {"reader", "handler"}:
+            applies = "next profile on"
+        elif "page" in roles:
+            applies = ("immediately for new documents without proxy restart; "
+                       "open pages keep previously injected scripts until reload")
+        elif "command" in roles:
+            applies = "immediately for new command invocations"
+        else:
+            applies = "next profile on"
+        if "command" in roles and "page" in roles and not (roles & {"reader", "handler"}):
+            applies = ("immediately for new command invocations and new documents without proxy restart; "
+                       "open pages keep previously injected scripts until reload")
         return {"id": pack_id, "version": version, "enabled": True,
                 "code": str(root), "applies": applies}
 
-    def disable(self, pack_id):
+    def disable(self, pack_id, *, live=False):
         registry = self.load()
+        before = json.loads(json.dumps(registry))
         record = self._record(registry, pack_id)
         record["enabled"] = False
+        if live:
+            self._refuse_live_component_change(before, registry)
         self.save(registry)
         return {"id": pack_id, "version": record["selected"], "enabled": False,
                 "applies": "immediately for command discovery; service/page bindings apply next profile on; "

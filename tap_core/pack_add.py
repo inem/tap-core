@@ -84,7 +84,8 @@ def _download(resolved, destination, opener):
         raise PackError(f"cannot download pack artifact: {error}") from error
 
 
-def add(profile_root, spec, *, assume_yes=False, opener=urlopen, input_fn=input, output_fn=print):
+def add(profile_root, spec, *, assume_yes=False, opener=urlopen, input_fn=input, output_fn=print,
+        live=False):
     resolved = resolve(spec, opener)
     with tempfile.TemporaryDirectory(prefix="tap-pack-add-") as directory:
         artifact = Path(directory) / "pack.tap-pack"
@@ -128,6 +129,6 @@ def add(profile_root, spec, *, assume_yes=False, opener=urlopen, input_fn=input,
         enabled = store.enable(manifest["id"], manifest["version"],
                                origins=manifest["access"]["origins"],
                                capabilities=manifest["access"]["capabilities"],
-                               dependencies=dependencies, config=saved_config)
+                               dependencies=dependencies, config=saved_config, live=live)
         return {**installed, **enabled, "source": resolved["source"],
                 "next": "tap " + " ".join(commands[0]["path"]) + " --help" if commands else None}
