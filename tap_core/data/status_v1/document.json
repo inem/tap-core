@@ -1,0 +1,19 @@
+{
+  "schema": "tap.internal-status-material-fragment/v1",
+  "id": "status-document",
+  "document_root": "status",
+  "presentation_rules": [
+    {
+      "id": "presentation-00-document",
+      "when": [
+        ["meaning","runtime","state","$runtime-state","$runtime-reason","$runtime-attrs"],
+        ["meaning","routing","state","$routing-state","$routing-reason","$routing-attrs"]
+      ],
+      "emit": [
+        ["projection","status-document","$runtime-state","$routing-state"],
+        ["slot","status",null,0,"group","document",false,"",null,[["projection","status-document","$runtime-state","$routing-state"]]]
+      ]
+    }
+  ],
+  "terminal_styles": {"positive":"\u001b[32m","negative":"\u001b[31m","warning":"\u001b[33m","muted":"\u001b[2m"}
+}

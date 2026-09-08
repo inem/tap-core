@@ -1,0 +1,81 @@
+{
+  "schema": "tap.internal-status-material-fragment/v1",
+  "id": "runtime-routing-composition",
+  "composition_rules": [
+    {
+      "id": "composition-traffic-10-stopped",
+      "when": [
+        ["meaning","runtime","state","stopped","$runtime-reason","$runtime-attrs"],
+        ["meaning","routing","state","capturing","$routing-reason","$routing-attrs"]
+      ],
+      "emit": [
+        ["candidate","status","traffic","broken",100,"owned_route_to_stopped_runtime",[]]
+      ]
+    },
+    {
+      "id": "composition-traffic-20-broken",
+      "when": [
+        ["meaning","runtime","state","broken","$runtime-reason","$runtime-attrs"],
+        ["meaning","routing","state","capturing","$routing-reason","$routing-attrs"]
+      ],
+      "emit": [
+        ["candidate","status","traffic","broken",100,"owned_route_to_broken_runtime",[]]
+      ]
+    },
+    {
+      "id": "composition-traffic-30-port-conflict",
+      "when": [
+        ["meaning","runtime","state","port-conflict","$runtime-reason","$runtime-attrs"],
+        ["meaning","routing","state","capturing","$routing-reason","$routing-attrs"]
+      ],
+      "emit": [
+        ["candidate","status","traffic","unowned",100,"owned_route_to_conflicting_listener",[]]
+      ]
+    },
+    {
+      "id": "composition-traffic-40-unknown",
+      "when": [
+        ["meaning","runtime","state","unknown","$runtime-reason","$runtime-attrs"],
+        ["meaning","routing","state","capturing","$routing-reason","$routing-attrs"]
+      ],
+      "emit": [
+        ["candidate","status","traffic","unverified",100,"owned_route_with_unknown_runtime",[]]
+      ]
+    }
+  ],
+  "presentation_rules": [
+    {
+      "id": "presentation-traffic-00-broken",
+      "when": [
+        ["meaning","status","traffic","broken","$reason","$attrs"]
+      ],
+      "emit": [
+        ["slot","traffic-alert-line","status",2,"group","line",false,"",null,[["meaning","status","traffic","broken","$reason","$attrs"]]],
+        ["slot","traffic-alert-indicator","traffic-alert-line",0,"leaf","indicator",false,"⚠  ","warning",[["meaning","status","traffic","broken","$reason","$attrs"]]],
+        ["slot","traffic-alert-value","traffic-alert-line",1,"leaf","value",false,"traffic broken — system proxy points at unavailable TAP","warning",[["meaning","status","traffic","broken","$reason","$attrs"]]]
+      ]
+    },
+    {
+      "id": "presentation-traffic-01-unowned",
+      "when": [
+        ["meaning","status","traffic","unowned","$reason","$attrs"]
+      ],
+      "emit": [
+        ["slot","traffic-alert-line","status",2,"group","line",false,"",null,[["meaning","status","traffic","unowned","$reason","$attrs"]]],
+        ["slot","traffic-alert-indicator","traffic-alert-line",0,"leaf","indicator",false,"⚠  ","warning",[["meaning","status","traffic","unowned","$reason","$attrs"]]],
+        ["slot","traffic-alert-value","traffic-alert-line",1,"leaf","value",false,"traffic routed to unowned listener","warning",[["meaning","status","traffic","unowned","$reason","$attrs"]]]
+      ]
+    },
+    {
+      "id": "presentation-traffic-02-unverified",
+      "when": [
+        ["meaning","status","traffic","unverified","$reason","$attrs"]
+      ],
+      "emit": [
+        ["slot","traffic-alert-line","status",2,"group","line",false,"",null,[["meaning","status","traffic","unverified","$reason","$attrs"]]],
+        ["slot","traffic-alert-indicator","traffic-alert-line",0,"leaf","indicator",false,"?  ","warning",[["meaning","status","traffic","unverified","$reason","$attrs"]]],
+        ["slot","traffic-alert-value","traffic-alert-line",1,"leaf","value",false,"capture unverified — system proxy remains active","warning",[["meaning","status","traffic","unverified","$reason","$attrs"]]]
+      ]
+    }
+  ]
+}

@@ -8,7 +8,11 @@ from .projection import (Atom, Derivation, ProjectionError, document_from_claims
                          validate_conservation)
 
 
-MATERIAL = Path(__file__).with_name("data") / "status_projection_v1.json"
+MATERIAL = Path(__file__).with_name("data") / "status_v1" / "manifest.json"
+_FRAGMENT_SCHEMA = "tap.internal-status-material-fragment/v1"
+_MATERIAL_KEYS = {"schema", "result_schema", "observations", "semantic_rules",
+                  "composition_rules", "presentation_rules", "document_root",
+                  "terminal_styles"}
 
 
 @dataclass(frozen=True)
@@ -19,15 +23,98 @@ class StatusProjection:
     provenance: dict
 
 
-def load_material(path=MATERIAL):
-    value = json.loads(path.read_text(encoding="utf-8"))
-    required = {"schema", "result_schema", "observations", "semantic_rules",
-                "presentation_rules", "document_root", "terminal_styles"}
-    if not isinstance(value, dict) or set(value) != required:
-        raise ProjectionError("invalid bundled status material")
-    if value["schema"] != "tap.internal-status-material/v1":
-        raise ProjectionError("unsupported bundled status material")
+def _read_object(path):
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise ProjectionError(f"cannot load status material {path.name}: {error}") from error
+    if not isinstance(value, dict):
+        raise ProjectionError(f"invalid status material object: {path.name}")
     return value
+
+
+def load_material(path=MATERIAL):
+    """Compose the internal status material from named, non-overlapping fragments."""
+    path = Path(path)
+    manifest = _read_object(path)
+    if (set(manifest) != {"schema", "result_schema", "fragments"}
+            or manifest.get("schema") != "tap.internal-status-material-manifest/v1"
+            or not isinstance(manifest.get("result_schema"), str)
+            or not isinstance(manifest.get("fragments"), list)
+            or not manifest["fragments"]):
+        raise ProjectionError("invalid bundled status material manifest")
+
+    material = {
+        "schema": "tap.internal-status-material/v1",
+        "result_schema": manifest["result_schema"],
+        "observations": {},
+        "semantic_rules": [],
+        "composition_rules": [],
+        "presentation_rules": [],
+        "document_root": None,
+        "terminal_styles": {},
+    }
+    fragment_ids = set()
+    rule_ids = set()
+    roots = []
+    allowed = {"schema", "id", "observations", "semantic_rules",
+               "composition_rules", "presentation_rules", "document_root",
+               "terminal_styles"}
+    for name in manifest["fragments"]:
+        relative = Path(name) if isinstance(name, str) else None
+        if relative is None or relative.name != name or relative.suffix != ".json":
+            raise ProjectionError(f"invalid status material fragment path: {name!r}")
+        fragment = _read_object(path.parent / relative)
+        if (not {"schema", "id"} <= set(fragment) or not set(fragment) <= allowed
+                or fragment.get("schema") != _FRAGMENT_SCHEMA
+                or not isinstance(fragment.get("id"), str)):
+            raise ProjectionError(f"invalid status material fragment: {name}")
+        if fragment["id"] in fragment_ids:
+            raise ProjectionError(f"duplicate status material fragment id: {fragment['id']}")
+        fragment_ids.add(fragment["id"])
+
+        observations = fragment.get("observations", {})
+        if not isinstance(observations, dict):
+            raise ProjectionError(f"invalid observations in fragment: {fragment['id']}")
+        overlap = set(material["observations"]) & set(observations)
+        if overlap:
+            raise ProjectionError(f"duplicate observation group: {sorted(overlap)[0]}")
+        material["observations"].update(observations)
+
+        for collection in ("semantic_rules", "composition_rules", "presentation_rules"):
+            rules = fragment.get(collection, [])
+            if not isinstance(rules, list):
+                raise ProjectionError(f"invalid {collection} in fragment: {fragment['id']}")
+            for rule in rules:
+                identifier = rule.get("id") if isinstance(rule, dict) else None
+                if not isinstance(identifier, str):
+                    raise ProjectionError(f"invalid rule in fragment: {fragment['id']}")
+                if identifier in rule_ids:
+                    raise ProjectionError(f"duplicate status material rule id: {identifier}")
+                rule_ids.add(identifier)
+            material[collection].extend(rules)
+
+        if "document_root" in fragment:
+            if not isinstance(fragment["document_root"], str):
+                raise ProjectionError(f"invalid document root in fragment: {fragment['id']}")
+            roots.append(fragment["document_root"])
+        styles = fragment.get("terminal_styles", {})
+        if not isinstance(styles, dict) or not all(isinstance(key, str) and isinstance(value, str)
+                                                  for key, value in styles.items()):
+            raise ProjectionError(f"invalid terminal styles in fragment: {fragment['id']}")
+        overlap = set(material["terminal_styles"]) & set(styles)
+        if overlap:
+            raise ProjectionError(f"duplicate terminal style: {sorted(overlap)[0]}")
+        material["terminal_styles"].update(styles)
+
+    if len(fragment_ids) != len(manifest["fragments"]):
+        raise ProjectionError("status material manifest repeats a fragment")
+    if len(roots) != 1:
+        raise ProjectionError("status material must have exactly one document root owner")
+    material["document_root"] = roots[0]
+    if set(material) != _MATERIAL_KEYS or not material["observations"]:
+        raise ProjectionError("invalid composed status material")
+    return material
 
 
 def _observation(snapshot, raw_name):
@@ -89,10 +176,12 @@ def project_status(result, material=None):
     material = load_material() if material is None else material
     validate_status_result(result, material)
     semantic = evaluate_rules(_facts(result), material["semantic_rules"])
-    selected = select_candidates(semantic)
+    section_selected = select_candidates(semantic)
+    composed = evaluate_rules({**semantic, **section_selected}, material["composition_rules"])
+    selected = select_candidates(composed)
     meanings = tuple(sorted((atom for atom in selected if atom.relation == "meaning"),
                             key=Atom.identifier))
-    interpreted = {**semantic, **selected}
+    interpreted = {**composed, **selected}
     presented = evaluate_rules(interpreted, material["presentation_rules"])
     document = document_from_claims(presented, material["document_root"])
     validate_conservation(presented, meanings, document, "supplied-status-result")
