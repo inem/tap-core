@@ -112,13 +112,65 @@ The installer prints these hints itself. `doctor` reports `sudoers.ready` for sy
 
 ## Failure and ownership contract
 
-A repeated install **refuses before downloads or replacement**. It is not an update command. Choose a new `TAP_ROOT` and free `TAP_BIN_DIR` for an independent installation. The default command name must be free: an existing file or symlink (including a legacy TAP wrapper) is never overwritten. Environment overrides must apply to `bash`, not just the left side of a download pipe.
+A repeated install **refuses before downloads or replacement**. It is not an update
+command. For an owned install, use the in-place updater:
+
+```sh
+TAP_REF=<branch-or-commit> bash "$HOME/.tap-core/checkout/instll/update"
+```
+
+Update stops a confirmed-running profile under the same locks (or refuses when
+process state cannot be inspected), including Hub/readers and pending network
+recovery. It stages the new checkout outside the install root, then swaps under
+the install-root and profile locks. Checkout A (and managed/runtime backups)
+remain as `checkout.prev.*` / `update-pending.json` until B starts successfully
+(or start is skipped); a failed start runs `rollback-update` under the same
+locks after stopping B. Rollback keeps `update-pending.json` until mark/wrapper
+refresh succeeds (`phase=files_restored` is retryable); a failed rollback is
+nonzero and does not claim restore. On any apply
+failure, checkout/managed/profile.json and only replaced runtimes are restored;
+newly added runtimes are removed. Update rewrites `profile.backend` and component
+python/bun path bindings; it does **not** reset port, hub_port, exclude/allow
+origins, or user-defined readers/handlers. Installer defaults stay in `managed/`.
+
+If rollback reports an incomplete recovery, clear the reported cause and run:
+
+```sh
+bash "$HOME/.tap-core/update-recovery/rollback"
+```
+
+Use the same install root if customized. This retained helper includes its Python
+modules and uses A's interpreter path; it survives restoring an older checkout
+that has no update commands. It is removed after successful rollback/finalize.
+Pending phase replacement is atomic, and retrying an already restored runtime
+preserves it. This is retry after reported operation failures, not a guarantee
+against power loss at every filesystem operation. Full crash/reboot, system
+routing and HTTPS trust acceptance remain in #7/#6.
+
+Existing `main` installs without `instll/update` can still move forward by
+running the **target** update script:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/inem/tap-core/<ref>/instll/update \
+  | TAP_ROOT="$HOME/.tap-core" TAP_REF=<ref> bash
+```
+
+The target checkout supplies `apply-checkout`; the old tree does not need it.
+Failure retains the installation for recovery. Update is **not** purge/reinstall
+and does not claim Local Capture, clean-Mac, or browser HTTPS-without-`-k`.
+
+Choose a new `TAP_ROOT` and free `TAP_BIN_DIR` only for an independent parallel
+installation. The default command name must be free: an existing file or symlink
+(including a legacy TAP wrapper) is never overwritten. Environment overrides must
+apply to `bash`, not just the left side of a download pipe.
 
 Uninstall uses the recorded command location, so it does not depend on repeating `TAP_BIN_DIR`. It verifies ownership and uses Core's profile/network locks and recovery-first lifecycle through removal. A failed restore/stop, missing interpreter/configuration, or replaced command stops removal with a nonzero exit and preserves recovery files. Default uninstall removes the owned service/command and retains code/data; `TAP_PURGE=1` also removes the installation only after successful cleanup. An explicit external `TAP_PYTHON` or `TAP_BACKEND` remains untouched.
 
 Interrupted installs retain their partial root for inspection; they do not silently overwrite it on retry. Older experimental installs lacking the ownership record/pointer require manual inspection and recovery, not a guessed purge. The installer never interprets inability to inspect a service as proof that it is stopped.
 
-The installation and its declared code/runtimes must stay available until successful off/uninstall. This first slice has no in-place updater. Startup failure can require recovery via the retained wrapper; it is not reported as a completed install.
+The installation and its declared code/runtimes must stay available until successful
+off/uninstall. Startup failure can require recovery via the retained wrapper; it is
+not reported as a completed install.
 
 ## Managed runtime check
 
@@ -144,7 +196,14 @@ install root unless uninstall cleanup is verified.
 
 - Signed/notarized release package and locked matrix of OS/browser versions
 - Automatic CA trust via `finish-setup`; verified browser HTTPS matrix and CA removal ownership still open
-- In-place update preserving profile/packs/data — next delivery slice
 - System-routing recovery acceptance on a clean machine
 - Full live coexistence acceptance with a parallel legacy TAP install; file/path conflicts are covered by controlled regressions
 - Update channel that is not a fresh archive of a git ref
+
+Hermetic update A→B (profile/grants/routing preserved):
+
+```sh
+python3 tools/check_installer_update.py \
+  --output docs/results/installer-update-a-to-b.json
+python3 -m unittest tests.test_installer
+```

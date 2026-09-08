@@ -1,0 +1,55 @@
+{
+  "scope": "live empty-root install A \u2192 update B \u2192 purge; explicit routing; not Local Capture / CA trust / clean-Mac browser",
+  "host": {
+    "architecture": "x86_64",
+    "macos": "14.8.5",
+    "python": "3.9.6",
+    "platform": "macOS-14.8.5-x86_64-i386-64bit"
+  },
+  "ref_a": "aa869b5b9b377461fdf238a6e8ec623af3bc39fc",
+  "ref_b": "3f45efa13efc87bda2fd93199136df8f8404bf32",
+  "sha_a": "aa869b5b9b377461fdf238a6e8ec623af3bc39fc",
+  "sha_b": "3f45efa13efc87bda2fd93199136df8f8404bf32",
+  "ok": true,
+  "cleanup_verified": true,
+  "install_ref": "aa869b5b9b377461fdf238a6e8ec623af3bc39fc",
+  "routing_before": "explicit",
+  "ca_before": null,
+  "doctor_after_install": {
+    "healthy": true
+  },
+  "update_log_tail": [
+    "          \"cursor\": \"eyJ2IjoxLCJzY29wZSI6IjU3OWI2ODZiNjdjMTI2ZGY1YWZlZmY3Njc0ZDhiNTMxYzIxNGUzOTgwNjMwMDMwZjY5YzgyYjRlOGEzMmQwYjIiLCJzZWdtZW50IjoiMjg4MjI5NjkwNjE0YzA0MGVmMWQ2OGUwODQ5YzQ0MWZiOTIyNGFiMTg1NzBkNzViZmMyZWMxNjU4NWVjZTlkZCIsImxpbmUiOjMsImFuY2hvciI6ImMwNTJjM2JhMThjNDU1YWY5ZDNiYzdhYzIzYjlkM2NjMTMyODhiOTBkODk5MTMzM2FkYjIxODMzZjVmZDExYmQifQ==\",",
+    "          \"processed\": 3,",
+    "          \"inflight\": null,",
+    "          \"phase\": \"idle\",",
+    "          \"error\": null,",
+    "          \"updated_at\": 1788844852.998655",
+    "        },",
+    "        \"error\": null",
+    "      }",
+    "    },",
+    "    \"configured\": true,",
+    "    \"current_process\": true",
+    "  },",
+    "  \"inspection_errors\": {},",
+    "  \"backend_version\": \"12.2.3\",",
+    "  \"ca_file_present\": true,",
+    "  \"ca_trust\": \"not_verified; HTTPS clients must trust this profile CA explicitly\",",
+    "  \"traffic_probe\": true,",
+    "  \"healthy\": true",
+    "}"
+  ],
+  "update_ref": "3f45efa13efc87bda2fd93199136df8f8404bf32",
+  "routing_after": "explicit",
+  "ca_after": null,
+  "profile_data_retained": true,
+  "policy_proxy_hash6": {
+    "routing_unchanged": true,
+    "ca_grant_unchanged": true,
+    "local_capture": false
+  },
+  "doctor_after_update": {
+    "healthy": true
+  }
+}

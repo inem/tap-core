@@ -1,0 +1,61 @@
+{
+  "scope": "live empty-root install A \u2192 update B \u2192 purge; explicit routing; not Local Capture / CA trust / clean-Mac browser",
+  "host": {
+    "architecture": "arm64",
+    "macos": "15.6.1",
+    "python": "3.9.6",
+    "platform": "macOS-15.6.1-arm64-arm-64bit"
+  },
+  "ref_a": "ae9aaa94f5b0cdd8f6b5e52198cf051a789dc3f6",
+  "ref_b": "f9349828aaeefeedf03d41af2155ba0c4e87f506",
+  "sha_a": "ae9aaa94f5b0cdd8f6b5e52198cf051a789dc3f6",
+  "sha_b": "f9349828aaeefeedf03d41af2155ba0c4e87f506",
+  "ok": true,
+  "cleanup_verified": true,
+  "install_ref": "ae9aaa94f5b0cdd8f6b5e52198cf051a789dc3f6",
+  "routing_before": "explicit",
+  "ca_before": null,
+  "doctor_after_install": {
+    "healthy": true
+  },
+  "update_log_tail": [
+    "          \"cursor\": \"eyJ2IjoxLCJzY29wZSI6IjU0NWU0ZDkwNDEyMDUxZjRjYTc2MWY4ZmY4ZTk4MTdiMTE3NDJmMzRhMWMzOTc4OGUxOTg3YWRmZmY3N2Y1ZDgiLCJzZWdtZW50IjoiZDczYjEzNzYwYzlmNWE1YzM2Mzc0YWIxNDFmZTg1M2I0YzVlMTdmMjJlYmVmOGI4N2Y5OTc3NTFlY2ZhZDI2OSIsImxpbmUiOjQsImFuY2hvciI6Ijc2NWE1MTg2YjhmY2FhOTUwYjNiNjNjZjlmZGQ5ZGY4OWM1YjQ3ODZmODhkMzEzODlmZDE2ODU1NjQ3NjA5MTcifQ==\",",
+    "          \"processed\": 4,",
+    "          \"inflight\": null,",
+    "          \"phase\": \"idle\",",
+    "          \"error\": null,",
+    "          \"updated_at\": 1788847058.3137128",
+    "        },",
+    "        \"error\": null",
+    "      }",
+    "    },",
+    "    \"configured\": true,",
+    "    \"current_process\": true",
+    "  },",
+    "  \"inspection_errors\": {},",
+    "  \"backend_version\": \"12.2.3\",",
+    "  \"ca_file_present\": true,",
+    "  \"ca_trust\": \"not_verified; HTTPS clients must trust this profile CA explicitly\",",
+    "  \"traffic_probe\": true,",
+    "  \"healthy\": true",
+    "}"
+  ],
+  "update_ref": "f9349828aaeefeedf03d41af2155ba0c4e87f506",
+  "routing_after": "explicit",
+  "ca_after": null,
+  "profile_data_retained": true,
+  "policy_proxy_hash6": {
+    "routing_unchanged": true,
+    "ca_grant_unchanged": true,
+    "local_capture": false
+  },
+  "doctor_after_update": {
+    "healthy": true
+  },
+  "runtime_delivery": {
+    "mode": "provided overrides; not a download acceptance run",
+    "python": "/usr/bin/python3",
+    "backend": "/opt/homebrew/bin/mitmdump",
+    "bun": "/Users/inem/.bun/bin/bun"
+  }
+}
