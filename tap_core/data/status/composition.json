@@ -3,6 +3,46 @@
   "id": "runtime-routing-composition",
   "composition_rules": [
     {
+      "id": "composition-bridge-10-inactive",
+      "when": [
+        ["meaning","runtime","state","stopped","$runtime-reason","$runtime-attrs"],
+        ["meaning","bridge","state","unapplied","$bridge-reason","$bridge-attrs"]
+      ],
+      "emit": [["candidate","bridge","state","inactive",200,"runtime_stopped",[]]]
+    },
+    {
+      "id": "composition-bridge-20-drifted",
+      "when": [
+        ["meaning","runtime","state","running","$runtime-reason","$runtime-attrs"],
+        ["meaning","bridge","state","unapplied","$bridge-reason","$bridge-attrs"]
+      ],
+      "emit": [["candidate","bridge","state","drifted",200,"running_runtime_snapshot_mismatch",[]]]
+    },
+    {
+      "id": "composition-bridge-30-blocked-broken",
+      "when": [
+        ["meaning","runtime","state","broken","$runtime-reason","$runtime-attrs"],
+        ["meaning","bridge","state","unapplied","$bridge-reason","$bridge-attrs"]
+      ],
+      "emit": [["candidate","bridge","state","blocked",200,"broken_runtime",[]]]
+    },
+    {
+      "id": "composition-bridge-31-blocked-port-conflict",
+      "when": [
+        ["meaning","runtime","state","port-conflict","$runtime-reason","$runtime-attrs"],
+        ["meaning","bridge","state","unapplied","$bridge-reason","$bridge-attrs"]
+      ],
+      "emit": [["candidate","bridge","state","blocked",200,"runtime_port_conflict",[]]]
+    },
+    {
+      "id": "composition-bridge-40-unverified",
+      "when": [
+        ["meaning","runtime","state","unknown","$runtime-reason","$runtime-attrs"],
+        ["meaning","bridge","state","unapplied","$bridge-reason","$bridge-attrs"]
+      ],
+      "emit": [["candidate","bridge","state","unverified",200,"runtime_inspection_incomplete",[]]]
+    },
+    {
       "id": "composition-traffic-10-stopped",
       "when": [
         ["meaning","runtime","state","stopped","$runtime-reason","$runtime-attrs"],
@@ -50,7 +90,7 @@
         ["meaning","status","traffic","broken","$reason","$attrs"]
       ],
       "emit": [
-        ["slot","traffic-alert-line","status",3,"group","line",false,"",null,[["meaning","status","traffic","broken","$reason","$attrs"]]],
+        ["slot","traffic-alert-line","status",4,"group","line",false,"",null,[["meaning","status","traffic","broken","$reason","$attrs"]]],
         ["slot","traffic-alert-indicator","traffic-alert-line",0,"leaf","indicator",false,"⚠  ","warning",[["meaning","status","traffic","broken","$reason","$attrs"]]],
         ["slot","traffic-alert-value","traffic-alert-line",1,"leaf","value",false,"traffic broken — system proxy points at unavailable TAP","warning",[["meaning","status","traffic","broken","$reason","$attrs"]]]
       ]
@@ -61,7 +101,7 @@
         ["meaning","status","traffic","unowned","$reason","$attrs"]
       ],
       "emit": [
-        ["slot","traffic-alert-line","status",3,"group","line",false,"",null,[["meaning","status","traffic","unowned","$reason","$attrs"]]],
+        ["slot","traffic-alert-line","status",4,"group","line",false,"",null,[["meaning","status","traffic","unowned","$reason","$attrs"]]],
         ["slot","traffic-alert-indicator","traffic-alert-line",0,"leaf","indicator",false,"⚠  ","warning",[["meaning","status","traffic","unowned","$reason","$attrs"]]],
         ["slot","traffic-alert-value","traffic-alert-line",1,"leaf","value",false,"traffic routed to unowned listener","warning",[["meaning","status","traffic","unowned","$reason","$attrs"]]]
       ]
@@ -72,7 +112,7 @@
         ["meaning","status","traffic","unverified","$reason","$attrs"]
       ],
       "emit": [
-        ["slot","traffic-alert-line","status",3,"group","line",false,"",null,[["meaning","status","traffic","unverified","$reason","$attrs"]]],
+        ["slot","traffic-alert-line","status",4,"group","line",false,"",null,[["meaning","status","traffic","unverified","$reason","$attrs"]]],
         ["slot","traffic-alert-indicator","traffic-alert-line",0,"leaf","indicator",false,"?  ","warning",[["meaning","status","traffic","unverified","$reason","$attrs"]]],
         ["slot","traffic-alert-value","traffic-alert-line",1,"leaf","value",false,"capture unverified — system proxy remains active","warning",[["meaning","status","traffic","unverified","$reason","$attrs"]]]
       ]

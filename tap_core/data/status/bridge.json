@@ -1,0 +1,200 @@
+{
+  "schema": "tap.internal-status-material-fragment/v1",
+  "id": "bridge",
+  "observations": {
+    "bridge": [
+      {"name":"configured","source":{"path":["bridge","configured"],"error":"bridge"}},
+      {"name":"enabled","source":{"path":["bridge","enabled"],"error":"bridge"}},
+      {"name":"healthy","source":{"path":["bridge","healthy"],"error":"bridge"}},
+      {"name":"hub_liveness","source":{"path":["bridge","hub_liveness"],"error":"bridge"}}
+    ]
+  },
+  "semantic_rules": [
+    {
+      "id": "bridge-00-fallback",
+      "when": [
+        ["observation","bridge","configured","$_","$_"],
+        ["observation","bridge","enabled","$_","$_"],
+        ["observation","bridge","healthy","$_","$_"],
+        ["observation","bridge","hub_liveness","$_","$_"]
+      ],
+      "emit": [["candidate","bridge","state","unknown",0,"inconsistent_bridge_observations",[]]]
+    },
+    {
+      "id": "bridge-10-absent",
+      "when": [
+        ["observation","bridge","configured","known",false],
+        ["observation","bridge","enabled","unknown","not_observed"],
+        ["observation","bridge","healthy","known",true],
+        ["observation","bridge","hub_liveness","unknown","not_observed"]
+      ],
+      "emit": [["candidate","bridge","state","absent",100,"bridge_not_configured",[]]]
+    },
+    {
+      "id": "bridge-20-disabled",
+      "when": [
+        ["observation","bridge","configured","known",true],
+        ["observation","bridge","enabled","known",false],
+        ["observation","bridge","healthy","known",true],
+        ["observation","bridge","hub_liveness","known","not_checked"]
+      ],
+      "emit": [["candidate","bridge","state","disabled",100,"disabled_snapshot_applied",[]]]
+    },
+    {
+      "id": "bridge-30-applied",
+      "when": [
+        ["observation","bridge","configured","known",true],
+        ["observation","bridge","enabled","known",true],
+        ["observation","bridge","healthy","known",true],
+        ["observation","bridge","hub_liveness","known","not_checked"]
+      ],
+      "emit": [["candidate","bridge","state","applied",100,"enabled_snapshot_applied_hub_unchecked",[]]]
+    },
+    {
+      "id": "bridge-40-drifted-enabled",
+      "when": [
+        ["observation","bridge","configured","known",true],
+        ["observation","bridge","enabled","known",true],
+        ["observation","bridge","healthy","known",false],
+        ["observation","bridge","hub_liveness","known","not_checked"]
+      ],
+      "emit": [["candidate","bridge","state","unapplied",100,"startup_snapshot_not_applied",[]]]
+    },
+    {
+      "id": "bridge-41-drifted-disabled",
+      "when": [
+        ["observation","bridge","configured","known",true],
+        ["observation","bridge","enabled","known",false],
+        ["observation","bridge","healthy","known",false],
+        ["observation","bridge","hub_liveness","known","not_checked"]
+      ],
+      "emit": [["candidate","bridge","state","unapplied",100,"startup_snapshot_not_applied",[]]]
+    },
+    {
+      "id": "bridge-90-inspection-configured",
+      "when": [
+        ["observation","bridge","configured","unknown","$_"],
+        ["observation","bridge","enabled","$_","$_"],
+        ["observation","bridge","healthy","$_","$_"],
+        ["observation","bridge","hub_liveness","$_","$_"]
+      ],
+      "emit": [["candidate","bridge","state","unknown",200,"inspection_incomplete",[]]]
+    },
+    {
+      "id": "bridge-91-inspection-healthy",
+      "when": [
+        ["observation","bridge","healthy","unknown","$_"],
+        ["observation","bridge","configured","$_","$_"],
+        ["observation","bridge","enabled","$_","$_"],
+        ["observation","bridge","hub_liveness","$_","$_"]
+      ],
+      "emit": [["candidate","bridge","state","unknown",200,"inspection_incomplete",[]]]
+    }
+  ],
+  "presentation_rules": [
+    {
+      "id": "presentation-bridge-00-absent",
+      "when": [["meaning","bridge","state","absent","$reason","$attrs"]],
+      "emit": [
+        ["slot","bridge-line","status",3,"group","line",false,"",null,[["meaning","bridge","state","absent","$reason","$attrs"]]],
+        ["slot","bridge-label","bridge-line",0,"leaf","label",false,"bridge        ",null,[["meaning","bridge","state","absent","$reason","$attrs"]]],
+        ["slot","bridge-indicator","bridge-line",1,"leaf","indicator",false,"○ ","muted",[["meaning","bridge","state","absent","$reason","$attrs"]]],
+        ["slot","bridge-value","bridge-line",2,"leaf","value",false,"absent","muted",[["meaning","bridge","state","absent","$reason","$attrs"]]],
+        ["slot","bridge-attachment","bridge-line",3,"group","support",true,"",null,[["meaning","bridge","state","absent","$reason","$attrs"]]],
+        ["slot","bridge-separator","bridge-attachment",0,"leaf","separator",false," · ",null,[["meaning","bridge","state","absent","$reason","$attrs"]]],
+        ["slot","bridge-detail","bridge-attachment",1,"leaf","detail",false,"not configured",null,[["meaning","bridge","state","absent","$reason","$attrs"]]]
+      ]
+    },
+    {
+      "id": "presentation-bridge-10-disabled",
+      "when": [["meaning","bridge","state","disabled","$reason","$attrs"]],
+      "emit": [
+        ["slot","bridge-line","status",3,"group","line",false,"",null,[["meaning","bridge","state","disabled","$reason","$attrs"]]],
+        ["slot","bridge-label","bridge-line",0,"leaf","label",false,"bridge        ",null,[["meaning","bridge","state","disabled","$reason","$attrs"]]],
+        ["slot","bridge-indicator","bridge-line",1,"leaf","indicator",false,"○ ","muted",[["meaning","bridge","state","disabled","$reason","$attrs"]]],
+        ["slot","bridge-value","bridge-line",2,"leaf","value",false,"disabled","muted",[["meaning","bridge","state","disabled","$reason","$attrs"]]],
+        ["slot","bridge-attachment","bridge-line",3,"group","support",true,"",null,[["meaning","bridge","state","disabled","$reason","$attrs"]]],
+        ["slot","bridge-separator","bridge-attachment",0,"leaf","separator",false," · ",null,[["meaning","bridge","state","disabled","$reason","$attrs"]]],
+        ["slot","bridge-detail","bridge-attachment",1,"leaf","detail",false,"startup snapshot applied",null,[["meaning","bridge","state","disabled","$reason","$attrs"]]]
+      ]
+    },
+    {
+      "id": "presentation-bridge-20-applied",
+      "when": [["meaning","bridge","state","applied","$reason","$attrs"]],
+      "emit": [
+        ["slot","bridge-line","status",3,"group","line",false,"",null,[["meaning","bridge","state","applied","$reason","$attrs"]]],
+        ["slot","bridge-label","bridge-line",0,"leaf","label",false,"bridge        ",null,[["meaning","bridge","state","applied","$reason","$attrs"]]],
+        ["slot","bridge-indicator","bridge-line",1,"leaf","indicator",false,"● ","positive",[["meaning","bridge","state","applied","$reason","$attrs"]]],
+        ["slot","bridge-value","bridge-line",2,"leaf","value",false,"applied","positive",[["meaning","bridge","state","applied","$reason","$attrs"]]],
+        ["slot","bridge-attachment","bridge-line",3,"group","support",true,"",null,[["meaning","bridge","state","applied","$reason","$attrs"]]],
+        ["slot","bridge-separator","bridge-attachment",0,"leaf","separator",false," · ",null,[["meaning","bridge","state","applied","$reason","$attrs"]]],
+        ["slot","bridge-detail","bridge-attachment",1,"leaf","detail",false,"enabled, hub unchecked",null,[["meaning","bridge","state","applied","$reason","$attrs"]]]
+      ]
+    },
+    {
+      "id": "presentation-bridge-30-drifted",
+      "when": [["meaning","bridge","state","drifted","$reason","$attrs"]],
+      "emit": [
+        ["slot","bridge-line","status",3,"group","line",false,"",null,[["meaning","bridge","state","drifted","$reason","$attrs"]]],
+        ["slot","bridge-label","bridge-line",0,"leaf","label",false,"bridge        ",null,[["meaning","bridge","state","drifted","$reason","$attrs"]]],
+        ["slot","bridge-indicator","bridge-line",1,"leaf","indicator",false,"⚠ ","warning",[["meaning","bridge","state","drifted","$reason","$attrs"]]],
+        ["slot","bridge-value","bridge-line",2,"leaf","value",false,"drifted","warning",[["meaning","bridge","state","drifted","$reason","$attrs"]]],
+        ["slot","bridge-attachment","bridge-line",3,"group","support",true,"",null,[["meaning","bridge","state","drifted","$reason","$attrs"]]],
+        ["slot","bridge-separator","bridge-attachment",0,"leaf","separator",false," · ",null,[["meaning","bridge","state","drifted","$reason","$attrs"]]],
+        ["slot","bridge-detail","bridge-attachment",1,"leaf","detail",false,"startup snapshot mismatch",null,[["meaning","bridge","state","drifted","$reason","$attrs"]]]
+      ]
+    },
+    {
+      "id": "presentation-bridge-31-inactive",
+      "when": [["meaning","bridge","state","inactive","$reason","$attrs"]],
+      "emit": [
+        ["slot","bridge-line","status",3,"group","line",false,"",null,[["meaning","bridge","state","inactive","$reason","$attrs"]]],
+        ["slot","bridge-label","bridge-line",0,"leaf","label",false,"bridge        ",null,[["meaning","bridge","state","inactive","$reason","$attrs"]]],
+        ["slot","bridge-indicator","bridge-line",1,"leaf","indicator",false,"○ ","muted",[["meaning","bridge","state","inactive","$reason","$attrs"]]],
+        ["slot","bridge-value","bridge-line",2,"leaf","value",false,"inactive","muted",[["meaning","bridge","state","inactive","$reason","$attrs"]]],
+        ["slot","bridge-attachment","bridge-line",3,"group","support",true,"",null,[["meaning","bridge","state","inactive","$reason","$attrs"]]],
+        ["slot","bridge-separator","bridge-attachment",0,"leaf","separator",false," · ",null,[["meaning","bridge","state","inactive","$reason","$attrs"]]],
+        ["slot","bridge-detail","bridge-attachment",1,"leaf","detail",false,"TAP stopped",null,[["meaning","bridge","state","inactive","$reason","$attrs"]]]
+      ]
+    },
+    {
+      "id": "presentation-bridge-32-blocked",
+      "when": [["meaning","bridge","state","blocked","$reason","$attrs"]],
+      "emit": [
+        ["slot","bridge-line","status",3,"group","line",false,"",null,[["meaning","bridge","state","blocked","$reason","$attrs"]]],
+        ["slot","bridge-label","bridge-line",0,"leaf","label",false,"bridge        ",null,[["meaning","bridge","state","blocked","$reason","$attrs"]]],
+        ["slot","bridge-indicator","bridge-line",1,"leaf","indicator",false,"⚠ ","warning",[["meaning","bridge","state","blocked","$reason","$attrs"]]],
+        ["slot","bridge-value","bridge-line",2,"leaf","value",false,"blocked","warning",[["meaning","bridge","state","blocked","$reason","$attrs"]]],
+        ["slot","bridge-attachment","bridge-line",3,"group","support",true,"",null,[["meaning","bridge","state","blocked","$reason","$attrs"]]],
+        ["slot","bridge-separator","bridge-attachment",0,"leaf","separator",false," · ",null,[["meaning","bridge","state","blocked","$reason","$attrs"]]],
+        ["slot","bridge-detail","bridge-attachment",1,"leaf","detail",false,"runtime unavailable",null,[["meaning","bridge","state","blocked","$reason","$attrs"]]]
+      ]
+    },
+    {
+      "id": "presentation-bridge-33-unverified",
+      "when": [["meaning","bridge","state","unverified","$reason","$attrs"]],
+      "emit": [
+        ["slot","bridge-line","status",3,"group","line",false,"",null,[["meaning","bridge","state","unverified","$reason","$attrs"]]],
+        ["slot","bridge-label","bridge-line",0,"leaf","label",false,"bridge        ",null,[["meaning","bridge","state","unverified","$reason","$attrs"]]],
+        ["slot","bridge-indicator","bridge-line",1,"leaf","indicator",false,"? ","warning",[["meaning","bridge","state","unverified","$reason","$attrs"]]],
+        ["slot","bridge-value","bridge-line",2,"leaf","value",false,"unverified","warning",[["meaning","bridge","state","unverified","$reason","$attrs"]]],
+        ["slot","bridge-attachment","bridge-line",3,"group","support",true,"",null,[["meaning","bridge","state","unverified","$reason","$attrs"]]],
+        ["slot","bridge-separator","bridge-attachment",0,"leaf","separator",false," · ",null,[["meaning","bridge","state","unverified","$reason","$attrs"]]],
+        ["slot","bridge-detail","bridge-attachment",1,"leaf","detail",false,"runtime inspection incomplete",null,[["meaning","bridge","state","unverified","$reason","$attrs"]]]
+      ]
+    },
+    {
+      "id": "presentation-bridge-40-unknown",
+      "when": [["meaning","bridge","state","unknown","$reason","$attrs"]],
+      "emit": [
+        ["slot","bridge-line","status",3,"group","line",false,"",null,[["meaning","bridge","state","unknown","$reason","$attrs"]]],
+        ["slot","bridge-label","bridge-line",0,"leaf","label",false,"bridge        ",null,[["meaning","bridge","state","unknown","$reason","$attrs"]]],
+        ["slot","bridge-indicator","bridge-line",1,"leaf","indicator",false,"? ","warning",[["meaning","bridge","state","unknown","$reason","$attrs"]]],
+        ["slot","bridge-value","bridge-line",2,"leaf","value",false,"unknown","warning",[["meaning","bridge","state","unknown","$reason","$attrs"]]],
+        ["slot","bridge-attachment","bridge-line",3,"group","support",true,"",null,[["meaning","bridge","state","unknown","$reason","$attrs"]]],
+        ["slot","bridge-separator","bridge-attachment",0,"leaf","separator",false," · ",null,[["meaning","bridge","state","unknown","$reason","$attrs"]]],
+        ["slot","bridge-detail","bridge-attachment",1,"leaf","detail",false,"inspection incomplete",null,[["meaning","bridge","state","unknown","$reason","$attrs"]]]
+      ]
+    }
+  ]
+}

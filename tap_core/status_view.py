@@ -193,11 +193,14 @@ def project_status(result, material=None):
     selected = select_candidates(composed)
     meanings = tuple(sorted((atom for atom in selected if atom.relation == "meaning"),
                             key=Atom.identifier))
-    interpreted = {**composed, **selected}
+    interpreted = {atom: derivation for atom, derivation in composed.items()
+                   if atom.relation != "meaning"}
+    interpreted.update(selected)
     presented = evaluate_rules(interpreted, material["presentation_rules"])
-    document = document_from_claims(presented, material["document_root"])
-    validate_conservation(presented, meanings, document, "supplied-status-result")
-    return StatusProjection(result, meanings, document, presented)
+    trace = {**composed, **selected, **presented}
+    document = document_from_claims(trace, material["document_root"])
+    validate_conservation(trace, meanings, document, "supplied-status-result")
+    return StatusProjection(result, meanings, document, trace)
 
 
 def terminal_status(result, width=80, color=False, material=None):

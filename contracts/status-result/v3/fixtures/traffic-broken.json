@@ -1,0 +1,96 @@
+{
+  "raw_snapshot": {
+    "profile": "/fixture/profile",
+    "routing": "system",
+    "service_loaded": false,
+    "pid": null,
+    "port_owned": false,
+    "port_open": false,
+    "network_recovery_pending": true,
+    "system_proxy_verified": true,
+    "inspection_errors": {},
+    "capture": {
+      "available": false,
+      "current_process": false,
+      "healthy": false
+    },
+    "bridge": {
+      "configured": false,
+      "healthy": true
+    }
+  },
+  "semantic_result": {
+    "schema": "tap.status-result/v3",
+    "profile": "/fixture/profile",
+    "runtime": {
+      "service_loaded": {
+        "knowledge": "known",
+        "value": false
+      },
+      "pid": {
+        "knowledge": "known",
+        "value": null
+      },
+      "port_owned": {
+        "knowledge": "known",
+        "value": false
+      },
+      "port_open": {
+        "knowledge": "known",
+        "value": false
+      }
+    },
+    "routing": {
+      "routing": {
+        "knowledge": "known",
+        "value": "system"
+      },
+      "network_recovery_pending": {
+        "knowledge": "known",
+        "value": true
+      },
+      "system_proxy_verified": {
+        "knowledge": "known",
+        "value": true
+      }
+    },
+    "capture": {
+      "available": {
+        "knowledge": "known",
+        "value": false
+      },
+      "current_process": {
+        "knowledge": "known",
+        "value": false
+      },
+      "healthy": {
+        "knowledge": "known",
+        "value": false
+      }
+    },
+    "bridge": {
+      "configured": {
+        "knowledge": "known",
+        "value": false
+      },
+      "enabled": {
+        "knowledge": "unknown",
+        "reason": "not_observed",
+        "message": "observation was not supplied"
+      },
+      "healthy": {
+        "knowledge": "known",
+        "value": true
+      },
+      "hub_liveness": {
+        "knowledge": "unknown",
+        "reason": "not_observed",
+        "message": "observation was not supplied"
+      }
+    }
+  },
+  "terminal": {
+    "width_80": "tap           ✗ down\nbrowser/apps  ● capturing · system proxy\ncapture       ○ absent · no health record\nbridge        ○ absent · not configured\n⚠  traffic broken — system proxy points at unavailable TAP",
+    "width_24_error": "required content exceeds width 24: routing-line"
+  }
+}
