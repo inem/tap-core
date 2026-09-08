@@ -1,0 +1,189 @@
+{
+  "schema": "tap.internal-status-material-fragment/v1",
+  "id": "runtime",
+  "observations": {
+    "runtime": [{"name":"service_loaded","raw":"service_loaded"},{"name":"pid","raw":"pid"},{"name":"port_owned","raw":"port_owned"},{"name":"port_open","raw":"port_open"}]
+  },
+  "semantic_rules": [
+    {
+      "id": "runtime-00-fallback",
+      "when": [
+        ["observation","runtime","service_loaded","$_","$_"],
+        ["observation","runtime","pid","$_","$_"],
+        ["observation","runtime","port_owned","$_","$_"],
+        ["observation","runtime","port_open","$_","$_"]
+      ],
+      "emit": [
+        ["candidate","runtime","state","unknown",0,"inconsistent_runtime_observations",[]]
+      ]
+    },
+    {
+      "id": "runtime-10-stopped",
+      "when": [
+        ["observation","runtime","service_loaded","known",false],
+        ["observation","runtime","pid","known",null],
+        ["observation","runtime","port_owned","$_","$_"],
+        ["observation","runtime","port_open","known",false]
+      ],
+      "emit": [
+        ["candidate","runtime","state","stopped",100,"service_absent_and_port_closed",[]]
+      ]
+    },
+    {
+      "id": "runtime-20-port-conflict",
+      "when": [
+        ["observation","runtime","service_loaded","$_","$_"],
+        ["observation","runtime","pid","$_","$_"],
+        ["observation","runtime","port_owned","known",false],
+        ["observation","runtime","port_open","known",true]
+      ],
+      "emit": [
+        ["candidate","runtime","state","port-conflict",100,"listener_not_owned_by_profile",[]]
+      ]
+    },
+    {
+      "id": "runtime-30-running",
+      "when": [
+        ["observation","runtime","service_loaded","known",true],
+        ["observation","runtime","pid","known",{"var":"$pid","test":"positive-int"}],
+        ["observation","runtime","port_owned","known",true],
+        ["observation","runtime","port_open","known",true]
+      ],
+      "emit": [
+        ["candidate","runtime","state","running",100,"service_owns_listener",[["pid","$pid"]]]
+      ]
+    },
+    {
+      "id": "runtime-40-broken",
+      "when": [
+        ["observation","runtime","service_loaded","known",true],
+        ["observation","runtime","pid","known",{"var":"$pid","test":"positive-int"}],
+        ["observation","runtime","port_owned","$_","$_"],
+        ["observation","runtime","port_open","known",false]
+      ],
+      "emit": [
+        ["candidate","runtime","state","broken",100,"service_has_no_listener",[]]
+      ]
+    },
+    {
+      "id": "runtime-50-ownership-unknown",
+      "when": [
+        ["observation","runtime","service_loaded","known",true],
+        ["observation","runtime","pid","known",{"var":"$pid","test":"positive-int"}],
+        ["observation","runtime","port_owned","unknown","$_"],
+        ["observation","runtime","port_open","known",true]
+      ],
+      "emit": [
+        ["candidate","runtime","state","unknown",100,"listener_ownership_unknown",[]]
+      ]
+    },
+    {
+      "id": "runtime-60-inspection-0",
+      "when": [
+        ["observation","runtime","service_loaded","unknown","$_"],
+        ["observation","runtime","pid","$_","$_"],
+        ["observation","runtime","port_owned","$_","$_"],
+        ["observation","runtime","port_open","$_","$_"]
+      ],
+      "emit": [
+        ["candidate","runtime","state","unknown",200,"inspection_incomplete",[]]
+      ]
+    },
+    {
+      "id": "runtime-60-inspection-1",
+      "when": [
+        ["observation","runtime","pid","unknown","$_"],
+        ["observation","runtime","service_loaded","$_","$_"],
+        ["observation","runtime","port_owned","$_","$_"],
+        ["observation","runtime","port_open","$_","$_"]
+      ],
+      "emit": [
+        ["candidate","runtime","state","unknown",200,"inspection_incomplete",[]]
+      ]
+    },
+    {
+      "id": "runtime-60-inspection-2",
+      "when": [
+        ["observation","runtime","port_open","unknown","$_"],
+        ["observation","runtime","service_loaded","$_","$_"],
+        ["observation","runtime","pid","$_","$_"],
+        ["observation","runtime","port_owned","$_","$_"]
+      ],
+      "emit": [
+        ["candidate","runtime","state","unknown",200,"inspection_incomplete",[]]
+      ]
+    }
+  ],
+  "presentation_rules": [
+    {
+      "id": "presentation-runtime-00-running",
+      "when": [
+        ["meaning","runtime","state","running","$reason","$attrs"],
+        ["attribute","runtime","pid","$pid"]
+      ],
+      "emit": [
+        ["slot","runtime-line","status",0,"group","line",false,"",null,[["meaning","runtime","state","running","$reason","$attrs"]]],
+        ["slot","runtime-label","runtime-line",0,"leaf","label",false,"tap           ",null,[["meaning","runtime","state","running","$reason","$attrs"]]],
+        ["slot","runtime-indicator","runtime-line",1,"leaf","indicator",false,"● ","positive",[["meaning","runtime","state","running","$reason","$attrs"]]],
+        ["slot","runtime-value","runtime-line",2,"leaf","value",false,"up","positive",[["meaning","runtime","state","running","$reason","$attrs"]]],
+        ["slot","runtime-attachment","runtime-line",3,"group","support",true,"",null,[["meaning","runtime","state","running","$reason","$attrs"]]],
+        ["slot","runtime-separator","runtime-attachment",0,"leaf","separator",false," · ",null,[["meaning","runtime","state","running","$reason","$attrs"]]],
+        ["slot","runtime-detail","runtime-attachment",1,"leaf","detail",false,{"format":"PID {}","args":["$pid"]},null,[["meaning","runtime","state","running","$reason","$attrs"]]]
+      ]
+    },
+    {
+      "id": "presentation-runtime-01-stopped",
+      "when": [
+        ["meaning","runtime","state","stopped","$reason","$attrs"]
+      ],
+      "emit": [
+        ["slot","runtime-line","status",0,"group","line",false,"",null,[["meaning","runtime","state","stopped","$reason","$attrs"]]],
+        ["slot","runtime-label","runtime-line",0,"leaf","label",false,"tap           ",null,[["meaning","runtime","state","stopped","$reason","$attrs"]]],
+        ["slot","runtime-indicator","runtime-line",1,"leaf","indicator",false,"✗ ","negative",[["meaning","runtime","state","stopped","$reason","$attrs"]]],
+        ["slot","runtime-value","runtime-line",2,"leaf","value",false,"down","negative",[["meaning","runtime","state","stopped","$reason","$attrs"]]]
+      ]
+    },
+    {
+      "id": "presentation-runtime-02-port-conflict",
+      "when": [
+        ["meaning","runtime","state","port-conflict","$reason","$attrs"]
+      ],
+      "emit": [
+        ["slot","runtime-line","status",0,"group","line",false,"",null,[["meaning","runtime","state","port-conflict","$reason","$attrs"]]],
+        ["slot","runtime-label","runtime-line",0,"leaf","label",false,"tap           ",null,[["meaning","runtime","state","port-conflict","$reason","$attrs"]]],
+        ["slot","runtime-indicator","runtime-line",1,"leaf","indicator",false,"✗ ","negative",[["meaning","runtime","state","port-conflict","$reason","$attrs"]]],
+        ["slot","runtime-value","runtime-line",2,"leaf","value",false,"PORT STOLEN","negative",[["meaning","runtime","state","port-conflict","$reason","$attrs"]]]
+      ]
+    },
+    {
+      "id": "presentation-runtime-03-broken",
+      "when": [
+        ["meaning","runtime","state","broken","$reason","$attrs"]
+      ],
+      "emit": [
+        ["slot","runtime-line","status",0,"group","line",false,"",null,[["meaning","runtime","state","broken","$reason","$attrs"]]],
+        ["slot","runtime-label","runtime-line",0,"leaf","label",false,"tap           ",null,[["meaning","runtime","state","broken","$reason","$attrs"]]],
+        ["slot","runtime-indicator","runtime-line",1,"leaf","indicator",false,"✗ ","negative",[["meaning","runtime","state","broken","$reason","$attrs"]]],
+        ["slot","runtime-value","runtime-line",2,"leaf","value",false,"broken","negative",[["meaning","runtime","state","broken","$reason","$attrs"]]],
+        ["slot","runtime-attachment","runtime-line",3,"group","support",true,"",null,[["meaning","runtime","state","broken","$reason","$attrs"]]],
+        ["slot","runtime-separator","runtime-attachment",0,"leaf","separator",false," · ",null,[["meaning","runtime","state","broken","$reason","$attrs"]]],
+        ["slot","runtime-detail","runtime-attachment",1,"leaf","detail",false,"service has no listener",null,[["meaning","runtime","state","broken","$reason","$attrs"]]]
+      ]
+    },
+    {
+      "id": "presentation-runtime-04-unknown",
+      "when": [
+        ["meaning","runtime","state","unknown","$reason","$attrs"]
+      ],
+      "emit": [
+        ["slot","runtime-line","status",0,"group","line",false,"",null,[["meaning","runtime","state","unknown","$reason","$attrs"]]],
+        ["slot","runtime-label","runtime-line",0,"leaf","label",false,"tap           ",null,[["meaning","runtime","state","unknown","$reason","$attrs"]]],
+        ["slot","runtime-indicator","runtime-line",1,"leaf","indicator",false,"? ","warning",[["meaning","runtime","state","unknown","$reason","$attrs"]]],
+        ["slot","runtime-value","runtime-line",2,"leaf","value",false,"unknown","warning",[["meaning","runtime","state","unknown","$reason","$attrs"]]],
+        ["slot","runtime-attachment","runtime-line",3,"group","support",true,"",null,[["meaning","runtime","state","unknown","$reason","$attrs"]]],
+        ["slot","runtime-separator","runtime-attachment",0,"leaf","separator",false," · ",null,[["meaning","runtime","state","unknown","$reason","$attrs"]]],
+        ["slot","runtime-detail","runtime-attachment",1,"leaf","detail",false,"inspection incomplete",null,[["meaning","runtime","state","unknown","$reason","$attrs"]]]
+      ]
+    }
+  ]
+}

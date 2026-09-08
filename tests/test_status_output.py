@@ -4,6 +4,8 @@ from dataclasses import replace
 import io
 import json
 from pathlib import Path
+import shutil
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -98,6 +100,51 @@ class StatusContractTests(unittest.TestCase):
         drift = states(snapshot(network_recovery_pending=True, system_proxy_verified=False))
         self.assertEqual(unknown["runtime"][0], "unknown")
         self.assertEqual(drift["routing"][0], "recovery-required")
+
+    def test_owned_route_and_unusable_runtime_compose_into_a_required_alert(self):
+        routed = {"network_recovery_pending": True, "system_proxy_verified": True}
+        for changes in (
+                {"service_loaded": False, "pid": None, "port_owned": False,
+                 "port_open": False},
+                {"port_open": False}):
+            with self.subTest(changes=changes):
+                projection = project_status(public_status_result(snapshot(**routed, **changes)))
+                traffic = next(atom for atom in projection.meanings
+                               if atom.arguments[:2] == ("status", "traffic"))
+                self.assertEqual(traffic.arguments[2], "broken")
+                candidate = projection.provenance[traffic].warrants[0]
+                warrants = projection.provenance[candidate].warrants
+                self.assertEqual({atom.arguments[0] for atom in warrants}, {"runtime", "routing"})
+                self.assertIn("traffic broken", render_terminal(projection.document))
+                with self.assertRaisesRegex(ProjectionError, "required content exceeds width"):
+                    render_terminal(projection.document, 24)
+
+    def test_owned_route_to_conflicting_listener_is_unowned_not_broken(self):
+        raw = snapshot(network_recovery_pending=True, system_proxy_verified=True,
+                       port_owned=False, port_open=True)
+        projection = project_status(public_status_result(raw))
+        traffic = next(atom for atom in projection.meanings
+                       if atom.arguments[:2] == ("status", "traffic"))
+        self.assertEqual(traffic.arguments[2], "unowned")
+        rendered = render_terminal(projection.document)
+        self.assertIn("traffic routed to unowned listener", rendered)
+        self.assertNotIn("traffic broken", rendered)
+
+    def test_owned_route_preserves_unknown_runtime_as_unverified(self):
+        raw = snapshot(network_recovery_pending=True, system_proxy_verified=True,
+                       port_owned=None, inspection_errors={"port_owned": "denied"})
+        projection = project_status(public_status_result(raw))
+        traffic = next(atom for atom in projection.meanings
+                       if atom.arguments[:2] == ("status", "traffic"))
+        self.assertEqual(traffic.arguments[2], "unverified")
+        self.assertIn("capture unverified", render_terminal(projection.document))
+
+    def test_direct_route_has_no_cross_section_alert(self):
+        raw = snapshot(service_loaded=False, pid=None, port_owned=False, port_open=False)
+        projection = project_status(public_status_result(raw))
+        self.assertFalse(any(atom.arguments[:2] == ("status", "traffic")
+                             for atom in projection.meanings))
+        self.assertEqual(render_terminal(projection.document).count("\n"), 1)
 
     def test_absent_field_is_not_observed_instead_of_known_null(self):
         raw = snapshot()
@@ -214,6 +261,38 @@ class ProjectionKernelTests(unittest.TestCase):
         source = (Path(__file__).parents[1] / "tap_core/projection.py").read_text()
         for word in ("running", "stopped", "routing", "tap on", "tap off", "PORT STOLEN"):
             self.assertNotIn(word, source)
+
+
+class MaterialCompositionTests(unittest.TestCase):
+    def copied_material(self):
+        directory = Path(tempfile.mkdtemp()) / "status_v1"
+        shutil.copytree(Path(__file__).parents[1] / "tap_core/data/status_v1", directory)
+        self.addCleanup(shutil.rmtree, directory.parent)
+        return directory
+
+    def test_fragments_have_distinct_section_and_assembly_owners(self):
+        material = load_material()
+        self.assertEqual(set(material["observations"]), {"runtime", "routing"})
+        self.assertTrue(material["composition_rules"])
+        self.assertEqual(material["document_root"], "status")
+
+    def test_duplicate_rule_is_rejected_before_evaluation(self):
+        directory = self.copied_material()
+        path = directory / "composition.json"
+        fragment = json.loads(path.read_text())
+        fragment["composition_rules"][0]["id"] = "runtime-00-fallback"
+        path.write_text(json.dumps(fragment))
+        with self.assertRaisesRegex(ProjectionError, "duplicate status material rule id"):
+            load_material(directory / "manifest.json")
+
+    def test_ambiguous_document_owner_is_rejected_before_evaluation(self):
+        directory = self.copied_material()
+        path = directory / "composition.json"
+        fragment = json.loads(path.read_text())
+        fragment["document_root"] = "another-root"
+        path.write_text(json.dumps(fragment))
+        with self.assertRaisesRegex(ProjectionError, "exactly one document root owner"):
+            load_material(directory / "manifest.json")
 
 
 class StatusCliTests(unittest.TestCase):
