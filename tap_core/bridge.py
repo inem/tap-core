@@ -3,6 +3,10 @@
 Trusted classic page scripts and installed page-pack snapshots; no TLS bypass or
 app routing. This file also loads directly as a mitmproxy addon, so imports are
 stdlib only.
+
+Page assets are content-addressed (`core/<sha256>.js`). The applied pack plan is
+re-read from the profile on a short TTL without restarting the proxy; a failed
+refresh keeps the previous plan. Open-tab adapter hot-swap is a later #10 slice.
 """
 import hashlib
 import hmac
@@ -12,15 +16,18 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import stat
+import time
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 PREFIX = '/__tap/probe/'
 MARKER = 'tap-probe-bootstrap'
 SCRIPT_LIMIT = 256 * 1024
+PLAN_TTL_SECONDS = 1.0
 RESOURCE_ID = re.compile(r'[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*\Z')
 RESOURCE_VERSION = re.compile(r'(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\Z')
 RESOURCE_DIGEST = re.compile(r'[0-9a-f]{64}\Z')
 RESOURCE_CONTRACT = 'tap.page-resource/v1'
+ASSET_PATH = re.compile(re.escape(PREFIX) + r'core/([0-9a-f]{64})\.js\Z')
 
 
 class HTMLScanError(ValueError):
@@ -490,22 +497,76 @@ class Bridge:
         self.config, self.token, self.scripts = config, token, scripts
         self.script_origins = config.get('page_script_origins') if config else None
         self.component_token = None
+        self.script_digests = []
+        self.assets = {}
+        self._profile_root = None
+        self._plan_checked_at = 0.0
+        if scripts is not None:
+            self._publish_scripts(scripts, self.script_origins)
+
+    def _publish_scripts(self, scripts, script_origins):
+        digests = []
+        assets = dict(self.assets)
+        for body in scripts:
+            digest = hashlib.sha256(body).hexdigest()
+            assets[digest] = body
+            digests.append(digest)
+        self.scripts = list(scripts)
+        self.script_digests = digests
+        self.script_origins = script_origins
+        self.assets = assets
+
+    def _write_runtime_state(self):
+        if self._profile_root is None or self.config is None:
+            return
+        state = {'pid': os.getpid(), 'configuration': fingerprint(self.config),
+                 'enabled': self.config['enabled']}
+        path = self._profile_root / 'state/bridge.json'
+        temporary = path.with_suffix('.tmp')
+        temporary.write_text(json.dumps(state))
+        temporary.chmod(0o600)
+        temporary.replace(path)
+
+    def _apply_plan(self, config):
+        scripts = read_scripts(config) if config['enabled'] else []
+        self.config = config
+        self._publish_scripts(scripts, config.get('page_script_origins'))
+        self._write_runtime_state()
+
+    def refresh_plan(self, force=False):
+        """Re-read installed pack plan; keep the previous plan when refresh fails."""
+        if self._profile_root is None:
+            return False
+        now = time.monotonic()
+        if not force and now - self._plan_checked_at < PLAN_TTL_SECONDS:
+            return False
+        self._plan_checked_at = now
+        try:
+            profile = read_json(self._profile_root / 'profile.json')
+            base = configuration(profile['bridge'])
+            plan = effective_configuration(self._profile_root, base)
+            if profile.get('components') is not None:
+                self.component_token = read_token(self._profile_root, 'component-token')
+            else:
+                self.component_token = None
+            self.token = read_token(self._profile_root)
+            previous = fingerprint(self.config) if self.config is not None else None
+            self._apply_plan(plan)
+            return fingerprint(plan) != previous
+        except Exception as error:
+            print(f'[tap bridge] plan refresh failed; keeping previous plan: {error}', flush=True)
+            return False
 
     def load(self, loader):
         root = Path(os.environ['TAP_CORE_PROFILE'])
+        self._profile_root = root
         profile = read_json(root / 'profile.json')
         self.config = effective_configuration(root, configuration(profile['bridge']))
         if profile.get('components') is not None:
             self.component_token = read_token(root, 'component-token')
         self.token = read_token(root)
-        self.scripts = read_scripts(self.config) if self.config['enabled'] else []
-        self.script_origins = self.config.get('page_script_origins')
-        state = {'pid': os.getpid(), 'configuration': fingerprint(self.config), 'enabled': self.config['enabled']}
-        path = root / 'state/bridge.json'
-        temporary = path.with_suffix('.tmp')
-        temporary.write_text(json.dumps(state))
-        temporary.chmod(0o600)
-        temporary.replace(path)
+        self._apply_plan(self.config)
+        self._plan_checked_at = time.monotonic()
 
     def origin(self, request):
         # Destination authority, not a supplied Host/forwarded-origin header.
@@ -527,6 +588,7 @@ class Bridge:
     def requestheaders(self, flow):
         if flow.metadata.get('tap_core_bridge_handled'):
             return
+        self.refresh_plan()
         request = flow.request
         origin = self.origin(request)
         allowed = self.allowed(origin)
@@ -555,15 +617,23 @@ class Bridge:
         if (ws and observed_origin != origin) or (observed_origin and observed_origin != origin):
             self.reply(flow, 403, b'Bridge origin mismatch')
             return
-        asset = re.fullmatch(re.escape(PREFIX) + r'core/([0-9]+)\.js', path.path)
+        asset = ASSET_PATH.fullmatch(path.path)
         if asset:
-            index = int(asset.group(1))
-            if (index >= len(self.scripts)
-                    or (self.script_origins is not None
-                        and origin not in self.script_origins[index])):
+            digest = asset.group(1)
+            body = self.assets.get(digest)
+            # Content-addressed: retained digests remain fetchable after a plan
+            # swap so an already-injected HTML document cannot receive a different
+            # script under the same URL. Current-plan origin scope still applies
+            # when the digest is part of the active plan.
+            if body is None:
                 self.reply(flow, 404)
-            else:
-                self.reply(flow, 200, self.scripts[index], 'application/javascript; charset=utf-8')
+                return
+            if self.script_origins is not None and digest in self.script_digests:
+                index = self.script_digests.index(digest)
+                if origin not in self.script_origins[index]:
+                    self.reply(flow, 404)
+                    return
+            self.reply(flow, 200, body, 'application/javascript; charset=utf-8')
             return
         request.scheme, request.host, request.port = 'http', '127.0.0.1', self.config['hub_port']
         request.headers['host'] = f"127.0.0.1:{self.config['hub_port']}"
@@ -578,6 +648,7 @@ class Bridge:
         response = flow.response
         if response is None or response.stream or flow.metadata.get('tap_core_bridge_handled'):
             return
+        self.refresh_plan()
         if 'text/html' not in response.headers.get('content-type', '').lower():
             return
         if flow.request.headers.get('sec-fetch-dest', '') not in ('', 'document'):
@@ -601,10 +672,10 @@ class Bridge:
         asset_root = html.escape(self.origin(flow.request) + PREFIX, quote=True)
         scripts = [f'<script id="{MARKER}"{nonce_attr} data-tap-token="{self.token}" '
                    f'src="{asset_root}runtime.js?token={self.token}"></script>']
-        indexes = [index for index in range(len(self.scripts))
+        digests = [digest for index, digest in enumerate(self.script_digests)
                    if self.script_origins is None or origin in self.script_origins[index]]
-        scripts += [f'<script{nonce_attr} src="{asset_root}core/{index}.js?token={self.token}"></script>'
-                    for index in indexes]
+        scripts += [f'<script{nonce_attr} src="{asset_root}core/{digest}.js?token={self.token}"></script>'
+                    for digest in digests]
         position = parsed.body_end if parsed.body_end is not None else len(body)
         response.set_text(body[:position] + ''.join(scripts) + body[position:])
         for name in ('etag', 'last-modified'):

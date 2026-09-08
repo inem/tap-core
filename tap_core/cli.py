@@ -264,10 +264,15 @@ def main(argv=None):
                         root,
                         busy_message="A command from this profile is still running; "
                                      "wait before changing packs"):
-                    if profile is not None and (
-                            adapter.service_loaded(profile)
-                            or (profile.components is not None and adapter.service_loaded(Job(profile)))):
-                        raise TapError('Stop this profile with off before changing packs')
+                    import copy
+                    running = (
+                        profile is not None
+                        and (adapter.service_loaded(profile)
+                             or (profile.components is not None and adapter.service_loaded(Job(profile)))))
+                    registry_before = copy.deepcopy(store.load()) if (root / 'state/pack-registry.json').is_file() else None
+                    before_components = (
+                        store.effective_components(profile.components)
+                        if running and profile is not None and profile.components is not None else None)
                     if args.pack_action == 'add':
                         from .pack_add import add
                         output = add(root, args.source, assume_yes=args.yes)
@@ -289,6 +294,20 @@ def main(argv=None):
                         output = store.disable(args.id)
                     else:
                         output = store.uninstall(args.id, args.version)
+                    if running and profile is not None and profile.components is not None:
+                        after_components = store.effective_components(profile.components)
+                        if before_components != after_components:
+                            if registry_before is not None:
+                                store.save(registry_before)
+                            raise TapError(
+                                'Stop this profile with off before changing reader/handler packs; '
+                                'page-only pack changes may apply while the proxy is running')
+                    if isinstance(output, dict) and 'applies' in output and running:
+                        output = dict(output)
+                        output['applies'] = (
+                            'immediately for new documents and retained content-addressed assets; '
+                            'open pages keep previously injected scripts until reload; '
+                            'reader/handler bindings still require profile on')
             print(json.dumps(output, indent=2))
             return 0
         if args.command == "install":

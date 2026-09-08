@@ -66,7 +66,13 @@ Per-application routing is explicitly unsupported by this policy. This is a
 concrete subset of #6, not its host/TLS/app policy completion.
 
 For allowed top-level HTML, the addon inserts the existing runtime bootstrap
-followed by configured scripts served from memory under `/__tap/probe/core/`.
+followed by configured scripts served from memory under
+`/__tap/probe/core/<sha256>.js`. Asset URLs are content-addressed: after a pack
+plan change, an already-injected document keeps fetching the same bytes for its
+old digest, while new documents receive digests from the current plan. The
+bridge re-reads the installed PackStore plan about once per second without
+restarting the proxy; a failed refresh keeps the previous plan. Open-tab
+adapter install/remove without page reload is a later #10 slice.
 It scans script attributes (including whitespace, unquoted values and
 HTML entities) to retain an existing nonce. This is a bounded tag/attribute
 tokenizer, not a browser HTML5 tree builder. Comments and raw-text contexts do
@@ -92,11 +98,13 @@ remote application under the reserved namespace. Ordinary excluded responses
 remain untouched. The addon does not grant extra privileges to third-party
 Python hooks supplied through `--addon`.
 
-Changes take effect only after stop/configure/start. Stopping the proxy closes
-existing proxied WS connections; with the bridge disabled, their reconnects are
-denied and new pages receive no bootstrap. Already executed page scripts and
-rendered UI are not removed or revoked: reload the page to discard them. Script
-files are snapshot inputs for each startup, not immutable installed artifacts.
+Changes to bridge configuration still take effect after stop/configure/start.
+Installed **page-only** pack enable/update/disable may apply while the proxy is
+running: new documents pick up the refreshed plan; already executed page scripts
+are not removed until the page is reloaded. Reader/handler pack changes still
+require `off` before mutating components. Stopping the proxy closes existing
+proxied WS connections; with the bridge disabled, their reconnects are denied
+and new pages receive no bootstrap.
 
 ## Diagnostics and verification
 

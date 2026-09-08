@@ -1,8 +1,10 @@
 """Policy/credential/body safety at native hook boundaries, no network mutation."""
+import hashlib
 import json
 import os
 from pathlib import Path
 import runpy
+import shutil
 from types import SimpleNamespace
 import tempfile
 import time
@@ -14,6 +16,10 @@ from tap_core.runtime import Profile, MacOS, TapError
 from tap_core.cli import main, bridge_status, doctor
 
 TOKEN = 'a' * 48
+
+
+def digest(body):
+    return hashlib.sha256(body if isinstance(body, bytes) else body.encode()).hexdigest()
 
 
 def config(**extra):
@@ -200,7 +206,8 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(f.response.body, before)
 
     def test_serves_configured_asset_without_forwarding_to_hub(self):
-        f = flow('/__tap/probe/core/0.js?token=' + TOKEN)
+        asset = digest(b'window.fixture = true;')
+        f = flow(f'/__tap/probe/core/{asset}.js?token=' + TOKEN)
         self.bridge.requestheaders(f)
         self.assertEqual(f.response.content, b'window.fixture = true;')
         self.assertEqual(f.request.host, 'example.test')
@@ -213,13 +220,13 @@ class BridgeTests(unittest.TestCase):
         bridge = TestBridge(effective, TOKEN, [b'one', b'two'])
         first = flow(host='example.test', response=Response())
         bridge.response(first)
-        self.assertIn('core/0.js', first.response.body)
-        self.assertNotIn('core/1.js', first.response.body)
+        self.assertIn(f'core/{digest(b"one")}.js', first.response.body)
+        self.assertNotIn(f'core/{digest(b"two")}.js', first.response.body)
         second = flow(host='third.test', response=Response())
         bridge.response(second)
-        self.assertNotIn('core/0.js', second.response.body)
-        self.assertIn('core/1.js', second.response.body)
-        denied_asset = flow('/__tap/probe/core/1.js?token=' + TOKEN, host='example.test')
+        self.assertNotIn(f'core/{digest(b"one")}.js', second.response.body)
+        self.assertIn(f'core/{digest(b"two")}.js', second.response.body)
+        denied_asset = flow(f'/__tap/probe/core/{digest(b"two")}.js?token=' + TOKEN, host='example.test')
         bridge.requestheaders(denied_asset)
         self.assertEqual(denied_asset.response.status_code, 404)
 
@@ -231,7 +238,7 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(f.response.body, once)
         self.assertEqual(once.count('id="tap-probe-bootstrap"'), 1)
         self.assertEqual(once.count('nonce="YWJjZA=="'), 3)
-        self.assertLess(once.index('runtime.js?'), once.index('core/0.js?'))
+        self.assertLess(once.index('runtime.js?'), once.index(f'core/{digest(b"window.fixture = true;")}.js?'))
         self.assertNotIn('etag', f.response.headers)
         self.assertEqual(f.response.headers['cache-control'], 'no-store')
 
@@ -426,3 +433,94 @@ class BridgeTests(unittest.TestCase):
         with patch.object(MacOS, 'service_loaded', return_value=False):
             self.assertEqual(main(argv), 0)
         self.assertFalse(Profile.load(self.root).bridge['enabled'])
+
+    def test_content_addressed_asset_survives_plan_swap(self):
+        first = b'window.packA = true;'
+        second = b'window.packB = true;'
+        bridge = TestBridge(config(page_scripts=[]), TOKEN, [first])
+        old = digest(first)
+        injected = flow(response=Response())
+        bridge.response(injected)
+        self.assertIn(f'core/{old}.js', injected.response.body)
+        bridge._publish_scripts([second], None)
+        retained = flow(f'/__tap/probe/core/{old}.js?token=' + TOKEN)
+        bridge.requestheaders(retained)
+        self.assertEqual(retained.response.status_code, 200)
+        self.assertEqual(retained.response.content, first)
+        fresh = flow(response=Response('<html><body>next</body></html>'))
+        bridge.response(fresh)
+        self.assertIn(f'core/{digest(second)}.js', fresh.response.body)
+        self.assertNotIn(f'core/{old}.js', fresh.response.body)
+
+    def test_failed_plan_refresh_keeps_previous_assets(self):
+        script = self.root / 'page.js'
+        script.write_text('window.keep = true;\n')
+        self.profile.bridge = config(page_scripts=[str(script)],
+                                     allow_origins=['https://example.test'],
+                                     exclude_origins=[])
+        self.profile.save()
+        bridge = Bridge()
+        with patch.dict(os.environ, {'TAP_CORE_PROFILE': str(self.root)}):
+            bridge.load(None)
+        bridge.reply = TestBridge.reply.__get__(bridge, Bridge)
+        before = list(bridge.script_digests)
+        self.assertEqual(len(before), 1)
+        with patch('tap_core.bridge.effective_configuration', side_effect=ValueError('broken pack')):
+            bridge._plan_checked_at = 0
+            self.assertFalse(bridge.refresh_plan(force=True))
+        self.assertEqual(bridge.script_digests, before)
+        asset = flow(f'/__tap/probe/core/{before[0]}.js?token=' + bridge.token)
+        bridge.requestheaders(asset)
+        self.assertEqual(asset.response.status_code, 200)
+        self.assertEqual(asset.response.content, b'window.keep = true;\n')
+
+    def test_plan_refresh_picks_up_enabled_pack_without_reload(self):
+        from tap_core.pack_store import PackStore, build_artifact
+        source = Path(__file__).resolve().parents[1] / 'fixtures/packs/installed-page'
+        self.profile.bridge = config(allow_origins=[], exclude_origins=[], page_scripts=[])
+        self.profile.save()
+        store = PackStore(self.root)
+        artifact = self.root / 'page.tap-pack'
+        build_artifact(source, artifact)
+        store.install(artifact)
+        store.enable('fixture.installed-page', '0.1.0',
+                     origins=['https://fixture.example'], capabilities=['page.inject'])
+        bridge = Bridge()
+        with patch.dict(os.environ, {'TAP_CORE_PROFILE': str(self.root)}):
+            bridge.load(None)
+        bridge.reply = TestBridge.reply.__get__(bridge, Bridge)
+        first = flow(host='fixture.example', response=Response())
+        bridge.response(first)
+        self.assertIn('/__tap/probe/core/', first.response.body)
+        digests_v1 = list(bridge.script_digests)
+        self.assertTrue(digests_v1)
+
+        v2 = self.root / 'page-v2'
+        shutil.copytree(source, v2)
+        manifest = json.loads((v2 / 'pack.json').read_text())
+        manifest['version'] = '0.2.0'
+        with (v2 / 'feature.js').open('a') as handle:
+            handle.write('\nwindow.featureV2 = true;\n')
+        feature = next(resource for resource in manifest['resources']
+                       if resource['id'] == 'fixture.feature')
+        feature['version'] = '0.2.0'
+        feature['sha256'] = hashlib.sha256((v2 / 'feature.js').read_bytes()).hexdigest()
+        feature['source_revision'] = 'sha256:' + feature['sha256']
+        manifest['entrypoints']['page']['uses'][1]['version'] = '0.2.0'
+        (v2 / 'pack.json').write_text(json.dumps(manifest, indent=2) + '\n')
+        second = self.root / 'page-v2.tap-pack'
+        build_artifact(v2, second)
+        store.update(second)
+        bridge._plan_checked_at = 0
+        self.assertTrue(bridge.refresh_plan(force=True))
+        digests_v2 = list(bridge.script_digests)
+        self.assertNotEqual(digests_v1, digests_v2)
+        fresh = flow(host='fixture.example', response=Response('<html><body>v2</body></html>'))
+        bridge.response(fresh)
+        for old in digests_v1:
+            if old not in digests_v2:
+                self.assertNotIn(f'core/{old}.js', fresh.response.body)
+                retained = flow(f'/__tap/probe/core/{old}.js?token=' + bridge.token,
+                                host='fixture.example')
+                bridge.requestheaders(retained)
+                self.assertEqual(retained.response.status_code, 200)

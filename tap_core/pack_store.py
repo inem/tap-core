@@ -554,8 +554,19 @@ class PackStore:
         if "reader" in manifest["entrypoints"] and projected is not None:
             self._refuse_incompatible_reader_progress(pack_id, projected["readers"][pack_id])
         self.save(candidate)
-        applies = ("immediately for new command invocations; service/page bindings apply next profile on"
-                   if "command" in manifest["entrypoints"] else "next profile on")
+        roles = set(manifest["entrypoints"])
+        if roles & {"reader", "handler"}:
+            applies = "next profile on"
+        elif "page" in roles:
+            applies = ("immediately for new documents without proxy restart; "
+                       "open pages keep previously injected scripts until reload")
+        elif "command" in roles:
+            applies = "immediately for new command invocations"
+        else:
+            applies = "next profile on"
+        if "command" in roles and "page" in roles and not (roles & {"reader", "handler"}):
+            applies = ("immediately for new command invocations and new documents without proxy restart; "
+                       "open pages keep previously injected scripts until reload")
         return {"id": pack_id, "version": version, "enabled": True,
                 "code": str(root), "applies": applies}
 
@@ -591,8 +602,19 @@ class PackStore:
         if "reader" in manifest["entrypoints"] and projected is not None:
             self._refuse_incompatible_reader_progress(pack_id, projected["readers"][pack_id])
         self.save(candidate)
-        applies = ("immediately for new command invocations; service/page bindings apply next profile on"
-                   if "command" in manifest["entrypoints"] else "next profile on")
+        roles = set(manifest["entrypoints"])
+        if roles & {"reader", "handler"}:
+            applies = "next profile on"
+        elif "page" in roles:
+            applies = ("immediately for new documents without proxy restart; "
+                       "open pages keep previously injected scripts until reload")
+        elif "command" in roles:
+            applies = "immediately for new command invocations"
+        else:
+            applies = "next profile on"
+        if "command" in roles and "page" in roles and not (roles & {"reader", "handler"}):
+            applies = ("immediately for new command invocations and new documents without proxy restart; "
+                       "open pages keep previously injected scripts until reload")
         return {"id": pack_id, "version": version, "enabled": True,
                 "code": str(root), "applies": applies}
 
