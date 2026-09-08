@@ -23,6 +23,7 @@ class PackAddTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         source = self.root / "source"
+        self.source = source
         source.mkdir()
         (source / "command.py").write_text("print('fixture')\n")
         manifest = {
@@ -33,7 +34,7 @@ class PackAddTests(unittest.TestCase):
                 "runtime": "host-python", "file": "command.py", "commands": [{
                     "path": ["hello"], "summary": "Say hello", "usage": "[NAME]",
                     "profile": "required"}]}},
-            "config": {},
+            "config": {"prefix": {"type": "string", "default": "fixture"}},
             "access": {"origins": ["https://example.test"],
                        "capabilities": ["command.execute"]}}
         (source / "pack.json").write_text(json.dumps(manifest))
@@ -60,6 +61,39 @@ class PackAddTests(unittest.TestCase):
         repeated = add(self.root / "profile", "owner/repo", opener=self.opener,
                        input_fn=lambda _prompt: self.fail("must not ask again"), output_fn=messages.append)
         self.assertTrue(repeated["already_configured"])
+
+    def test_reenable_preserves_config_and_noop_verifies_installed_files(self):
+        profile = self.root / "profile"
+        add(profile, "owner/repo", opener=self.opener, assume_yes=True,
+            output_fn=lambda value: None)
+        store = PackStore(profile)
+        store.enable("fixture.add", "1.2.3", origins=["https://example.test"],
+                     capabilities=["command.execute"], config={"prefix": "custom"})
+        store.disable("fixture.add")
+        add(profile, "owner/repo", opener=self.opener, assume_yes=True,
+            output_fn=lambda value: None)
+        self.assertEqual(store.load()["packs"]["fixture.add"]["config"],
+                         {"prefix": "custom"})
+        manifest_path = self.source / "pack.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["version"] = "1.2.4"
+        manifest_path.write_text(json.dumps(manifest))
+        newer = self.root / "fixture.add-1.2.4.tap-pack"
+        build_artifact(self.source, newer)
+        self.artifact = newer
+        self.release = [{"tag_name": "v1.2.4", "draft": False, "prerelease": False,
+                         "assets": [{"name": newer.name,
+                                     "browser_download_url": "https://github.com/owner/repo/releases/download/v1.2.4/pack"}]}]
+        add(profile, "owner/repo@1.2.4", opener=self.opener, assume_yes=True,
+            output_fn=lambda value: None)
+        updated = store.load()["packs"]["fixture.add"]
+        self.assertEqual(updated["selected"], "1.2.4")
+        self.assertEqual(updated["config"], {"prefix": "custom"})
+        installed = store.version_root("fixture.add", "1.2.4") / "command.py"
+        installed.write_text("changed\n")
+        with self.assertRaisesRegex(PackError, "integrity check failed"):
+            add(profile, "owner/repo", opener=self.opener, assume_yes=True,
+                output_fn=lambda value: None)
 
     def test_cancel_and_prerelease_policy(self):
         with self.assertRaisesRegex(PackError, "cancelled"):

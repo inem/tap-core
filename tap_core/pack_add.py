@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 from .pack_store import MAX_ARCHIVE_BYTES, PackStore, _digest, _extract_artifact
-from .packs import PackError, VERSION, require
+from .packs import PackError, VERSION, require, resolve_config
 
 
 PART = r"[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,98}[A-Za-z0-9])?"
@@ -96,8 +96,11 @@ def add(profile_root, spec, *, assume_yes=False, opener=urlopen, input_fn=input,
                 "release tag and pack manifest versions differ")
         commands = manifest["entrypoints"].get("command", {}).get("commands", [])
         store = PackStore(profile_root)
-        record = store.load()["packs"].get(manifest["id"])
+        registry = store.load()
+        record = registry["packs"].get(manifest["id"])
         metadata = (record or {}).get("versions", {}).get(manifest["version"], {})
+        saved_config = record.get("config", {}) if record else {}
+        resolve_config(manifest, saved_config)
         requested_grants = {"origins": sorted(manifest["access"]["origins"]),
                             "capabilities": sorted(manifest["access"]["capabilities"]),
                             "dependencies": {item["id"]: item["version"]
@@ -106,6 +109,7 @@ def add(profile_root, spec, *, assume_yes=False, opener=urlopen, input_fn=input,
                 and record.get("grants") == requested_grants
                 and metadata.get("artifact_sha256") == _digest(artifact)
                 and metadata.get("source") == resolved["source"]):
+            store.verify(registry, manifest["id"], manifest["version"])
             return {"id": manifest["id"], "version": manifest["version"],
                     "enabled": True, "already_configured": True,
                     "source": resolved["source"],
@@ -124,6 +128,6 @@ def add(profile_root, spec, *, assume_yes=False, opener=urlopen, input_fn=input,
         enabled = store.enable(manifest["id"], manifest["version"],
                                origins=manifest["access"]["origins"],
                                capabilities=manifest["access"]["capabilities"],
-                               dependencies=dependencies)
+                               dependencies=dependencies, config=saved_config)
         return {**installed, **enabled, "source": resolved["source"],
                 "next": "tap " + " ".join(commands[0]["path"]) + " --help" if commands else None}
