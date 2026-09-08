@@ -193,13 +193,17 @@ plus retained checkpoint and a healthy controller restart. Live proxied HTTP
 capture and headless browser Load → `#result` (saved projection) are covered by
 `tools/check_linked_pack_live.py` / `docs/results/linked-pack-live-browser.json`
 on explicit loopback; they do not claim CA trust, system proxy, SSE or
-third-party WS.
+third-party WS. Lifecycle and error paths for that pack
+(`handler_timeout`, visible reader failure, incompatible update refuse,
+disable/uninstall with retained data) are covered by
+`tools/check_linked_pack_lifecycle.py` /
+`docs/results/linked-pack-lifecycle.json`.
 
-Still required for #14: observed reader/handler error paths and lifecycle on
-that external example, and independent author reproduction. Clean-Mac release
-acceptance belongs to #15. System CA trust and a live nonce-bearing YouTube
-response remain #38 evidence. Hubless reader-only managed on/off is accepted
-for packs without handlers when `bridge.enabled=false`.
+Still required for #14: independent author reproduction of the linked example
+on a machine without the author's layout. Clean-Mac release acceptance belongs
+to #15. System CA trust and a live nonce-bearing YouTube response remain #38
+evidence. Hubless reader-only managed on/off is accepted for packs without
+handlers when `bridge.enabled=false`.
 
 ### Repeat the linked HTTP/browser check
 
@@ -225,3 +229,21 @@ stops those jobs and the origin. It compares the displayed value and record ID
 with the capture journal and reader projection before and after off/on. The
 report records the tested checkout commit; supplied backend/browser tools are
 not proof of runtime download or platform support on a clean Mac.
+
+### Repeat the linked lifecycle/error check
+
+No browser. Requires Bun 1.3.11 and the published `example.linked-http` artifact
+(or a local source tree). Exit 0 only when every claim below passes and the
+mocked controller exits cleanly:
+
+```sh
+python3 tools/check_linked_pack_lifecycle.py \
+  --pack /path/to/example.linked-http-0.1.0.tap-pack \
+  --bun /path/to/bun \
+  --output /tmp/linked-pack-lifecycle.json
+```
+
+Claims: hanging handler → `handler_timeout`; unsupported capture record → reader
+`error` in components status; `pack update` to an incompatible reader version
+refuses and keeps selected + checkpoint; `disable`/`uninstall` remove code and
+retain pack/reader data. Gate unit: `tests/test_linked_pack_lifecycle_check.py`.
