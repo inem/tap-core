@@ -56,7 +56,9 @@ when the page bridge is enabled or handlers are configured (Hub path).
 Reader-only profiles with `bridge.enabled=false` and no handlers start the
 component controller without Bun/Hub; Bun is not probed in that mode.
 Handler `TAP_PACK_CONTEXT` includes `profile_root` so an installed pack can
-resolve sibling reader outputs without absolute config paths.
+resolve sibling reader outputs without absolute config paths. This is a local
+filesystem location for trusted same-user handlers, not a new grant or a
+filesystem sandbox; it must not be forwarded to the requesting page.
 The backend retains its existing mitmproxy 12.2.3 check. Node is a test dependency
 for Playwright, not a product runtime dependency.
 

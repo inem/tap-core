@@ -66,7 +66,8 @@ def main():
         raise SystemExit('This check requires Bun 1.3.11')
 
     report = {
-        'scope': 'installed linked pack hermetic chain; not clean-Mac, browser UI, SSE, or third-party WS',
+        'scope': 'synthetic Writer record → installed reader → Hub handler; no HTTP capture or browser execution',
+        'cleanup_scope': 'controller exit only; launchd mocked; child/listener cleanup not independently observed',
         'core_commit': run(['git', '-C', ROOT, 'rev-parse', 'HEAD']).strip(),
         'python': platform.python_version(),
         'bun': run([bun, '--version']).strip(),
@@ -75,8 +76,8 @@ def main():
         'scenario_passed': False,
         'cleanup_verified': False,
         'transport': {
-            'controlled_http_body': 'exercised',
-            'own_page_hub_ws': 'handler_via_hub_protocol',
+            'controlled_http_body': 'synthetic_record_submitted_to_writer; HTTP capture not exercised',
+            'own_page_hub_ws': 'handler_via_protocol_client; page runtime not executed',
             'sse_body': 'not_claimed',
             'third_party_ws': 'not_claimed',
         },

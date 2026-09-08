@@ -185,11 +185,17 @@ count remains in the report because background request volume varies. The
 response had a CSP header but no source nonce to reuse. Playwright ignored
 certificate errors, so this is not the clean CA-trust result.
 
-Still required for #14: independent author/clean-Mac reproduction of the
-external linked example (#15). A first external linked pack
-([`inem/tap-pack-linked-http`](https://github.com/inem/tap-pack-linked-http))
-covers controlled HTTP → installed reader → Hub handler → page wiring; hermetic
-Core evidence is `tools/check_linked_pack.py`. System CA trust and a live
-nonce-bearing YouTube response remain #38 evidence rather than claims of this
-slice. Hubless reader-only managed on/off is accepted in Core for packs without
-handlers when `bridge.enabled=false`.
+An external linked pack ([`inem/tap-pack-linked-http`](https://github.com/inem/tap-pack-linked-http))
+now provides reader, handler and page code in a published artifact. The hermetic
+Core check, `tools/check_linked_pack.py`, proves a synthetic record submitted to
+Writer → installed reader projection → Hub handler → protocol client result,
+plus retained checkpoint and a healthy controller restart. It does not make an
+HTTP request through capture or execute the pack's page code in a browser.
+
+Still required for #14: controlled HTTP capture → installed reader → browser
+page request → handler → visible saved result, observed reader/handler error
+paths and lifecycle on that external example, and independent author
+reproduction. Clean-Mac release acceptance belongs to #15. System CA trust and
+a live nonce-bearing YouTube response remain #38 evidence. Hubless reader-only
+managed on/off is accepted for packs without handlers when
+`bridge.enabled=false`.
