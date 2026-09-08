@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Opt-in #10 slice-1 live check: page pack A→B without proxy restart.
+"""Opt-in #10 slice-1 live check: page pack A→B→disable without proxy restart.
 
 Explicit loopback only. Starts a temporary profile, enables a page-only pack,
 loads the origin in headless Chrome, updates the pack while the proxy stays up,
@@ -149,7 +149,7 @@ def main():
     adapter = MacOS()
     network_before = adapter.network_state()
     report = {
-        'scope': '#10 slice 1 hot page assets: pack A→B without proxy restart; '
+        'scope': '#10 slice 1 hot page assets: pack A→B→disable without proxy restart; '
                  'new document + retained digest + shared bytes across origins; '
                  'explicit loopback; no system proxy',
         'commit': run(['/usr/bin/git', '-C', ROOT, 'rev-parse', 'HEAD'], check=False).stdout.strip()
@@ -213,6 +213,10 @@ def main():
             return (code, body) if code == 200 and BODY_MARK in body and 'tap-probe-bootstrap' in body else None
 
         _, html_v1 = wait(lambda: html_ready(origin_a), 'v1 injection')
+        proxy_pid = adapter.service_pid(profile)
+        if proxy_pid is None:
+            raise RuntimeError('Running proxy PID unavailable')
+        steps['proxy_pids'] = {'before_update': proxy_pid}
         digests_v1 = digests_from_html(html_v1)
         steps['v1_injection'] = bool(digests_v1)
         shared_digest = hashlib.sha256(shared.encode()).hexdigest()
@@ -280,10 +284,36 @@ def main():
         run([node, ROOT / 'fixtures/hot-pack-assets/browser.cjs', browser_cfg2], timeout=90)
         browser_v2 = json.loads(browser_out2.read_text())
         steps['browser_v2'] = browser_v2
+        steps['proxy_pids']['after_update'] = adapter.service_pid(profile)
+
+        steps['hot_disable'] = json.loads(run(prefix + ['pack', 'disable', PACK_ID]).stdout)
+
+        def disabled_document():
+            code, body = http_get(origin_a + '/', profile.port, ca)
+            return code == 200 and BODY_MARK in body and not digests_from_html(body)
+
+        wait(disabled_document, 'new document without disabled pack scripts')
+        browser_cfg3 = root / 'browser-disabled.json'
+        browser_out3 = root / 'browser-disabled-result.json'
+        browser_cfg3.write_text(json.dumps({
+            'proxy_port': profile.port, 'origin': origin_a, 'marker': '__tapHotV2',
+            'expect_absent': True,
+            'absent_markers': ['__tapHotV1', '__tapHotV2', '__tapSharedHot'],
+            'playwright': str(playwright), 'chrome': str(chrome), 'output': str(browser_out3),
+        }))
+        run([node, ROOT / 'fixtures/hot-pack-assets/browser.cjs', browser_cfg3], timeout=90)
+        steps['browser_disabled'] = json.loads(browser_out3.read_text())
+        steps['disable_no_injection'] = (
+            steps['hot_disable'].get('enabled') is False
+            and steps['browser_disabled']['markers_absent']
+            and not steps['browser_disabled']['scripts'])
+        steps['proxy_pids']['after_disable'] = adapter.service_pid(profile)
+        steps['proxy_pid_unchanged'] = all(pid == proxy_pid for pid in steps['proxy_pids'].values())
 
         failures = []
         for key in ('v1_injection', 'identical_bytes_both_origins', 'v2_injection',
-                    'plan_changed', 'retained_same_origin'):
+                    'plan_changed', 'retained_same_origin', 'disable_no_injection',
+                    'proxy_pid_unchanged'):
             if not steps.get(key):
                 failures.append(key)
         if not steps.get('browser_v1', {}).get('marker_true'):
