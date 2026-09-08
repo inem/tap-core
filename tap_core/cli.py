@@ -1,17 +1,124 @@
 """Six existing TAP commands, with profile-scoped configuration and diagnostics."""
 import argparse
 from contextlib import nullcontext
+import hashlib
 import json
 import math
 import os
 from pathlib import Path
 import platform
 import re
+import shlex
 import sys
 import time
 
 from .runtime import Lifecycle, MacOS, Profile, TapError, profile_lock
 from .routing import select_routing, SystemProxyRouting
+
+
+def install_root_for_profile(profile):
+    """Installer layout places the profile at <root>/profile beside install.json."""
+    candidate = profile.root.parent
+    if (candidate / "install.json").is_file():
+        return candidate
+    return None
+
+
+def finish_setup_command(install_root):
+    path = install_root / "checkout" / "instll" / "finish-setup"
+    if not path.is_file():
+        return None
+    return f"bash {shlex.quote(str(path.resolve()))}"
+
+
+def wrapper_bin_dir(install_root):
+    try:
+        data = json.loads((install_root / "install.json").read_text())
+    except (OSError, ValueError):
+        return None
+    wrapper = data.get("wrapper")
+    if not wrapper:
+        return None
+    return Path(wrapper).expanduser().resolve().parent
+
+
+def path_export_command(install_root):
+    bin_dir = wrapper_bin_dir(install_root)
+    if bin_dir is None:
+        return None
+    return f"export PATH={shlex.quote(str(bin_dir))}:$PATH"
+
+
+def path_needs_export(install_root):
+    bin_dir = wrapper_bin_dir(install_root)
+    if bin_dir is None:
+        return False
+    return str(bin_dir) not in os.environ.get("PATH", "").split(os.pathsep)
+
+
+def _cert_fingerprint(path):
+    text = Path(path).read_text()
+    match = re.search(r"-----BEGIN CERTIFICATE-----(.*?)-----END CERTIFICATE-----", text, re.S)
+    if not match:
+        return None
+    import base64
+    der = base64.b64decode("".join(match.group(1).split()))
+    return hashlib.sha256(der).hexdigest()
+
+
+def ca_grant_recorded(install_root, profile):
+    """True when finish-setup recorded a CA grant matching this profile certificate."""
+    cert = profile.root / "certificates" / "mitmproxy-ca-cert.pem"
+    if not cert.is_file():
+        return False
+    try:
+        data = json.loads((install_root / "install.json").read_text())
+    except (OSError, ValueError):
+        return False
+    recorded = ((data.get("grants") or {}).get("ca") or {}).get("sha256") or ""
+    actual = _cert_fingerprint(cert)
+    return bool(recorded and actual and recorded.lower() == actual.lower())
+
+
+def finish_setup_next(profile):
+    """Copy-paste finish-setup when this install still needs sudoers/CA trust."""
+    install_root = install_root_for_profile(profile)
+    if install_root is None:
+        return None
+    command = finish_setup_command(install_root)
+    if command is None:
+        return None
+    if ca_grant_recorded(install_root, profile):
+        return None
+    return command
+
+
+def next_shell_commands(profile, *, setup=None):
+    """Ordered copy-paste lines for stderr / doctor["next"]."""
+    install_root = install_root_for_profile(profile)
+    if install_root is None:
+        return []
+    if setup is None:
+        setup = finish_setup_next(profile)
+    lines = []
+    export = path_export_command(install_root)
+    # Always pair PATH with finish-setup (fresh shell copy-paste); else only if missing.
+    if export and (setup or path_needs_export(install_root)):
+        lines.append(export)
+    if setup:
+        lines.append(setup)
+    return lines
+
+
+def print_next_commands(profile, *, setup=None):
+    lines = next_shell_commands(profile, setup=setup)
+    for line in lines:
+        print(f"tap-core: next: {line}", file=sys.stderr)
+    return lines
+
+
+def print_finish_setup_next(profile):
+    return print_next_commands(profile)
 
 
 def health(profile, adapter):
@@ -105,19 +212,26 @@ def doctor(profile, adapter):
     except TapError as error:
         result["backend_error"] = str(error)
     result["ca_file_present"] = (profile.root / "certificates/mitmproxy-ca-cert.pem").is_file()
-    result["ca_trust"] = "not_verified; HTTPS clients must trust this profile CA explicitly"
+    install_root = install_root_for_profile(profile)
+    setup = finish_setup_command(install_root) if install_root is not None else None
+    ca_granted = bool(install_root and ca_grant_recorded(install_root, profile))
+    if ca_granted:
+        result["ca_trust"] = "granted; finish-setup recorded System keychain trust for this profile CA"
+    else:
+        result["ca_trust"] = "not_verified; HTTPS clients must trust this profile CA explicitly"
     if profile.routing == "system":
         listed = adapter.run(["/usr/bin/sudo", "-n", "-l"], check=False).stdout
         ready = "TAP_CORE_PROXY" in listed or "networksetup -setwebproxy" in listed
-        result["sudoers"] = {
-            "ready": ready,
-            "fix": None if ready else
-            'bash "$HOME/.tap-core/checkout/instll/finish-setup"',
-        }
+        result["sudoers"] = {"ready": ready, "next": None if ready else setup}
         if not ready:
             result["inspection_errors"]["sudoers"] = (
                 "system routing needs finish-setup (sudoers + CA trust); "
                 "run the finish-setup from this installation's checkout")
+    need_setup = bool(setup and (not ca_granted or (profile.routing == "system"
+                                                     and not result.get("sudoers", {}).get("ready"))))
+    next_lines = next_shell_commands(profile, setup=setup if need_setup else None)
+    if next_lines:
+        result["next"] = next_lines
     result["traffic_probe"] = None
     if result["port_owned"] is True:
         try:
@@ -375,6 +489,8 @@ def main(argv=None):
         if args.command == "doctor":
             result = doctor(profile, adapter)
             print(json.dumps(result, indent=2))
+            for line in result.get("next") or []:
+                print(f"tap-core: next: {line}", file=sys.stderr)
             return 1 if not result["healthy"] else 0
         if args.command == "routing":
             with profile_lock(root):
@@ -406,6 +522,8 @@ def main(argv=None):
             with select_routing(profile, adapter).mutation_lock():
                 output = mutate(args.command, profile, adapter)
         print(output)
+        if args.command == "on":
+            print_finish_setup_next(profile)
         return 0
     except (TapError, OSError, ValueError) as error:
         print(f"tap: {error}", file=sys.stderr)

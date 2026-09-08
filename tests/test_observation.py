@@ -5,6 +5,7 @@ import tempfile
 import time
 import unittest
 from unittest.mock import Mock, patch
+import os
 
 from tap_core.capture import Writer
 from tap_core.cli import doctor, status
@@ -250,6 +251,61 @@ class ObservationTests(unittest.TestCase):
         result = doctor(self.profile, self.adapter())
         self.assertTrue(result["healthy"])
         self.assertEqual(result["inspection_errors"], {})
+
+    def test_doctor_prints_absolute_finish_setup_when_ca_grant_missing(self):
+        import base64
+        import hashlib
+        import re
+        import subprocess
+        from tap_core.cli import finish_setup_command, finish_setup_next, path_export_command
+
+        parent = tempfile.TemporaryDirectory()
+        self.addCleanup(parent.cleanup)
+        root = Path(parent.name)
+        profile_dir = root / "profile"
+        profile_dir.mkdir()
+        checkout = root / "checkout" / "instll"
+        checkout.mkdir(parents=True)
+        (checkout / "finish-setup").write_text("#!/bin/bash\n")
+        bin_dir = root / "bin"
+        bin_dir.mkdir()
+        wrapper = bin_dir / "tap"
+        wrapper.write_text("#!/bin/sh\n")
+        (root / "install.json").write_text(json.dumps({
+            "version": 1, "grants": {}, "wrapper": str(wrapper)}))
+        cert_dir = profile_dir / "certificates"
+        cert_dir.mkdir()
+        pem = cert_dir / "mitmproxy-ca-cert.pem"
+        subprocess.run(
+            ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-keyout", str(cert_dir / "key.pem"),
+             "-out", str(pem), "-days", "1", "-nodes", "-subj", "/CN=tap-fixture"],
+            check=True, capture_output=True)
+        profile = Profile(profile_dir, "/fixture/mitmdump", 18999, "explicit", "http://example.test/", [])
+        profile.save()
+        data = {"pid": 123, "updated_at": time.time(), "writer_alive": True,
+                "written": 0, "dropped": 0, "write_errors": 0, "last_error": None, "queued_bytes": 0}
+        (profile_dir / "state").mkdir(exist_ok=True)
+        (profile_dir / "state/capture.json").write_text(json.dumps(data))
+        expected = [path_export_command(root), finish_setup_command(root)]
+        result = doctor(profile, self.adapter())
+        self.assertEqual(result["next"], expected)
+        self.assertIn("not_verified", result["ca_trust"])
+        self.assertEqual(finish_setup_next(profile), expected[1])
+        text = pem.read_text()
+        match = re.search(r"-----BEGIN CERTIFICATE-----(.*?)-----END CERTIFICATE-----", text, re.S)
+        digest = hashlib.sha256(base64.b64decode("".join(match.group(1).split()))).hexdigest()
+        (root / "install.json").write_text(json.dumps({
+            "version": 1, "wrapper": str(wrapper),
+            "grants": {"ca": {"cert": str(pem), "sha256": digest}}}))
+        self.assertIsNone(finish_setup_next(profile))
+        # PATH still missing from this process → keep export-only next.
+        result = doctor(profile, self.adapter())
+        self.assertEqual(result["next"], [path_export_command(root)])
+        self.assertIn("granted", result["ca_trust"])
+        # When bin is already on PATH, no next.
+        with patch.dict(os.environ, {"PATH": str(bin_dir.resolve()) + os.pathsep + os.environ.get("PATH", "")}):
+            result = doctor(profile, self.adapter())
+        self.assertNotIn("next", result)
 
 
 if __name__ == "__main__":
