@@ -162,6 +162,16 @@ def profile_lock(root, *, busy_message="Another command is changing this profile
         yield lock
 
 
+def command_execution_lock(root, *, busy_message="A command from this profile is still running"):
+    """Lease installed command execution without blocking profile lifecycle.
+
+    The lease is inherited by a provider child so pack mutation cannot remove
+    its selected version after the dispatcher exits. Capture/network lifecycle
+    deliberately uses the independent profile lease.
+    """
+    return profile_lock(Path(root) / "state/command-execution", busy_message=busy_message)
+
+
 class MacOS:
     """All OS operations live here; lifecycle tests provide controlled adapters."""
     def run(self, args, *, check=True, timeout=15):

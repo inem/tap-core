@@ -3,11 +3,13 @@ import json
 from pathlib import Path
 import shutil
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch, Mock
 from tap_core import background
 from tap_core.pack_store import PackStore, build_artifact
 from tap_core.packs import validate_manifest, PackError
+from tap_core.runtime import TapError, command_execution_lock, profile_lock
 
 class BackgroundTests(unittest.TestCase):
     def setUp(self):
@@ -57,6 +59,41 @@ class BackgroundTests(unittest.TestCase):
         self.assertEqual(row['exit_code'], 124)
         self.store.disable('fixture.command')
         background.run_once(self.profile)
+
+    def test_running_job_holds_execution_but_not_lifecycle_lease(self):
+        self.install()
+        started = threading.Event()
+        release = threading.Event()
+        errors = []
+
+        def run_pack(*_args, **_kwargs):
+            started.set()
+            release.wait(2)
+            return 0
+
+        def run_background():
+            try:
+                background.run_once(self.profile)
+            except Exception as error:
+                errors.append(error)
+
+        with patch.object(background, '_run_pack', side_effect=run_pack):
+            worker = threading.Thread(target=run_background)
+            worker.start()
+            self.assertTrue(started.wait(1))
+            # Capture/network lifecycle can take its short profile authority
+            # while the provider is doing slow external work.
+            with profile_lock(self.profile):
+                pass
+            # Pack mutation still cannot invalidate the selected provider.
+            with self.assertRaisesRegex(TapError, 'still running'):
+                with command_execution_lock(self.profile):
+                    pass
+            release.set()
+            worker.join(3)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(errors, [])
 
     def test_schedule_requires_permission_and_finite_bounds(self):
         bad = copy.deepcopy(self.manifest)

@@ -10,7 +10,7 @@ import re
 import sys
 import time
 
-from .runtime import Lifecycle, MacOS, Profile, TapError, profile_lock
+from .runtime import Lifecycle, MacOS, Profile, TapError, command_execution_lock, profile_lock
 from .routing import select_routing, SystemProxyRouting
 
 OFF_CLEANUP_WAIT_SECONDS = 15
@@ -269,10 +269,13 @@ def main(argv=None):
             if args.pack_action == 'list':
                 output = store.status()
             else:
-                with profile_lock(
+                # Do not change or remove a selected pack while its immutable
+                # command snapshot is executing. This execution lease is
+                # independent of capture/network lifecycle.
+                with command_execution_lock(
                         root,
                         busy_message="A command from this profile is still running; "
-                                     "wait before changing packs"):
+                                     "wait before changing packs"), profile_lock(root):
                     # Reader/handler projection is refused before registry publish so a
                     # concurrent bridge refresh cannot observe a rejected plan.
                     live = (

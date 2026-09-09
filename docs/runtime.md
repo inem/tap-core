@@ -82,7 +82,9 @@ Each explicit profile directory owns:
 - `state/capture.json`: writer PID, heartbeat, queue size, drops and write errors.
 - `certificates/`: independent backend configuration and CA; no trust-store mutation.
 - `logs/capture.log`: backend and writer diagnostics.
-- `command.lock`: concurrent profile mutations are serialized.
+- `command.lock`: short profile observations and mutations are serialized.
+- `state/command-execution/command.lock`: installed provider execution is
+  serialized with pack mutation without blocking capture/network lifecycle.
 
 The LaunchAgent is `~/Library/LaunchAgents/com.tap.core.<profile-path-hash>.plist`.
 All listeners bind to `127.0.0.1`. System-routing mutations also hold a common
