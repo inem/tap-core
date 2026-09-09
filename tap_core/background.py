@@ -10,7 +10,7 @@ import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from tap_core.runtime import TapError, atomic_json, profile_lock
+from tap_core.runtime import TapError, atomic_json, command_execution_lock, profile_lock
 from tap_core.pack_store import PackStore
 from tap_core.commands import discover, _run_pack
 
@@ -45,27 +45,64 @@ def read_state(root):
         return {'version': 1, 'jobs': {}}
 
 
+def task_key(command):
+    return command.provider_id + ':' + ' '.join(command.path)
+
+
+def task_fingerprint(command, schedule):
+    return hashlib.sha256(json.dumps(
+        [command.provider_version, command.config, schedule], sort_keys=True).encode()).hexdigest()
+
+
 def run_once(root):
     root = Path(root).resolve()
-    # Same lease as manual commands/mutations; inherited by the child. A killed
-    # host cannot release authority while a still-running pack owns the lease.
-    with profile_lock(root) as lease:
+    # Discovery and schedule selection are a short profile snapshot. Provider
+    # execution has its own inherited lease, so capture lifecycle remains
+    # available while a network-bound periodic command is running.
+    with profile_lock(root):
         state = read_state(root)
         active = tasks(root)
-        keys = {command.provider_id + ':' + ' '.join(command.path) for command, _ in active}
+        keys = {task_key(command) for command, _ in active}
         state['jobs'] = {k: v for k, v in state['jobs'].items() if k in keys}
+        due = []
         for command, schedule in active:
-            key = command.provider_id + ':' + ' '.join(command.path)
+            key = task_key(command)
             previous = state['jobs'].get(key, {})
-            fingerprint = hashlib.sha256(json.dumps([command.provider_version, command.config, schedule], sort_keys=True).encode()).hexdigest()
+            fingerprint = task_fingerprint(command, schedule)
             now = time.time()
             if previous.get('fingerprint') == fingerprint and previous.get('next_at', 0) > now:
                 continue
-            row = {'provider': command.provider_id, 'version': command.provider_version,
-                   'fingerprint': fingerprint, 'started_at': now, 'phase': 'running',
-                   'next_at': now + schedule['interval_seconds']}
-            state['jobs'][key] = row
-            atomic_json(root / 'state/background.json', state)
+            due.append((key, fingerprint))
+        atomic_json(root / 'state/background.json', state)
+
+    for key, expected_fingerprint in due:
+        # A command lease prevents pack disable/update/uninstall from invalidating
+        # files or authority while the provider runs. Re-read the profile under
+        # its short lease after acquiring execution authority so a stale
+        # scheduler snapshot can never resurrect a changed selection.
+        with command_execution_lock(root) as lease:
+            with profile_lock(root):
+                current = {task_key(command): (command, schedule)
+                           for command, schedule in tasks(root)}.get(key)
+                if current is None:
+                    continue
+                command, schedule = current
+                fingerprint = task_fingerprint(command, schedule)
+                if fingerprint != expected_fingerprint:
+                    continue
+                state = read_state(root)
+                previous = state['jobs'].get(key, {})
+                now = time.time()
+                if previous.get('fingerprint') == fingerprint and previous.get('next_at', 0) > now:
+                    continue
+                run_id = hashlib.sha256(f'{key}\0{fingerprint}\0{time.time_ns()}'.encode()).hexdigest()
+                row = {'provider': command.provider_id, 'version': command.provider_version,
+                       'fingerprint': fingerprint, 'run': run_id,
+                       'started_at': now, 'phase': 'running',
+                       'next_at': now + schedule['interval_seconds']}
+                state['jobs'][key] = row
+                atomic_json(root / 'state/background.json', state)
+
             logdir = root / 'logs/background'
             logdir.mkdir(parents=True, exist_ok=True, mode=0o700)
             logpath = logdir / (hashlib.sha256(key.encode()).hexdigest()[:16] + '.log')
@@ -80,10 +117,20 @@ def run_once(root):
             except (TapError, OSError):
                 code = 125
                 row['error'] = 'command_start_failed'
-            row.update(finished_at=time.time(), exit_code=code,
-                       phase='unknown' if code in (124, 130) else 'ok' if code == 0 else 'failed')
-            row['next_at'] = time.time() + schedule['interval_seconds']
-            atomic_json(root / 'state/background.json', state)
+
+            with profile_lock(root):
+                state = read_state(root)
+                current_row = state['jobs'].get(key)
+                if current_row is None or current_row.get('run') != run_id:
+                    raise TapError(f'Background run state changed during execution: {key}')
+                row.update(finished_at=time.time(), exit_code=code,
+                           phase='unknown' if code in (124, 130) else 'ok' if code == 0 else 'failed')
+                row['next_at'] = time.time() + schedule['interval_seconds']
+                state['jobs'][key] = row
+                atomic_json(root / 'state/background.json', state)
+
+    with profile_lock(root):
+        state = read_state(root)
         state['checked_at'] = time.time()
         atomic_json(root / 'state/background.json', state)
 

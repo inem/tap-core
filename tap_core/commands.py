@@ -10,7 +10,7 @@ import subprocess
 import sys
 
 from .packs import PackError, check_activation, resolve_config
-from .runtime import Profile, TapError, profile_lock
+from .runtime import Profile, TapError, command_execution_lock, profile_lock
 
 
 COMMAND_API = 1
@@ -317,11 +317,13 @@ def dispatch(profile_root, words):
         return 0
     if command.source == "builtin":
         return execute(command, profile_root, argv)
-    with profile_lock(
-            profile_root,
-            busy_message="A command from this profile is still running; pack changes wait for it to finish") as lease:
-        current = discover(profile_root).commands.get(command.path)
-        if current is None or (current.provider_id, current.provider_version) != (
-                command.provider_id, command.provider_version):
-            raise TapError("Command provider changed before invocation; retry the command")
+    # Execution and profile mutation are distinct authorities. Hold the former
+    # across the provider child, and the latter only while validating the
+    # selected immutable command snapshot.
+    with command_execution_lock(profile_root) as lease:
+        with profile_lock(profile_root):
+            current = discover(profile_root).commands.get(command.path)
+            if current is None or (current.provider_id, current.provider_version) != (
+                    command.provider_id, command.provider_version):
+                raise TapError("Command provider changed before invocation; retry the command")
         return execute(current, profile_root, argv, lease_fd=lease.fileno())
