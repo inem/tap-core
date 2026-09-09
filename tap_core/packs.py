@@ -151,7 +151,7 @@ def validate_manifest(manifest, root, host_api=PACK_API):
                         f"entrypoints.{role}.uses[]: missing provider "
                         f"{use['id']}@{use['version']}")
         elif role == "command":
-            fields(entry, ("file", "interface", "runtime", "commands"), label=f"entrypoints.{role}")
+            fields(entry, ("file", "interface", "runtime", "commands"), optional=("session_headers",), label=f"entrypoints.{role}")
             require(type(entry["file"]) is str and entry["file"] in manifest["files"],
                     f"entrypoints.{role}: file must be declared in files")
             require(entry["runtime"] == "host-python",
@@ -206,7 +206,20 @@ def validate_manifest(manifest, root, host_api=PACK_API):
     strings(access["capabilities"], "access.capabilities")
     if any("schedule" in declaration for declaration in entries.get("command", {}).get("commands", [])):
         require("background.run" in access["capabilities"], "scheduled commands require background.run")
-    supported = {value[1] for value in ROLES.values()} | {"background.run"}
+    observation = entries.get("command", {}).get("session_headers")
+    if observation is not None:
+        fields(observation, ("path_prefix", "headers"), label="command.session_headers")
+        require(type(observation["path_prefix"]) is str and observation["path_prefix"].startswith("/")
+                and observation["path_prefix"].endswith("/") and "?" not in observation["path_prefix"],
+                "session_headers: use an absolute directory path prefix")
+        strings(observation["headers"], "session_headers.headers")
+        require(bool(observation["headers"]) and set(observation["headers"]) <= {"cookie", "authorization", "user-agent"},
+                "session_headers: unsupported header")
+        require("session.observe" in access["capabilities"], "session_headers requires session.observe")
+        require(len(access["origins"]) == 1 and access["origins"][0].startswith("https://")
+                and ":" not in access["origins"][0][8:],
+                "session_headers requires one HTTPS origin with default port")
+    supported = {value[1] for value in ROLES.values()} | {"background.run", "session.observe"}
     require(set(access["capabilities"]) <= supported, "access.capabilities: unknown capability")
     for role in entries:
         require(ROLES[role][1] in access["capabilities"], f"access: missing capability for {role}")

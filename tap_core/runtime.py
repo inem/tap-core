@@ -220,7 +220,8 @@ class MacOS:
         args = [profile.backend, *select_routing(profile, self).backend_args(),
                 "--set", "confdir=" + str(profile.root / "certificates"),
                 "--set", f"stream_large_bodies={mitm_size(limits['stream_large_bodies'])}",
-                "-s", str(ADDON)]
+                "-s", str(ADDON),
+                "-s", str(Path(__file__).with_name("session_observation.py").resolve())]
         if profile.bridge is not None:
             args.extend(['-s', str(Path(__file__).with_name('bridge.py').resolve())])
         for addon in profile.addons:

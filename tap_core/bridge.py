@@ -334,7 +334,7 @@ def effective_configuration(root, base):
                 or type(manifest.get('entrypoints')) is not dict):
             raise ValueError(f'Enabled pack manifest is incompatible: {pack_id}@{version}')
         roles = set(manifest['entrypoints'])
-        if not roles or not roles <= {'page', 'reader', 'handler'}:
+        if not roles or not roles <= {'page', 'reader', 'handler', 'command'}:
             raise ValueError(f'Enabled pack has unsupported host roles: {pack_id}@{version}')
         access = manifest.get('access')
         if (type(access) is not dict or set(access) != {'origins', 'capabilities'}
