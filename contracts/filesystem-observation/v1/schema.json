@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/inem/tap-core/contracts/filesystem-observation/v1/schema.json",
+  "title": "Bounded filesystem observation v1",
+  "type": "object",
+  "required": [
+    "schema",
+    "observations"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "tap.filesystem-observation/v1"
+    },
+    "observations": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "$ref": "#/$defs/observation"
+      }
+    }
+  },
+  "$defs": {
+    "known": {
+      "type": "object",
+      "required": [
+        "authority",
+        "knowledge",
+        "presence",
+        "kind"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "authority": {
+          "const": "filesystem"
+        },
+        "knowledge": {
+          "const": "known"
+        },
+        "presence": {
+          "enum": [
+            "present",
+            "absent"
+          ]
+        },
+        "kind": {
+          "enum": [
+            "regular",
+            "symlink",
+            "other",
+            null
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "presence": {
+                "const": "present"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "regular",
+                  "symlink",
+                  "other"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "presence": {
+                "const": "absent"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "kind": {
+                "const": null
+              }
+            }
+          }
+        }
+      ]
+    },
+    "unknown": {
+      "type": "object",
+      "required": [
+        "authority",
+        "knowledge",
+        "reason",
+        "message"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "authority": {
+          "const": "filesystem"
+        },
+        "knowledge": {
+          "const": "unknown"
+        },
+        "reason": {
+          "enum": [
+            "inspection_failed",
+            "not_observed"
+          ]
+        },
+        "message": {
+          "type": "string"
+        }
+      }
+    },
+    "observation": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/known"
+        },
+        {
+          "$ref": "#/$defs/unknown"
+        }
+      ]
+    }
+  }
+}

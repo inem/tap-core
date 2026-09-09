@@ -1,0 +1,80 @@
+{
+  "schema": "tap.where-filesystem-receipt-corpus/v1",
+  "cases": [
+    {
+      "name": "present-regular",
+      "receipt": {
+        "outcome": "present",
+        "kind": "regular",
+        "errno": null,
+        "message": ""
+      },
+      "expected": {
+        "authority": "filesystem",
+        "knowledge": "known",
+        "presence": "present",
+        "kind": "regular"
+      }
+    },
+    {
+      "name": "present-symlink",
+      "receipt": {
+        "outcome": "present",
+        "kind": "symlink",
+        "errno": null,
+        "message": ""
+      },
+      "expected": {
+        "authority": "filesystem",
+        "knowledge": "known",
+        "presence": "present",
+        "kind": "symlink"
+      }
+    },
+    {
+      "name": "present-other",
+      "receipt": {
+        "outcome": "present",
+        "kind": "other",
+        "errno": null,
+        "message": ""
+      },
+      "expected": {
+        "authority": "filesystem",
+        "knowledge": "known",
+        "presence": "present",
+        "kind": "other"
+      }
+    },
+    {
+      "name": "known-absence",
+      "receipt": {
+        "outcome": "absent",
+        "kind": null,
+        "errno": 2,
+        "message": "fixture path was absent"
+      },
+      "expected": {
+        "authority": "filesystem",
+        "knowledge": "known",
+        "presence": "absent",
+        "kind": null
+      }
+    },
+    {
+      "name": "inspection-failure",
+      "receipt": {
+        "outcome": "failed",
+        "kind": null,
+        "errno": 13,
+        "message": "fixture inspection denied"
+      },
+      "expected": {
+        "authority": "filesystem",
+        "knowledge": "unknown",
+        "reason": "inspection_failed",
+        "message": "fixture inspection denied"
+      }
+    }
+  ]
+}

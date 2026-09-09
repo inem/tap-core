@@ -8,17 +8,23 @@ import unittest
 from unittest.mock import patch
 
 from tap_core.cli import main
+from tap_core.filesystem_sensor import inspect_path
 from tap_core.projection import ProjectionError
 from tap_core.runtime import Profile
-from tap_core.where_view import (load_carrier_adapter, load_material, project_where,
-                                 public_where_result, terminal_where,
-                                 validate_where_result)
+from tap_core.where_view import (PRESENCE_MATERIAL, capture_filesystem_receipts,
+                                 load_carrier_adapter, load_filesystem_adapter,
+                                 load_material, observed_where_result, project_where,
+                                 public_filesystem_result, public_where_result,
+                                 terminal_where, validate_where_result,
+                                 with_filesystem_observations)
 
 
 ROOT = Path(__file__).resolve().parent.parent
 RAW = json.loads((ROOT / "fixtures/where/current.json").read_text())
 NESTED_ADAPTER = ROOT / "tests/fixtures/where-carriers/nested.json"
 CONTRACT_FIXTURE = ROOT / "contracts/where-result/v1/fixtures/basic.json"
+V2_CONTRACT_FIXTURE = ROOT / "contracts/where-result/v2/fixtures/config-regular.json"
+FILESYSTEM_CORPUS = ROOT / "tests/fixtures/where-filesystem/receipts.json"
 
 
 class WhereProjectionTests(unittest.TestCase):
@@ -27,6 +33,53 @@ class WhereProjectionTests(unittest.TestCase):
         semantic = public_where_result(fixture["raw_snapshot"])
         self.assertEqual(semantic, fixture["semantic_result"])
         self.assertEqual(terminal_where(semantic), fixture["terminal"]["unbounded"])
+
+    def test_v2_contract_fixture_reproduces_receipt_to_terminal_chain(self):
+        fixture = json.loads(V2_CONTRACT_FIXTURE.read_text())
+        addresses = public_where_result(fixture["raw_snapshot"])
+        filesystem = public_filesystem_result(fixture["sensor_receipts"])
+        semantic = with_filesystem_observations(addresses, filesystem)
+        self.assertEqual(semantic, fixture["semantic_result"])
+        self.assertEqual(terminal_where(semantic), fixture["terminal"]["unbounded"])
+
+    def test_saved_receipt_corpus_preserves_presence_kind_and_failure(self):
+        corpus = json.loads(FILESYSTEM_CORPUS.read_text())
+        for case in corpus["cases"]:
+            with self.subTest(case=case["name"]):
+                carrier = {
+                    "schema": "tap.filesystem-sensor-receipts/v1",
+                    "receipts": {"config": case["receipt"]},
+                }
+                result = public_filesystem_result(carrier)
+                self.assertEqual(result["observations"]["config"], case["expected"])
+
+    def test_present_filesystem_meanings_are_separate_and_both_rendered(self):
+        result = observed_where_result(
+            RAW, sensor=lambda path: {"outcome": "present", "kind": "symlink",
+                                      "errno": None, "message": ""})
+        projection = project_where(result)
+        config = {(atom.arguments[1], atom.arguments[2]) for atom in projection.meanings
+                  if atom.arguments[0] == "config"}
+        self.assertIn(("address", "/fixture/profile/profile.json"), config)
+        self.assertIn(("presence", "present"), config)
+        self.assertIn(("kind", "symlink"), config)
+        self.assertIn("/fixture/profile/profile.json · present · symlink",
+                      terminal_where(result))
+
+    def test_absence_and_failure_do_not_become_each_other_or_health(self):
+        cases = json.loads(FILESYSTEM_CORPUS.read_text())["cases"]
+        by_name = {case["name"]: case for case in cases}
+        rendered = {}
+        for name in ("known-absence", "inspection-failure"):
+            carrier = {"schema": "tap.filesystem-sensor-receipts/v1",
+                       "receipts": {"config": by_name[name]["receipt"]}}
+            result = with_filesystem_observations(
+                public_where_result(RAW), public_filesystem_result(carrier))
+            rendered[name] = terminal_where(result)
+            self.assertNotIn("healthy", json.dumps(result))
+            self.assertNotIn("valid", json.dumps(result))
+        self.assertIn(" · absent", rendered["known-absence"])
+        self.assertIn(" · ? inspection failed", rendered["inspection-failure"])
 
     def test_saved_raw_result_becomes_versioned_address_only_result(self):
         result = public_where_result(RAW)
@@ -140,9 +193,14 @@ class WhereProjectionTests(unittest.TestCase):
         self.assertEqual(public_where_result(nested, adapter), public_where_result(RAW))
 
     def test_semantic_material_has_no_physical_carrier_paths(self):
-        material = load_material()
-        self.assertNotIn('"source"', json.dumps(material))
-        self.assertNotIn('"path"', json.dumps(material))
+        for material in (load_material(), load_material(PRESENCE_MATERIAL)):
+            self.assertNotIn('"source"', json.dumps(material))
+            self.assertNotIn('"path"', json.dumps(material))
+
+    def test_projection_does_not_branch_on_the_config_identity(self):
+        source = (ROOT / "tap_core/where_view.py").read_text()
+        self.assertNotIn('== "config"', source)
+        self.assertNotIn("== 'config'", source)
 
     def test_adapter_and_material_have_separate_schema_and_identity(self):
         adapter = load_carrier_adapter()
@@ -194,10 +252,13 @@ class WhereCliTests(unittest.TestCase):
         code, output, error = self.invoke("--output", "semantic-json")
         self.assertEqual((code, error), (0, ""))
         semantic = json.loads(output)
-        self.assertEqual(semantic["schema"], "tap.where-result/v1")
+        self.assertEqual(semantic["schema"], "tap.where-result/v2")
+        self.assertEqual(semantic["filesystem"]["config"]["presence"], "present")
+        self.assertEqual(semantic["filesystem"]["config"]["kind"], "regular")
         code, terminal, error = self.invoke("--output", "terminal", "--color", "never")
         self.assertEqual((code, error), (0, ""))
         self.assertIn(str(self.root / "profile.json"), terminal)
+        self.assertIn(" · present · regular", terminal)
         self.assertIn("? not observed", terminal)
 
     def test_raw_and_semantic_json_ignore_terminal_options(self):
@@ -232,6 +293,39 @@ class WhereCliTests(unittest.TestCase):
         code, output, error = self.invoke("--help")
         self.assertEqual((code, error), (0, ""))
         self.assertIn("--output raw-json|semantic-json|terminal", output)
+
+
+class FilesystemSensorTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory(prefix="tap-where-sensor-")
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+
+    def test_lstat_distinguishes_regular_symlink_other_and_absence(self):
+        regular = self.root / "regular"
+        regular.write_text("value")
+        link = self.root / "link"
+        link.symlink_to(regular)
+        self.assertEqual(inspect_path(regular)["kind"], "regular")
+        self.assertEqual(inspect_path(link)["kind"], "symlink")
+        self.assertEqual(inspect_path(self.root)["kind"], "other")
+        self.assertEqual(inspect_path(self.root / "missing")["outcome"], "absent")
+
+    def test_permission_failure_remains_a_failed_receipt(self):
+        denied = PermissionError(13, "permission denied", str(self.root / "denied"))
+        with patch("tap_core.filesystem_sensor.os.lstat", side_effect=denied):
+            receipt = inspect_path(self.root / "denied")
+        self.assertEqual(receipt["outcome"], "failed")
+        self.assertEqual(receipt["errno"], 13)
+
+    def test_capture_plan_is_data_and_calls_only_its_declared_target(self):
+        seen = []
+        receipts = capture_filesystem_receipts(
+            RAW, load_filesystem_adapter(),
+            sensor=lambda path: (seen.append(path) or {
+                "outcome": "present", "kind": "regular", "errno": None, "message": ""}))
+        self.assertEqual(seen, [RAW["config"]])
+        self.assertEqual(set(receipts["receipts"]), {"config"})
 
 
 if __name__ == "__main__":

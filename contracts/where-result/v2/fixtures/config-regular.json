@@ -1,0 +1,106 @@
+{
+  "raw_snapshot": {
+    "profile": "/fixture/profile",
+    "config": "/fixture/profile/profile.json",
+    "data": "/fixture/profile/data",
+    "state": "/fixture/profile/state",
+    "certificates": "/fixture/profile/certificates",
+    "log": "/fixture/profile/logs/capture.log",
+    "packs": "/fixture/profile/packs",
+    "resources": "/fixture/profile/resources",
+    "pack_registry": "/fixture/profile/state/pack-registry.json",
+    "launch_agent": "/fixture/Library/LaunchAgents/tap.fixture.plist",
+    "backend": "/fixture/runtime/mitmdump",
+    "checkout": "/fixture/checkout"
+  },
+  "sensor_receipts": {
+    "schema": "tap.filesystem-sensor-receipts/v1",
+    "receipts": {
+      "config": {
+        "outcome": "present",
+        "kind": "regular",
+        "errno": null,
+        "message": ""
+      }
+    }
+  },
+  "semantic_result": {
+    "schema": "tap.where-result/v2",
+    "addresses": {
+      "profile": {
+        "knowledge": "known",
+        "value": "/fixture/profile"
+      },
+      "config": {
+        "knowledge": "known",
+        "value": "/fixture/profile/profile.json"
+      },
+      "data": {
+        "knowledge": "known",
+        "value": "/fixture/profile/data"
+      },
+      "state": {
+        "knowledge": "known",
+        "value": "/fixture/profile/state"
+      },
+      "certificates": {
+        "knowledge": "known",
+        "value": "/fixture/profile/certificates"
+      },
+      "log": {
+        "knowledge": "known",
+        "value": "/fixture/profile/logs/capture.log"
+      },
+      "packs": {
+        "knowledge": "known",
+        "value": "/fixture/profile/packs"
+      },
+      "resources": {
+        "knowledge": "known",
+        "value": "/fixture/profile/resources"
+      },
+      "pack_registry": {
+        "knowledge": "known",
+        "value": "/fixture/profile/state/pack-registry.json"
+      },
+      "launch_agent": {
+        "knowledge": "known",
+        "value": "/fixture/Library/LaunchAgents/tap.fixture.plist"
+      },
+      "component_launch_agent": {
+        "knowledge": "unknown",
+        "reason": "not_observed",
+        "message": "observation was not supplied"
+      },
+      "component_log": {
+        "knowledge": "unknown",
+        "reason": "not_observed",
+        "message": "observation was not supplied"
+      },
+      "handler_logs": {
+        "knowledge": "unknown",
+        "reason": "not_observed",
+        "message": "observation was not supplied"
+      },
+      "backend": {
+        "knowledge": "known",
+        "value": "/fixture/runtime/mitmdump"
+      },
+      "checkout": {
+        "knowledge": "known",
+        "value": "/fixture/checkout"
+      }
+    },
+    "filesystem": {
+      "config": {
+        "authority": "filesystem",
+        "knowledge": "known",
+        "presence": "present",
+        "kind": "regular"
+      }
+    }
+  },
+  "terminal": {
+    "unbounded": "Profile\n  profile            /fixture/profile\n  config             /fixture/profile/profile.json \u00b7 present \u00b7 regular\n  data               /fixture/profile/data\n  state              /fixture/profile/state\n  certificates       /fixture/profile/certificates\n  capture log        /fixture/profile/logs/capture.log\n  packs              /fixture/profile/packs\n  resources          /fixture/profile/resources\n  pack registry      /fixture/profile/state/pack-registry.json\nSystem bindings\n  capture service    /fixture/Library/LaunchAgents/tap.fixture.plist\n  component service  ? not observed\nComponent bindings\n  component log      ? not observed\n  handler logs       ? not observed\nRuntime and source\n  backend            /fixture/runtime/mitmdump\n  core checkout      /fixture/checkout"
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/inem/tap-core/contracts/where-result/v2/schema.json",
+  "title": "TAP address and bounded filesystem observation result v2",
+  "type": "object",
+  "required": [
+    "schema",
+    "addresses",
+    "filesystem"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "tap.where-result/v2"
+    },
+    "addresses": {
+      "$ref": "../v1/schema.json#/properties/addresses"
+    },
+    "filesystem": {
+      "type": "object",
+      "required": [
+        "config"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "config": {
+          "$ref": "../../filesystem-observation/v1/schema.json#/$defs/observation"
+        }
+      }
+    }
+  }
+}

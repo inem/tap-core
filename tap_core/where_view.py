@@ -3,12 +3,16 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 
+from .filesystem_sensor import inspect_path
 from .material_view import observe, project_claims
-from .projection import Atom, Derivation, ProjectionError, render_terminal
+from .projection import (Atom, Derivation, ProjectionError, evaluate_rules,
+                         render_terminal)
 
 
 MATERIAL = Path(__file__).with_name("data") / "where.json"
 CARRIER_ADAPTER = Path(__file__).with_name("data") / "where-carrier.json"
+FILESYSTEM_ADAPTER = Path(__file__).with_name("data") / "where-filesystem.json"
+PRESENCE_MATERIAL = Path(__file__).with_name("data") / "where-presence.json"
 
 
 @dataclass(frozen=True)
@@ -67,14 +71,184 @@ def load_carrier_adapter(path=CARRIER_ADAPTER):
     return adapter
 
 
+def _validate_filesystem_adapter(adapter):
+    required = {"schema", "id", "receipt_schema", "output_schema", "targets",
+                "semantic_rules"}
+    if (not isinstance(adapter, dict) or set(adapter) != required
+            or adapter.get("schema") != "tap.where-filesystem-adapter/v1"
+            or not isinstance(adapter.get("id"), str) or not adapter["id"]
+            or adapter.get("receipt_schema") != "tap.filesystem-sensor-receipts/v1"
+            or adapter.get("output_schema") != "tap.filesystem-observation/v1"
+            or not isinstance(adapter.get("targets"), list) or not adapter["targets"]
+            or not isinstance(adapter.get("semantic_rules"), list)):
+        raise ProjectionError("invalid where filesystem adapter")
+    names = set()
+    for target in adapter["targets"]:
+        if (not isinstance(target, dict) or set(target) != {"name", "address_source"}
+                or not isinstance(target.get("name"), str) or not target["name"]
+                or target["name"] in names):
+            raise ProjectionError("invalid where filesystem target")
+        names.add(target["name"])
+        _validate_source(target["address_source"])
+    rule_ids = set()
+    for rule in adapter["semantic_rules"]:
+        identifier = rule.get("id") if isinstance(rule, dict) else None
+        if not isinstance(identifier, str) or not identifier or identifier in rule_ids:
+            raise ProjectionError("invalid where filesystem rule")
+        rule_ids.add(identifier)
+
+
+def load_filesystem_adapter(path=FILESYSTEM_ADAPTER):
+    adapter = _read_object(path, "where filesystem adapter")
+    _validate_filesystem_adapter(adapter)
+    return adapter
+
+
+def capture_filesystem_receipts(snapshot, adapter=None, sensor=inspect_path):
+    """Run declared bounded sensors and retain their physical receipts."""
+    adapter = load_filesystem_adapter() if adapter is None else adapter
+    _validate_filesystem_adapter(adapter)
+    errors = snapshot.get("inspection_errors", {}) if isinstance(snapshot, dict) else {}
+    receipts = {}
+    for target in adapter["targets"]:
+        address = observe(target["address_source"], snapshot, errors)
+        if address["knowledge"] == "known":
+            if not isinstance(address["value"], str) or not address["value"]:
+                raise ProjectionError("invalid filesystem target address")
+            receipt = sensor(address["value"])
+        else:
+            receipt = {"outcome": "not_observed", "kind": None, "errno": None,
+                       "message": address["message"]}
+        receipts[target["name"]] = receipt
+    return {"schema": adapter["receipt_schema"], "receipts": receipts}
+
+
+def _validate_receipt(receipt):
+    if (not isinstance(receipt, dict)
+            or set(receipt) != {"outcome", "kind", "errno", "message"}
+            or receipt.get("outcome") not in ("present", "absent", "failed", "not_observed")
+            or not isinstance(receipt.get("message"), str)
+            or (receipt.get("errno") is not None and type(receipt["errno"]) is not int)):
+        raise ProjectionError("invalid filesystem sensor receipt")
+    if receipt["outcome"] == "present":
+        if receipt["kind"] not in ("regular", "symlink", "other"):
+            raise ProjectionError("invalid present filesystem receipt")
+    elif receipt["kind"] is not None:
+        raise ProjectionError("invalid non-present filesystem receipt")
+
+
+def _validate_filesystem_observation(observation):
+    if (not isinstance(observation, dict)
+            or observation.get("authority") != "filesystem"
+            or observation.get("knowledge") not in ("known", "unknown")):
+        raise ProjectionError("invalid where filesystem observation")
+    if observation["knowledge"] == "known":
+        if (set(observation) != {"authority", "knowledge", "presence", "kind"}
+                or observation["presence"] not in ("present", "absent")
+                or (observation["presence"] == "present"
+                    and observation["kind"] not in ("regular", "symlink", "other"))
+                or (observation["presence"] == "absent"
+                    and observation["kind"] is not None)):
+            raise ProjectionError("invalid known filesystem observation")
+    elif (set(observation) != {"authority", "knowledge", "reason", "message"}
+          or observation["reason"] not in ("inspection_failed", "not_observed")
+          or not isinstance(observation["message"], str)):
+        raise ProjectionError("invalid unknown filesystem observation")
+
+
+def validate_filesystem_result(result, expected=None):
+    if (not isinstance(result, dict)
+            or set(result) != {"schema", "observations"}
+            or result.get("schema") != "tap.filesystem-observation/v1"
+            or not isinstance(result.get("observations"), dict)
+            or not result["observations"]
+            or (expected is not None and set(result["observations"]) != set(expected))):
+        raise ProjectionError("invalid public filesystem result")
+    for observation in result["observations"].values():
+        _validate_filesystem_observation(observation)
+
+
+def public_filesystem_result(receipt_carrier, adapter=None):
+    """Translate sensor receipts to public filesystem observations by rules."""
+    adapter = load_filesystem_adapter() if adapter is None else adapter
+    _validate_filesystem_adapter(adapter)
+    expected = {target["name"] for target in adapter["targets"]}
+    if (not isinstance(receipt_carrier, dict)
+            or set(receipt_carrier) != {"schema", "receipts"}
+            or receipt_carrier.get("schema") != adapter["receipt_schema"]
+            or not isinstance(receipt_carrier.get("receipts"), dict)
+            or set(receipt_carrier["receipts"]) != expected):
+        raise ProjectionError("invalid filesystem receipt carrier")
+    facts = {}
+    for identifier, receipt in receipt_carrier["receipts"].items():
+        _validate_receipt(receipt)
+        atom = Atom.from_value(["filesystem-receipt", identifier, receipt["outcome"],
+                                receipt["kind"], receipt["errno"], receipt["message"]])
+        facts[atom] = Derivation("supplied-filesystem-receipt", tuple())
+    projected = evaluate_rules(facts, adapter["semantic_rules"])
+    observations = {}
+    for atom in projected:
+        if atom.relation != "filesystem-observation":
+            continue
+        if len(atom.arguments) != 7:
+            raise ProjectionError("invalid projected filesystem observation")
+        identifier, authority, knowledge, presence, kind, reason, message = atom.arguments
+        if identifier in observations:
+            raise ProjectionError("ambiguous filesystem observation")
+        value = {"authority": authority, "knowledge": knowledge}
+        if knowledge == "known":
+            value.update({"presence": presence, "kind": kind})
+        else:
+            value.update({"reason": reason, "message": message})
+        observations[identifier] = value
+    result = {"schema": adapter["output_schema"], "observations": observations}
+    try:
+        validate_filesystem_result(result, expected)
+    except ProjectionError as error:
+        raise ProjectionError("filesystem receipt was not interpreted") from error
+    return result
+
+
 def load_material(path=MATERIAL):
     value = _read_object(path, "where material")
+    if value.get("schema") == "tap.internal-where-material-overlay/v1":
+        required_overlay = {"schema", "id", "extends", "effective_schema",
+                            "input_schema", "semantic_rules", "presentation_rules",
+                            "terminal_styles"}
+        base_name = value.get("extends")
+        if (set(value) != required_overlay
+                or not isinstance(value.get("id"), str) or not value["id"]
+                or not isinstance(base_name, str) or not base_name
+                or Path(base_name).name != base_name or Path(base_name).suffix != ".json"
+                or base_name == Path(path).name
+                or value.get("effective_schema") != "tap.internal-where-material/v3"
+                or value.get("input_schema") != "tap.where-result/v2"
+                or not isinstance(value.get("semantic_rules"), list)
+                or not isinstance(value.get("presentation_rules"), list)
+                or not isinstance(value.get("terminal_styles"), dict)):
+            raise ProjectionError("invalid bundled where material overlay")
+        base = load_material(Path(path).parent / base_name)
+        value = {
+            **base,
+            "schema": value["effective_schema"],
+            "id": value["id"],
+            "input_schema": value["input_schema"],
+            "semantic_rules": [*base["semantic_rules"], *value["semantic_rules"]],
+            "presentation_rules": [*base["presentation_rules"],
+                                   *value["presentation_rules"]],
+            "terminal_styles": {**base["terminal_styles"],
+                                **value["terminal_styles"]},
+        }
     required = {"schema", "id", "input_schema", "document_root", "sections", "locations",
                 "semantic_rules", "presentation_rules", "terminal_styles"}
+    material_inputs = {
+        "tap.internal-where-material/v2": "tap.where-result/v1",
+        "tap.internal-where-material/v3": "tap.where-result/v2",
+    }
     if (set(value) != required
-            or value.get("schema") != "tap.internal-where-material/v2"
+            or value.get("schema") not in material_inputs
             or not isinstance(value.get("id"), str) or not value["id"]
-            or value.get("input_schema") != "tap.where-result/v1"
+            or value.get("input_schema") != material_inputs.get(value.get("schema"))
             or value.get("document_root") != "where"
             or not isinstance(value.get("sections"), list)
             or not isinstance(value.get("locations"), list)
@@ -149,10 +323,40 @@ def public_where_result(snapshot, adapter=None):
     }
 
 
+def with_filesystem_observations(address_result, filesystem_result):
+    """Join two public results without exposing either physical carrier."""
+    validate_where_result(address_result, load_material(MATERIAL))
+    validate_filesystem_result(filesystem_result)
+    if not set(filesystem_result["observations"]).issubset(address_result["addresses"]):
+        raise ProjectionError("filesystem observation has no declared address")
+    return {
+        "schema": "tap.where-result/v2",
+        "addresses": address_result["addresses"],
+        "filesystem": filesystem_result["observations"],
+    }
+
+
+def observed_where_result(snapshot, carrier_adapter=None, filesystem_adapter=None,
+                          sensor=inspect_path):
+    """Run the bounded where observation chain used by semantic presentation."""
+    address_result = public_where_result(snapshot, carrier_adapter)
+    filesystem_adapter = (load_filesystem_adapter() if filesystem_adapter is None
+                          else filesystem_adapter)
+    receipts = capture_filesystem_receipts(snapshot, filesystem_adapter, sensor)
+    filesystem = public_filesystem_result(receipts, filesystem_adapter)
+    return with_filesystem_observations(address_result, filesystem)
+
+
 def validate_where_result(result, material=None):
-    material = load_material() if material is None else material
+    if material is None:
+        schema = result.get("schema") if isinstance(result, dict) else None
+        material = load_material(PRESENCE_MATERIAL if schema == "tap.where-result/v2"
+                                 else MATERIAL)
     expected = {location["id"] for location in material["locations"]}
-    if (not isinstance(result, dict) or set(result) != {"schema", "addresses"}
+    fields = ({"schema", "addresses", "filesystem"}
+              if material["input_schema"] == "tap.where-result/v2"
+              else {"schema", "addresses"})
+    if (not isinstance(result, dict) or set(result) != fields
             or result.get("schema") != material["input_schema"]
             or not isinstance(result.get("addresses"), dict)
             or set(result["addresses"]) != expected):
@@ -168,6 +372,12 @@ def validate_where_result(result, material=None):
               or address["reason"] not in ("inspection_failed", "not_observed")
               or not isinstance(address["message"], str)):
             raise ProjectionError("invalid unknown where address")
+    if "filesystem" in result:
+        if (not isinstance(result["filesystem"], dict) or not result["filesystem"]
+                or not set(result["filesystem"]).issubset(expected)):
+            raise ProjectionError("invalid where filesystem observations")
+        for observation in result["filesystem"].values():
+            _validate_filesystem_observation(observation)
 
 
 def _facts(result, material):
@@ -185,11 +395,21 @@ def _facts(result, material):
             declaration["order"], address["knowledge"], observed,
         ])
         claims[atom] = Derivation("supplied-where-result", tuple())
+    for identifier, observation in result.get("filesystem", {}).items():
+        atom = Atom.from_value([
+            "filesystem-observation", identifier, observation["authority"],
+            observation["knowledge"], observation.get("presence"),
+            observation.get("kind"), observation.get("reason"),
+            observation.get("message", ""),
+        ])
+        claims[atom] = Derivation("supplied-where-result", tuple())
     return claims
 
 
 def project_where(result, material=None):
-    material = load_material() if material is None else material
+    if material is None:
+        material = load_material(PRESENCE_MATERIAL if result.get("schema") == "tap.where-result/v2"
+                                 else MATERIAL)
     validate_where_result(result, material)
     projection = project_claims(_facts(result, material), material,
                                 "supplied-where-result")
@@ -198,7 +418,9 @@ def project_where(result, material=None):
 
 
 def terminal_where(result, width=None, color=False, material=None):
-    material = load_material() if material is None else material
+    if material is None:
+        material = load_material(PRESENCE_MATERIAL if result.get("schema") == "tap.where-result/v2"
+                                 else MATERIAL)
     limit = 2 ** 31 - 1 if width is None else width
     return render_terminal(project_where(result, material).document, limit, color,
                            material["terminal_styles"])
