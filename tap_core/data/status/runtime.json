@@ -1,8 +1,8 @@
 {
-  "schema": "tap.internal-status-material-fragment/v1",
+  "schema": "tap.internal-status-material-fragment/v2",
   "id": "runtime",
   "observations": {
-    "runtime": [{"name":"service_loaded","source":{"path":["service_loaded"],"error":"service_loaded"}},{"name":"pid","source":{"path":["pid"],"error":"pid"}},{"name":"port_owned","source":{"path":["port_owned"],"error":"port_owned"}},{"name":"port_open","source":{"path":["port_open"],"error":"port_open"}}]
+    "runtime": ["service_loaded","pid","port_owned","port_open"]
   },
   "semantic_rules": [
     {

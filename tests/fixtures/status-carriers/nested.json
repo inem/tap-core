@@ -1,0 +1,281 @@
+{
+  "schema": "tap.status-snapshot-adapter/v1",
+  "id": "fixture.nested-operation-status/v1",
+  "output_schema": "tap.status-result/v4",
+  "profile_path": [
+    "metadata",
+    "profile"
+  ],
+  "errors_path": [
+    "metadata",
+    "inspection_errors"
+  ],
+  "observations": {
+    "runtime": [
+      {
+        "name": "service_loaded",
+        "source": {
+          "path": [
+            "payload",
+            "service_loaded"
+          ],
+          "error": "service_loaded"
+        }
+      },
+      {
+        "name": "pid",
+        "source": {
+          "path": [
+            "payload",
+            "pid"
+          ],
+          "error": "pid"
+        }
+      },
+      {
+        "name": "port_owned",
+        "source": {
+          "path": [
+            "payload",
+            "port_owned"
+          ],
+          "error": "port_owned"
+        }
+      },
+      {
+        "name": "port_open",
+        "source": {
+          "path": [
+            "payload",
+            "port_open"
+          ],
+          "error": "port_open"
+        }
+      }
+    ],
+    "routing": [
+      {
+        "name": "routing",
+        "source": {
+          "path": [
+            "payload",
+            "routing"
+          ],
+          "error": "routing"
+        }
+      },
+      {
+        "name": "network_recovery_pending",
+        "source": {
+          "path": [
+            "payload",
+            "network_recovery_pending"
+          ],
+          "error": "network_recovery_pending"
+        }
+      },
+      {
+        "name": "system_proxy_verified",
+        "source": {
+          "path": [
+            "payload",
+            "system_proxy_verified"
+          ],
+          "error": "system_proxy_verified"
+        }
+      }
+    ],
+    "capture": [
+      {
+        "name": "available",
+        "source": {
+          "path": [
+            "payload",
+            "capture",
+            "available"
+          ],
+          "error": "capture"
+        }
+      },
+      {
+        "name": "current_process",
+        "source": {
+          "path": [
+            "payload",
+            "capture",
+            "current_process"
+          ],
+          "error": "capture"
+        }
+      },
+      {
+        "name": "healthy",
+        "source": {
+          "path": [
+            "payload",
+            "capture",
+            "healthy"
+          ],
+          "error": "capture"
+        }
+      }
+    ],
+    "bridge": [
+      {
+        "name": "configured",
+        "source": {
+          "path": [
+            "payload",
+            "bridge",
+            "configured"
+          ],
+          "error": "bridge"
+        }
+      },
+      {
+        "name": "enabled",
+        "source": {
+          "path": [
+            "payload",
+            "bridge",
+            "enabled"
+          ],
+          "error": "bridge"
+        }
+      },
+      {
+        "name": "healthy",
+        "source": {
+          "path": [
+            "payload",
+            "bridge",
+            "healthy"
+          ],
+          "error": "bridge"
+        }
+      },
+      {
+        "name": "hub_liveness",
+        "source": {
+          "path": [
+            "payload",
+            "bridge",
+            "hub_liveness"
+          ],
+          "error": "bridge"
+        }
+      }
+    ],
+    "components": [
+      {
+        "name": "configured",
+        "source": {
+          "path": [
+            "payload",
+            "components",
+            "configured"
+          ],
+          "error": "components"
+        }
+      },
+      {
+        "name": "healthy",
+        "source": {
+          "path": [
+            "payload",
+            "components",
+            "healthy"
+          ],
+          "error": "components"
+        }
+      },
+      {
+        "name": "current_process",
+        "source": {
+          "path": [
+            "payload",
+            "components",
+            "current_process"
+          ],
+          "error": "components"
+        }
+      },
+      {
+        "name": "phase",
+        "source": {
+          "path": [
+            "payload",
+            "components",
+            "phase"
+          ],
+          "error": "components"
+        }
+      },
+      {
+        "name": "hub_pid",
+        "source": {
+          "path": [
+            "payload",
+            "components",
+            "hub_pid"
+          ],
+          "error": "components"
+        }
+      },
+      {
+        "name": "error",
+        "source": {
+          "path": [
+            "payload",
+            "components",
+            "error"
+          ],
+          "error": "components"
+        }
+      }
+    ]
+  },
+  "observation_collections": {
+    "component_readers": {
+      "path": [
+        "payload",
+        "components",
+        "readers"
+      ],
+      "error": "components",
+      "max_items": 8,
+      "fields": [
+        {
+          "name": "healthy",
+          "path": [
+            "healthy"
+          ]
+        },
+        {
+          "name": "phase",
+          "path": [
+            "phase"
+          ]
+        },
+        {
+          "name": "progress",
+          "path": [
+            "progress"
+          ]
+        },
+        {
+          "name": "failures",
+          "path": [
+            "failures"
+          ]
+        },
+        {
+          "name": "error",
+          "path": [
+            "error"
+          ]
+        }
+      ]
+    }
+  }
+}

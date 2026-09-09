@@ -1,13 +1,8 @@
 {
-  "schema": "tap.internal-status-material-fragment/v1",
+  "schema": "tap.internal-status-material-fragment/v2",
   "id": "bridge",
   "observations": {
-    "bridge": [
-      {"name":"configured","source":{"path":["bridge","configured"],"error":"bridge"}},
-      {"name":"enabled","source":{"path":["bridge","enabled"],"error":"bridge"}},
-      {"name":"healthy","source":{"path":["bridge","healthy"],"error":"bridge"}},
-      {"name":"hub_liveness","source":{"path":["bridge","hub_liveness"],"error":"bridge"}}
-    ]
+    "bridge": ["configured","enabled","healthy","hub_liveness"]
   },
   "semantic_rules": [
     {

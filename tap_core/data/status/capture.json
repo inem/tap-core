@@ -1,12 +1,8 @@
 {
-  "schema": "tap.internal-status-material-fragment/v1",
+  "schema": "tap.internal-status-material-fragment/v2",
   "id": "capture",
   "observations": {
-    "capture": [
-      {"name":"available","source":{"path":["capture","available"],"error":"capture"}},
-      {"name":"current_process","source":{"path":["capture","current_process"],"error":"capture"}},
-      {"name":"healthy","source":{"path":["capture","healthy"],"error":"capture"}}
-    ]
+    "capture": ["available","current_process","healthy"]
   },
   "semantic_rules": [
     {

@@ -1,0 +1,258 @@
+{
+  "schema": "tap.status-snapshot-adapter/v1",
+  "id": "tap-core.operation-status-snapshot/v1",
+  "output_schema": "tap.status-result/v4",
+  "profile_path": [
+    "profile"
+  ],
+  "errors_path": [
+    "inspection_errors"
+  ],
+  "observations": {
+    "runtime": [
+      {
+        "name": "service_loaded",
+        "source": {
+          "path": [
+            "service_loaded"
+          ],
+          "error": "service_loaded"
+        }
+      },
+      {
+        "name": "pid",
+        "source": {
+          "path": [
+            "pid"
+          ],
+          "error": "pid"
+        }
+      },
+      {
+        "name": "port_owned",
+        "source": {
+          "path": [
+            "port_owned"
+          ],
+          "error": "port_owned"
+        }
+      },
+      {
+        "name": "port_open",
+        "source": {
+          "path": [
+            "port_open"
+          ],
+          "error": "port_open"
+        }
+      }
+    ],
+    "routing": [
+      {
+        "name": "routing",
+        "source": {
+          "path": [
+            "routing"
+          ],
+          "error": "routing"
+        }
+      },
+      {
+        "name": "network_recovery_pending",
+        "source": {
+          "path": [
+            "network_recovery_pending"
+          ],
+          "error": "network_recovery_pending"
+        }
+      },
+      {
+        "name": "system_proxy_verified",
+        "source": {
+          "path": [
+            "system_proxy_verified"
+          ],
+          "error": "system_proxy_verified"
+        }
+      }
+    ],
+    "capture": [
+      {
+        "name": "available",
+        "source": {
+          "path": [
+            "capture",
+            "available"
+          ],
+          "error": "capture"
+        }
+      },
+      {
+        "name": "current_process",
+        "source": {
+          "path": [
+            "capture",
+            "current_process"
+          ],
+          "error": "capture"
+        }
+      },
+      {
+        "name": "healthy",
+        "source": {
+          "path": [
+            "capture",
+            "healthy"
+          ],
+          "error": "capture"
+        }
+      }
+    ],
+    "bridge": [
+      {
+        "name": "configured",
+        "source": {
+          "path": [
+            "bridge",
+            "configured"
+          ],
+          "error": "bridge"
+        }
+      },
+      {
+        "name": "enabled",
+        "source": {
+          "path": [
+            "bridge",
+            "enabled"
+          ],
+          "error": "bridge"
+        }
+      },
+      {
+        "name": "healthy",
+        "source": {
+          "path": [
+            "bridge",
+            "healthy"
+          ],
+          "error": "bridge"
+        }
+      },
+      {
+        "name": "hub_liveness",
+        "source": {
+          "path": [
+            "bridge",
+            "hub_liveness"
+          ],
+          "error": "bridge"
+        }
+      }
+    ],
+    "components": [
+      {
+        "name": "configured",
+        "source": {
+          "path": [
+            "components",
+            "configured"
+          ],
+          "error": "components"
+        }
+      },
+      {
+        "name": "healthy",
+        "source": {
+          "path": [
+            "components",
+            "healthy"
+          ],
+          "error": "components"
+        }
+      },
+      {
+        "name": "current_process",
+        "source": {
+          "path": [
+            "components",
+            "current_process"
+          ],
+          "error": "components"
+        }
+      },
+      {
+        "name": "phase",
+        "source": {
+          "path": [
+            "components",
+            "phase"
+          ],
+          "error": "components"
+        }
+      },
+      {
+        "name": "hub_pid",
+        "source": {
+          "path": [
+            "components",
+            "hub_pid"
+          ],
+          "error": "components"
+        }
+      },
+      {
+        "name": "error",
+        "source": {
+          "path": [
+            "components",
+            "error"
+          ],
+          "error": "components"
+        }
+      }
+    ]
+  },
+  "observation_collections": {
+    "component_readers": {
+      "path": [
+        "components",
+        "readers"
+      ],
+      "error": "components",
+      "max_items": 8,
+      "fields": [
+        {
+          "name": "healthy",
+          "path": [
+            "healthy"
+          ]
+        },
+        {
+          "name": "phase",
+          "path": [
+            "phase"
+          ]
+        },
+        {
+          "name": "progress",
+          "path": [
+            "progress"
+          ]
+        },
+        {
+          "name": "failures",
+          "path": [
+            "failures"
+          ]
+        },
+        {
+          "name": "error",
+          "path": [
+            "error"
+          ]
+        }
+      ]
+    }
+  }
+}
