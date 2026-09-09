@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/inem/tap-core/contracts/where-result/v1/schema.json",
+  "title": "TAP declared address result v1",
+  "type": "object",
+  "required": [
+    "schema",
+    "addresses"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "tap.where-result/v1"
+    },
+    "addresses": {
+      "type": "object",
+      "required": [
+        "profile",
+        "config",
+        "data",
+        "state",
+        "certificates",
+        "log",
+        "packs",
+        "resources",
+        "pack_registry",
+        "launch_agent",
+        "component_launch_agent",
+        "component_log",
+        "handler_logs",
+        "backend",
+        "checkout"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "profile": {
+          "$ref": "#/$defs/observation"
+        },
+        "config": {
+          "$ref": "#/$defs/observation"
+        },
+        "data": {
+          "$ref": "#/$defs/observation"
+        },
+        "state": {
+          "$ref": "#/$defs/observation"
+        },
+        "certificates": {
+          "$ref": "#/$defs/observation"
+        },
+        "log": {
+          "$ref": "#/$defs/observation"
+        },
+        "packs": {
+          "$ref": "#/$defs/observation"
+        },
+        "resources": {
+          "$ref": "#/$defs/observation"
+        },
+        "pack_registry": {
+          "$ref": "#/$defs/observation"
+        },
+        "launch_agent": {
+          "$ref": "#/$defs/observation"
+        },
+        "component_launch_agent": {
+          "$ref": "#/$defs/observation"
+        },
+        "component_log": {
+          "$ref": "#/$defs/observation"
+        },
+        "handler_logs": {
+          "$ref": "#/$defs/observation"
+        },
+        "backend": {
+          "$ref": "#/$defs/observation"
+        },
+        "checkout": {
+          "$ref": "#/$defs/observation"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "known": {
+      "type": "object",
+      "required": [
+        "knowledge",
+        "value"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "knowledge": {
+          "const": "known"
+        },
+        "value": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "unknown": {
+      "type": "object",
+      "required": [
+        "knowledge",
+        "reason",
+        "message"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "knowledge": {
+          "const": "unknown"
+        },
+        "reason": {
+          "enum": [
+            "not_observed",
+            "inspection_failed"
+          ]
+        },
+        "message": {
+          "type": "string"
+        }
+      }
+    },
+    "observation": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/known"
+        },
+        {
+          "$ref": "#/$defs/unknown"
+        }
+      ]
+    }
+  }
+}

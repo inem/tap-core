@@ -10,29 +10,33 @@ from unittest.mock import patch
 from tap_core.cli import main
 from tap_core.projection import ProjectionError
 from tap_core.runtime import Profile
-from tap_core.where_view import (load_material, project_where, public_where_result,
-                                 terminal_where, validate_where_result)
+from tap_core.where_view import (load_carrier_adapter, load_material, project_where,
+                                 public_where_result, terminal_where,
+                                 validate_where_result)
 
 
 ROOT = Path(__file__).resolve().parent.parent
 RAW = json.loads((ROOT / "fixtures/where/current.json").read_text())
+NESTED_ADAPTER = ROOT / "tests/fixtures/where-carriers/nested.json"
+CONTRACT_FIXTURE = ROOT / "contracts/where-result/v1/fixtures/basic.json"
 
 
 class WhereProjectionTests(unittest.TestCase):
+    def test_checked_in_contract_fixture_reproduces_both_projections(self):
+        fixture = json.loads(CONTRACT_FIXTURE.read_text())
+        semantic = public_where_result(fixture["raw_snapshot"])
+        self.assertEqual(semantic, fixture["semantic_result"])
+        self.assertEqual(terminal_where(semantic), fixture["terminal"]["unbounded"])
+
     def test_saved_raw_result_becomes_versioned_address_only_result(self):
         result = public_where_result(RAW)
         self.assertEqual(result["schema"], "tap.where-result/v1")
-        self.assertEqual(len(result["locations"]), 15)
-        profile = result["locations"][0]
-        self.assertEqual(profile, {
-            "id": "profile", "section": "profile", "role": "profile-root",
-            "owner": "profile", "label": "profile", "order": 1,
-            "address": {"knowledge": "known", "value": "/fixture/profile"},
-        })
-        component = next(item for item in result["locations"]
-                         if item["id"] == "component_launch_agent")
-        self.assertEqual(component["address"]["knowledge"], "unknown")
-        self.assertEqual(component["address"]["reason"], "not_observed")
+        self.assertEqual(len(result["addresses"]), 15)
+        self.assertEqual(result["addresses"]["profile"],
+                         {"knowledge": "known", "value": "/fixture/profile"})
+        component = result["addresses"]["component_launch_agent"]
+        self.assertEqual(component["knowledge"], "unknown")
+        self.assertEqual(component["reason"], "not_observed")
         self.assertNotIn("present", json.dumps(result))
         self.assertNotIn("healthy", json.dumps(result))
 
@@ -41,17 +45,17 @@ class WhereProjectionTests(unittest.TestCase):
         config = next(item for item in material["locations"] if item["id"] == "config")
         config.update({"label": "settings", "section": "runtime", "order": 3,
                        "role": "alternate-config", "owner": "fixture"})
-        config["source"] = {"path": ["alternate"], "error": "alternate"}
-        raw = {**RAW, "alternate": "/fixture/alternate"}
-        result = public_where_result(raw, material)
-        changed = next(item for item in result["locations"] if item["id"] == "config")
-        self.assertEqual((changed["label"], changed["section"], changed["role"],
-                          changed["owner"], changed["address"]["value"]),
+        result = public_where_result(RAW)
+        changed = next(atom for atom in project_where(result, material).meanings
+                       if atom.arguments[0] == "config")
+        attributes = dict(changed.arguments[4])
+        self.assertEqual((attributes["label"], attributes["section"], attributes["role"],
+                          attributes["owner"], changed.arguments[2]),
                          ("settings", "runtime", "alternate-config", "fixture",
-                          "/fixture/alternate"))
+                          "/fixture/profile/profile.json"))
         text = terminal_where(result, material=material)
         self.assertIn("settings", text)
-        self.assertIn("/fixture/alternate", text)
+        self.assertIn("/fixture/profile/profile.json", text)
 
     def test_projection_builds_nested_sections_and_keeps_provenance(self):
         projection = project_where(public_where_result(RAW))
@@ -73,11 +77,11 @@ class WhereProjectionTests(unittest.TestCase):
                          {"label": "config", "order": 2, "owner": "profile",
                           "role": "configuration", "section": "profile"})
 
-    def test_source_declaration_order_does_not_change_public_order(self):
-        material = copy.deepcopy(load_material())
-        baseline = public_where_result(RAW, material)
-        material["locations"].reverse()
-        self.assertEqual(public_where_result(dict(reversed(list(RAW.items()))), material),
+    def test_carrier_declaration_order_does_not_change_public_result(self):
+        adapter = copy.deepcopy(load_carrier_adapter())
+        baseline = public_where_result(RAW, adapter)
+        adapter["observations"]["addresses"].reverse()
+        self.assertEqual(public_where_result(dict(reversed(list(RAW.items()))), adapter),
                          baseline)
 
     def test_configured_component_addresses_are_known_without_health_claims(self):
@@ -86,11 +90,9 @@ class WhereProjectionTests(unittest.TestCase):
                "component_log": "/fixture/profile/logs/components.log",
                "handler_logs": "/fixture/profile/logs/handlers"}
         result = public_where_result(raw)
-        components = [item for item in result["locations"]
-                      if item["id"] in {"component_launch_agent", "component_log",
-                                        "handler_logs"}]
-        self.assertTrue(all(item["address"]["knowledge"] == "known"
-                            for item in components))
+        components = [result["addresses"][name] for name in
+                      ("component_launch_agent", "component_log", "handler_logs")]
+        self.assertTrue(all(item["knowledge"] == "known" for item in components))
 
     def test_terminal_tree_preserves_known_and_unknown_addresses(self):
         text = terminal_where(public_where_result(RAW), color=False)
@@ -121,16 +123,39 @@ class WhereProjectionTests(unittest.TestCase):
         with self.assertRaisesRegex(ProjectionError, "required content exceeds width 20"):
             terminal_where(result, width=20)
 
-    def test_result_validation_rejects_metadata_or_address_drift(self):
+    def test_result_validation_rejects_shape_or_address_drift(self):
         result = public_where_result(RAW)
         changed = copy.deepcopy(result)
-        changed["locations"][0]["owner"] = "filesystem-probe"
-        with self.assertRaisesRegex(ProjectionError, "invalid where result location"):
+        changed["addresses"]["invented"] = {"knowledge": "known", "value": "/tmp"}
+        with self.assertRaisesRegex(ProjectionError, "invalid where result"):
             validate_where_result(changed)
         changed = copy.deepcopy(result)
-        changed["locations"][0]["address"]["value"] = None
+        changed["addresses"]["profile"]["value"] = None
         with self.assertRaisesRegex(ProjectionError, "invalid known where address"):
             validate_where_result(changed)
+
+    def test_separate_adapter_supports_a_second_physical_carrier(self):
+        nested = {"metadata": {"inspection_errors": {}}, "payload": RAW}
+        adapter = load_carrier_adapter(NESTED_ADAPTER)
+        self.assertEqual(public_where_result(nested, adapter), public_where_result(RAW))
+
+    def test_semantic_material_has_no_physical_carrier_paths(self):
+        material = load_material()
+        self.assertNotIn('"source"', json.dumps(material))
+        self.assertNotIn('"path"', json.dumps(material))
+
+    def test_adapter_and_material_have_separate_schema_and_identity(self):
+        adapter = load_carrier_adapter()
+        material = load_material()
+        self.assertNotEqual(adapter["schema"], material["schema"])
+        self.assertNotEqual(adapter["id"], material["id"])
+        self.assertEqual(adapter["output_schema"], material["input_schema"])
+
+    def test_invalid_adapter_fails_before_reading_the_carrier(self):
+        adapter = copy.deepcopy(load_carrier_adapter())
+        adapter["observations"]["addresses"][1]["name"] = "profile"
+        with self.assertRaisesRegex(ProjectionError, "invalid where carrier observation"):
+            public_where_result(object(), adapter)
 
     def test_shared_runner_contains_no_status_or_where_domain_vocabulary(self):
         source = (ROOT / "tap_core/material_view.py").read_text()

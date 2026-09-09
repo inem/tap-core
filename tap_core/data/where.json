@@ -1,6 +1,7 @@
 {
-  "schema": "tap.internal-where-material/v1",
-  "result_schema": "tap.where-result/v1",
+  "schema": "tap.internal-where-material/v2",
+  "id": "tap-core.where-address-material/v1",
+  "input_schema": "tap.where-result/v1",
   "document_root": "where",
   "sections": [
     {"id": "profile", "label": "Profile", "order": 0},
@@ -9,21 +10,21 @@
     {"id": "runtime", "label": "Runtime and source", "order": 3}
   ],
   "locations": [
-    {"id": "profile", "label": "profile", "section": "profile", "order": 1, "role": "profile-root", "owner": "profile", "source": {"path": ["profile"], "error": "profile"}},
-    {"id": "config", "label": "config", "section": "profile", "order": 2, "role": "configuration", "owner": "profile", "source": {"path": ["config"], "error": "config"}},
-    {"id": "data", "label": "data", "section": "profile", "order": 3, "role": "captured-data", "owner": "profile", "source": {"path": ["data"], "error": "data"}},
-    {"id": "state", "label": "state", "section": "profile", "order": 4, "role": "runtime-state", "owner": "profile", "source": {"path": ["state"], "error": "state"}},
-    {"id": "certificates", "label": "certificates", "section": "profile", "order": 5, "role": "certificate-store", "owner": "profile", "source": {"path": ["certificates"], "error": "certificates"}},
-    {"id": "log", "label": "capture log", "section": "profile", "order": 6, "role": "capture-log", "owner": "profile", "source": {"path": ["log"], "error": "log"}},
-    {"id": "packs", "label": "packs", "section": "profile", "order": 7, "role": "pack-store", "owner": "profile", "source": {"path": ["packs"], "error": "packs"}},
-    {"id": "resources", "label": "resources", "section": "profile", "order": 8, "role": "resource-store", "owner": "profile", "source": {"path": ["resources"], "error": "resources"}},
-    {"id": "pack_registry", "label": "pack registry", "section": "profile", "order": 9, "role": "pack-registry", "owner": "profile", "source": {"path": ["pack_registry"], "error": "pack_registry"}},
-    {"id": "launch_agent", "label": "capture service", "section": "system", "order": 1, "role": "launch-agent", "owner": "macos", "source": {"path": ["launch_agent"], "error": "launch_agent"}},
-    {"id": "component_launch_agent", "label": "component service", "section": "system", "order": 2, "role": "launch-agent", "owner": "macos", "source": {"path": ["component_launch_agent"], "error": "component_launch_agent"}},
-    {"id": "component_log", "label": "component log", "section": "components", "order": 1, "role": "component-log", "owner": "profile", "source": {"path": ["component_log"], "error": "component_log"}},
-    {"id": "handler_logs", "label": "handler logs", "section": "components", "order": 2, "role": "handler-logs", "owner": "profile", "source": {"path": ["handler_logs"], "error": "handler_logs"}},
-    {"id": "backend", "label": "backend", "section": "runtime", "order": 1, "role": "executable", "owner": "runtime-binding", "source": {"path": ["backend"], "error": "backend"}},
-    {"id": "checkout", "label": "core checkout", "section": "runtime", "order": 2, "role": "source-checkout", "owner": "tap-core", "source": {"path": ["checkout"], "error": "checkout"}}
+    {"id": "profile", "label": "profile", "section": "profile", "order": 1, "role": "profile-root", "owner": "profile"},
+    {"id": "config", "label": "config", "section": "profile", "order": 2, "role": "configuration", "owner": "profile"},
+    {"id": "data", "label": "data", "section": "profile", "order": 3, "role": "captured-data", "owner": "profile"},
+    {"id": "state", "label": "state", "section": "profile", "order": 4, "role": "runtime-state", "owner": "profile"},
+    {"id": "certificates", "label": "certificates", "section": "profile", "order": 5, "role": "certificate-store", "owner": "profile"},
+    {"id": "log", "label": "capture log", "section": "profile", "order": 6, "role": "capture-log", "owner": "profile"},
+    {"id": "packs", "label": "packs", "section": "profile", "order": 7, "role": "pack-store", "owner": "profile"},
+    {"id": "resources", "label": "resources", "section": "profile", "order": 8, "role": "resource-store", "owner": "profile"},
+    {"id": "pack_registry", "label": "pack registry", "section": "profile", "order": 9, "role": "pack-registry", "owner": "profile"},
+    {"id": "launch_agent", "label": "capture service", "section": "system", "order": 1, "role": "launch-agent", "owner": "macos"},
+    {"id": "component_launch_agent", "label": "component service", "section": "system", "order": 2, "role": "launch-agent", "owner": "macos"},
+    {"id": "component_log", "label": "component log", "section": "components", "order": 1, "role": "component-log", "owner": "profile"},
+    {"id": "handler_logs", "label": "handler logs", "section": "components", "order": 2, "role": "handler-logs", "owner": "profile"},
+    {"id": "backend", "label": "backend", "section": "runtime", "order": 1, "role": "executable", "owner": "runtime-binding"},
+    {"id": "checkout", "label": "core checkout", "section": "runtime", "order": 2, "role": "source-checkout", "owner": "tap-core"}
   ],
   "semantic_rules": [
     {
