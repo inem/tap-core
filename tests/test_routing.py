@@ -1,5 +1,5 @@
 """Acceptance of the extracted routing boundary, with controlled OS effects."""
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import nullcontext, redirect_stderr, redirect_stdout
 import io
 import json
 from pathlib import Path
@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 
 from tap_core.cli import main, routing_set, status
 from tap_core.routing import SystemProxyRouting, select_routing
-from tap_core.runtime import Lifecycle, MacOS, Profile, TapError
+from tap_core.runtime import Lifecycle, MacOS, Profile, TapError, profile_lock
 
 
 class RoutingTests(unittest.TestCase):
@@ -182,6 +182,24 @@ class RoutingTests(unittest.TestCase):
         # off acted on the reloaded system mode, not the stale explicit copy.
         self.assertEqual(seen['routing'], 'system')
         self.assertGreaterEqual(len(loads), 2)  # once before the lock, once under it
+
+    def test_off_restores_network_before_waiting_for_busy_profile_cleanup(self):
+        profile = self.profile('escape', 'system')
+        (profile.root / 'state').mkdir(exist_ok=True)
+        profile.snapshot.write_text('{}')
+        adapter = self.observations()
+        error = io.StringIO()
+        with profile_lock(profile.root), \
+                patch('tap_core.cli.OFF_CLEANUP_WAIT_SECONDS', 0), \
+                patch('tap_core.cli.platform.system', return_value='Darwin'), \
+                patch.object(SystemProxyRouting, 'mutation_lock', return_value=nullcontext()), \
+                patch.object(SystemProxyRouting, 'restore') as restore, \
+                patch('tap_core.cli.mutate') as mutate, \
+                redirect_stdout(io.StringIO()), redirect_stderr(error):
+            self.assertEqual(main(['--profile', str(profile.root), 'off']), 1)
+        restore.assert_called_once_with()
+        mutate.assert_not_called()
+        self.assertIn('Network restored; profile cleanup is still pending', error.getvalue())
 
     def test_switch_into_system_from_explicit_takes_shared_network_lock(self):
         explicit = self.profile('x', 'explicit')

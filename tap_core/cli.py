@@ -13,6 +13,8 @@ import time
 from .runtime import Lifecycle, MacOS, Profile, TapError, profile_lock
 from .routing import select_routing, SystemProxyRouting
 
+OFF_CLEANUP_WAIT_SECONDS = 15
+
 
 def health(profile, adapter):
     try:
@@ -399,8 +401,27 @@ def main(argv=None):
                     output = routing_set(profile, adapter, args.mode)
             print(output)
             return 0
+        # `off` is the operator's network escape hatch. A periodic pack command
+        # may hold the ordinary profile lease for its whole child lifetime; do
+        # not make proxy recovery wait behind that unrelated work. The recovery
+        # snapshot is the ownership journal, and the shared network lease still
+        # serializes system settings across profiles. Cleanup then waits for a
+        # bounded drain and repeats restore under the normal lock ordering.
+        network_recovered = False
+        if args.command == "off" and (profile.routing == "system" or profile.snapshot.exists()):
+            emergency_route = SystemProxyRouting(profile, adapter)
+            with emergency_route.mutation_lock():
+                emergency_route.restore()
+            network_recovered = True
+
         # Serialize system-routing commands across profiles as well as per-profile.
-        with profile_lock(root):
+        with profile_lock(
+                root,
+                wait_seconds=OFF_CLEANUP_WAIT_SECONDS if network_recovered else 0,
+                busy_message=(
+                    "Network restored; profile cleanup is still pending because a command "
+                    "did not finish within the bounded drain"
+                    if network_recovered else "Another command is changing this profile")):
             if args.command != "install":
                 # Reload under the lock. routing selects both the shared network
                 # lock and the restore/enable behavior, so on/off/uninstall must
