@@ -28,10 +28,11 @@ Return the commit/PR, changed interfaces, verification commands and results,
 remaining limits, and any migration required by dependent issues. Do not call an
 issue complete while its acceptance criteria or integration checks are missing.
 
-For material-driven implementation, read and follow the
-[implementation profile](docs/material-driven-implementation.md). It defines the
-carrier/material boundary, warranted observations, acceptable handwritten code,
-imperative spikes, conservation, and evidence expected from generated paths.
+Keep host observation and effects separate from public results, pure
+transformations and rendering. Version published shapes, preserve unknown and
+failure states, and keep product-specific labels, states and ordering out of
+generic infrastructure. A handwritten experiment must state its oracle, scope,
+remaining hard-coded choices and evidence level.
 
 For implementation and review, use [review lenses](docs/review-planes.md) for the
 boundaries affected by the change. Authors identify affected lenses; reviewers
