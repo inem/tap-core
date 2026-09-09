@@ -19,7 +19,7 @@ examples are `fixtures/capture/v1.jsonl`.
 | `record_version` | Integer `1`; independent of pack API and profile versions. |
 | `record_id` | UUID identifying this capture observation. Stable when saved, unique for repeated identical responses; not an HTTP request ID or an exactly-once key. |
 | `ts` | Nonnegative Unix capture time in seconds. Does not establish ordering across clock changes. |
-| `method`, `url`, `status`, `ctype`, `ua` | Existing request method/URL, response status/content type and observed User-Agent. User-Agent does not establish source application identity. |
+| `method`, `url`, `status`, `ctype`, `ua` | Existing request method/URL, three-digit response status (`100…999`, including non-standard peer values), content type and observed User-Agent. User-Agent does not establish source application identity. |
 | `size` | Existing nonnegative size hint: Content-Length if usable, otherwise buffered raw length when available, otherwise zero; decoded-size omission reports decoded UTF-8 length. Not a measured streamed-body byte count. |
 | `streamed` | Whether the backend streamed this response, including backend size policy. |
 | `body_kept`, `body_reason` | Boolean plus `retained`, `media_type`, `streamed`, `unavailable`, `oversize`, `unbounded` or `oversize_decoded`. |

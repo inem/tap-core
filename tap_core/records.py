@@ -22,7 +22,10 @@ def validate_record(record, allow_legacy=True):
         raise RecordError("Unversioned capture record is not allowed")
     if not isinstance(record.get("url"), str) or not record["url"]:
         raise RecordError("Invalid capture url")
-    if type(record.get("status")) is not int or not 100 <= record["status"] <= 599:
+    # mitmproxy preserves non-standard three-digit statuses (for example a
+    # site's telemetry response with 999). Capture must remain readable even
+    # when the remote peer does not use an IANA-assigned HTTP status class.
+    if type(record.get("status")) is not int or not 100 <= record["status"] <= 999:
         raise RecordError("Invalid HTTP response status")
     for name in ("body_kept", "streamed", "req_body_kept"):
         if name in record and type(record[name]) is not bool:
