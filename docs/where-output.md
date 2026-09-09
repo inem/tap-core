@@ -61,6 +61,18 @@ address world is reused rather than copied. The Python projection path does not
 branch on raw keys such as `config`, `backend` or `launch_agent`. The terminal
 renderer sees only document slots.
 
+The current command extends that chain with `tap.where-result/v3`. It derives
+the Core-owned `data/stream.jsonl` address from the declared data root, performs
+one bounded `lstat`, and reports a regular file's byte size separately from its
+address and presence/kind. The effective rotation policy is normalized by the
+same capture-limit operation used by the runtime; `source` distinguishes defaults
+from explicit profile limits. The terminal projection adds renderer-neutral
+`Capture storage` stream and rotation slots.
+
+No stream content is read. Record count is therefore absent rather than inferred
+from the writer's process-local counter. This slice does not run `wc`, `du`,
+`find`, an archive glob or a pack-specific inventory scan.
+
 Addresses are required terminal content. With no `--width`, they are emitted in
 full. If an explicit width is too narrow, the command fails clearly instead of
 silently dropping or truncating a path. Color affects terminal headings and
@@ -73,8 +85,9 @@ command does not emit progress output.
 ## Deliberate limits
 
 This slice does not copy the private legacy inventory. It observes presence and
-kind for one profile configuration entry only. Bytes, record count, archive
-membership, recency and owner verification remain separate possible
-observations. Presence does not imply that configuration is valid, current,
-safe, or used by a live process. The public Core also does not declare the
-private organizer or a global `~/tap-out` location.
+kind for the profile configuration plus address, presence/kind and size for the
+Core capture stream. Record count, archive membership, aggregate footprint,
+recency and owner verification remain separate possible observations. Presence
+does not imply that configuration is valid, current, safe, or used by a live
+process. The public Core also does not declare the private organizer or a global
+`~/tap-out` location.

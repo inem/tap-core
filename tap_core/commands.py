@@ -97,8 +97,9 @@ def _where(profile_root, argv):
     if options.output == "raw-json":
         print(json.dumps(result, indent=2))
         return 0
-    from .where_view import observed_where_result, terminal_where
-    semantic = observed_where_result(result)
+    from .where_view import storage_where_result, terminal_where
+    observation_snapshot = {**result, "capture": profile.capture}
+    semantic = storage_where_result(observation_snapshot)
     if options.output == "semantic-json":
         print(json.dumps(semantic, indent=2))
     else:

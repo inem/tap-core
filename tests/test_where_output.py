@@ -8,14 +8,21 @@ import unittest
 from unittest.mock import patch
 
 from tap_core.cli import main
-from tap_core.filesystem_sensor import inspect_path
+from tap_core.capture import DEFAULT_CAPTURE
+from tap_core.capture_storage_view import (capture_receipts as capture_storage_receipts,
+                                           load_carrier_adapter as load_storage_carrier,
+                                           observed_result as observed_capture_storage,
+                                           public_result as public_capture_storage)
+from tap_core.filesystem_sensor import inspect_path, inspect_sized_path
 from tap_core.projection import ProjectionError
 from tap_core.runtime import Profile
-from tap_core.where_view import (PRESENCE_MATERIAL, capture_filesystem_receipts,
+from tap_core.where_view import (PRESENCE_MATERIAL, STORAGE_MATERIAL,
+                                 capture_filesystem_receipts,
                                  load_carrier_adapter, load_filesystem_adapter,
                                  load_material, observed_where_result, project_where,
                                  public_filesystem_result, public_where_result,
                                  terminal_where, validate_where_result,
+                                 storage_where_result, with_capture_storage,
                                  with_filesystem_observations)
 
 
@@ -24,10 +31,134 @@ RAW = json.loads((ROOT / "fixtures/where/current.json").read_text())
 NESTED_ADAPTER = ROOT / "tests/fixtures/where-carriers/nested.json"
 CONTRACT_FIXTURE = ROOT / "contracts/where-result/v1/fixtures/basic.json"
 V2_CONTRACT_FIXTURE = ROOT / "contracts/where-result/v2/fixtures/config-regular.json"
+V3_CONTRACT_FIXTURE = ROOT / "contracts/where-result/v3/fixtures/capture-storage.json"
 FILESYSTEM_CORPUS = ROOT / "tests/fixtures/where-filesystem/receipts.json"
+STORAGE_CORPUS = ROOT / "tests/fixtures/where-capture-storage/receipts.json"
+NESTED_STORAGE_ADAPTER = ROOT / "tests/fixtures/where-capture-storage/nested-adapter.json"
 
 
 class WhereProjectionTests(unittest.TestCase):
+    def test_capture_storage_receipt_corpus_preserves_size_absence_and_failure(self):
+        corpus = json.loads(STORAGE_CORPUS.read_text())
+        policy = {"outcome": "effective", "source": "defaults",
+                  "segment_bytes": 128 * 1024 * 1024, "keep_rolls": 3,
+                  "ceiling_bytes": 512 * 1024 * 1024, "message": ""}
+        for case in corpus["cases"]:
+            with self.subTest(case=case["name"]):
+                carrier = {"schema": "tap.capture-storage-receipts/v1",
+                           "stream_id": "capture_stream",
+                           "stream_address": "/fixture/profile/data/stream.jsonl",
+                           "stream": case["stream"], "policy": policy}
+                result = public_capture_storage(carrier)
+                expected = case["expected"]
+                filesystem = result["stream"]["filesystem"]
+                size = result["stream"]["size"]
+                self.assertEqual(filesystem.get("presence", filesystem["knowledge"]),
+                                 expected["filesystem"])
+                self.assertEqual(size["knowledge"], expected["size_knowledge"])
+                if "size_bytes" in expected:
+                    self.assertEqual(size["bytes"], expected["size_bytes"])
+                if "filesystem_reason" in expected:
+                    self.assertEqual(filesystem["reason"], expected["filesystem_reason"])
+                if "size_reason" in expected:
+                    self.assertEqual(size["reason"], expected["size_reason"])
+
+    def test_default_and_explicit_capture_policy_are_distinct_effective_observations(self):
+        fixed = lambda path: {"outcome": "present", "kind": "regular",
+                              "size_bytes": 42, "errno": None, "message": ""}
+        default = observed_capture_storage({**RAW, "capture": None}, sensor=fixed)
+        self.assertEqual(default["rotation_policy"], {
+            "authority": "runtime-configuration", "knowledge": "known",
+            "source": "defaults", "segment_bytes": 128 * 1024 * 1024,
+            "keep_rolls": 3, "ceiling_bytes": 512 * 1024 * 1024})
+        configured = {**DEFAULT_CAPTURE, "segment_bytes": 64 * 1024 * 1024,
+                      "keep_rolls": 1}
+        explicit = observed_capture_storage({**RAW, "capture": configured}, sensor=fixed)
+        self.assertEqual(explicit["rotation_policy"]["source"], "profile")
+        self.assertEqual(explicit["rotation_policy"]["ceiling_bytes"], 128 * 1024 * 1024)
+
+    def test_capture_storage_uses_declared_child_and_one_sized_lstat(self):
+        seen = []
+        receipts = capture_storage_receipts(
+            {**RAW, "capture": None},
+            sensor=lambda path: (seen.append(path) or {
+                "outcome": "present", "kind": "regular", "size_bytes": 7,
+                "errno": None, "message": ""}))
+        self.assertEqual(seen, ["/fixture/profile/data/stream.jsonl"])
+        self.assertEqual(receipts["stream"]["size_bytes"], 7)
+
+    def test_second_capture_storage_carrier_produces_the_same_observation(self):
+        receipt = {"outcome": "present", "kind": "regular", "size_bytes": 42,
+                   "errno": None, "message": ""}
+        flat = observed_capture_storage({**RAW, "capture": None},
+                                        sensor=lambda path: receipt)
+        nested = {"metadata": {"inspection_errors": {}},
+                  "payload": {"locations": {"data": RAW["data"]},
+                              "policy": {"capture": None}}}
+        adapter = load_storage_carrier(NESTED_STORAGE_ADAPTER)
+        self.assertEqual(observed_capture_storage(nested, adapter,
+                                                  sensor=lambda path: receipt), flat)
+
+    def test_second_carrier_preserves_source_inspection_failure(self):
+        nested = {"metadata": {"inspection_errors": {"data": "permission denied",
+                                                       "capture": "invalid profile"}},
+                  "payload": {"locations": {}, "policy": {}}}
+        result = observed_capture_storage(
+            nested, load_storage_carrier(NESTED_STORAGE_ADAPTER),
+            sensor=lambda path: self.fail("unresolved address must not be inspected"))
+        self.assertEqual(result["stream"]["address"]["reason"], "inspection_failed")
+        self.assertEqual(result["stream"]["filesystem"]["reason"],
+                         "inspection_failed")
+        self.assertEqual(result["rotation_policy"]["reason"], "inspection_failed")
+
+    def test_capture_storage_meanings_reach_renderer_neutral_slots(self):
+        fixed = lambda path: {"outcome": "present", "kind": "regular",
+                              "size_bytes": 52 * 1024 * 1024,
+                              "errno": None, "message": ""}
+        result = storage_where_result({**RAW, "capture": None}, storage_sensor=fixed)
+        self.assertEqual(result["schema"], "tap.where-result/v3")
+        meanings = {(atom.arguments[0], atom.arguments[1], atom.arguments[2])
+                    for atom in project_where(result).meanings}
+        self.assertIn(("capture_stream", "address",
+                       "/fixture/profile/data/stream.jsonl"), meanings)
+        self.assertIn(("capture_stream", "presence", "present"), meanings)
+        self.assertIn(("capture_stream", "kind", "regular"), meanings)
+        self.assertIn(("capture_stream", "size", 52 * 1024 * 1024), meanings)
+        self.assertIn(("capture_rotation", "policy", "effective"), meanings)
+        projection = project_where(result)
+        slots = {slot.identifier: slot for slot in projection.document.slots}
+        self.assertEqual(slots["capture-storage-stream"].parent,
+                         "section-capture-storage")
+        self.assertEqual(slots["capture-storage-rotation"].parent,
+                         "section-capture-storage")
+        terminal = terminal_where(result)
+        self.assertIn("Capture storage", terminal)
+        self.assertIn("stream.jsonl · present · regular · 52 MiB", terminal)
+        self.assertIn("128 MiB per segment · keeps 3 · ceiling 512 MiB · defaults",
+                      terminal)
+        self.assertNotIn("healthy", json.dumps(result))
+        self.assertNotIn("record", json.dumps(result))
+
+    def test_sized_sensor_is_bounded_to_lstat_and_preserves_failures(self):
+        with tempfile.TemporaryDirectory(prefix="tap-sized-path-") as directory:
+            path = Path(directory) / "stream.jsonl"
+            path.write_bytes(b"1234567")
+            self.assertEqual(inspect_sized_path(path), {
+                "outcome": "present", "kind": "regular", "size_bytes": 7,
+                "errno": None, "message": ""})
+        denied = PermissionError(13, "permission denied", "/fixture/denied")
+        with patch("tap_core.filesystem_sensor.os.lstat", side_effect=denied):
+            receipt = inspect_sized_path("/fixture/denied")
+        self.assertEqual((receipt["outcome"], receipt["errno"], receipt["size_bytes"]),
+                         ("failed", 13, None))
+
+    def test_capture_storage_slice_has_no_content_or_directory_scans(self):
+        source = (ROOT / "tap_core/capture_storage_view.py").read_text()
+        material = (ROOT / "tap_core/data/where-capture-storage-carrier.json").read_text()
+        for forbidden in ("subprocess", ".glob(", "os.walk", ".read_bytes("):
+            self.assertNotIn(forbidden, source)
+            self.assertNotIn(forbidden, material)
+
     def test_checked_in_contract_fixture_reproduces_both_projections(self):
         fixture = json.loads(CONTRACT_FIXTURE.read_text())
         semantic = public_where_result(fixture["raw_snapshot"])
@@ -39,6 +170,16 @@ class WhereProjectionTests(unittest.TestCase):
         addresses = public_where_result(fixture["raw_snapshot"])
         filesystem = public_filesystem_result(fixture["sensor_receipts"])
         semantic = with_filesystem_observations(addresses, filesystem)
+        self.assertEqual(semantic, fixture["semantic_result"])
+        self.assertEqual(terminal_where(semantic), fixture["terminal"]["unbounded"])
+
+    def test_v3_contract_fixture_reproduces_storage_receipts_to_terminal_chain(self):
+        fixture = json.loads(V3_CONTRACT_FIXTURE.read_text())
+        addresses = public_where_result(fixture["raw_snapshot"])
+        filesystem = public_filesystem_result(fixture["filesystem_receipts"])
+        v2 = with_filesystem_observations(addresses, filesystem)
+        storage = public_capture_storage(fixture["capture_storage_receipts"])
+        semantic = with_capture_storage(v2, storage)
         self.assertEqual(semantic, fixture["semantic_result"])
         self.assertEqual(terminal_where(semantic), fixture["terminal"]["unbounded"])
 
@@ -193,7 +334,8 @@ class WhereProjectionTests(unittest.TestCase):
         self.assertEqual(public_where_result(nested, adapter), public_where_result(RAW))
 
     def test_semantic_material_has_no_physical_carrier_paths(self):
-        for material in (load_material(), load_material(PRESENCE_MATERIAL)):
+        for material in (load_material(), load_material(PRESENCE_MATERIAL),
+                         load_material(STORAGE_MATERIAL)):
             self.assertNotIn('"source"', json.dumps(material))
             self.assertNotIn('"path"', json.dumps(material))
 
@@ -252,14 +394,20 @@ class WhereCliTests(unittest.TestCase):
         code, output, error = self.invoke("--output", "semantic-json")
         self.assertEqual((code, error), (0, ""))
         semantic = json.loads(output)
-        self.assertEqual(semantic["schema"], "tap.where-result/v2")
+        self.assertEqual(semantic["schema"], "tap.where-result/v3")
         self.assertEqual(semantic["filesystem"]["config"]["presence"], "present")
         self.assertEqual(semantic["filesystem"]["config"]["kind"], "regular")
+        self.assertEqual(semantic["capture_storage"]["stream"]["address"]["value"],
+                         str(self.root / "data/stream.jsonl"))
+        self.assertEqual(semantic["capture_storage"]["rotation_policy"]["source"],
+                         "defaults")
         code, terminal, error = self.invoke("--output", "terminal", "--color", "never")
         self.assertEqual((code, error), (0, ""))
         self.assertIn(str(self.root / "profile.json"), terminal)
         self.assertIn(" · present · regular", terminal)
         self.assertIn("? not observed", terminal)
+        self.assertIn("Capture storage", terminal)
+        self.assertIn("stream.jsonl · absent", terminal)
 
     def test_raw_and_semantic_json_ignore_terminal_options(self):
         self.assertEqual(self.invoke()[1],

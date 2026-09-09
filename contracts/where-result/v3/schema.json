@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/inem/tap-core/contracts/where-result/v3/schema.json",
+  "title": "TAP address and Core capture storage result v3",
+  "type": "object",
+  "required": ["schema", "addresses", "filesystem", "capture_storage"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {"const": "tap.where-result/v3"},
+    "addresses": {"$ref": "../v1/schema.json#/properties/addresses"},
+    "filesystem": {"$ref": "../v2/schema.json#/properties/filesystem"},
+    "capture_storage": {
+      "type": "object",
+      "required": ["schema", "stream", "rotation_policy"],
+      "additionalProperties": false,
+      "properties": {
+        "schema": {"const": "tap.capture-storage-observation/v1"},
+        "stream": {
+          "type": "object",
+          "required": ["id", "address", "filesystem", "size"],
+          "additionalProperties": false,
+          "properties": {
+            "id": {"const": "capture_stream"},
+            "address": {"$ref": "#/$defs/address"},
+            "filesystem": {"$ref": "#/$defs/filesystem"},
+            "size": {"$ref": "#/$defs/size"}
+          }
+        },
+        "rotation_policy": {"$ref": "#/$defs/policy"}
+      }
+    }
+  },
+  "$defs": {
+    "address": {
+      "oneOf": [
+        {"type": "object", "required": ["knowledge", "value"], "additionalProperties": false,
+         "properties": {"knowledge": {"const": "known"}, "value": {"type": "string", "minLength": 1}}},
+        {"type": "object", "required": ["knowledge", "reason", "message"], "additionalProperties": false,
+         "properties": {"knowledge": {"const": "unknown"}, "reason": {"enum": ["inspection_failed", "not_observed"]}, "message": {"type": "string"}}}
+      ]
+    },
+    "filesystem": {
+      "oneOf": [
+        {"$ref": "../../filesystem-observation/v1/schema.json#/$defs/known"},
+        {"$ref": "../../filesystem-observation/v1/schema.json#/$defs/unknown"}
+      ]
+    },
+    "size": {
+      "oneOf": [
+        {"type": "object", "required": ["authority", "knowledge", "bytes"], "additionalProperties": false,
+         "properties": {"authority": {"const": "filesystem"}, "knowledge": {"const": "known"}, "bytes": {"type": "integer", "minimum": 0}}},
+        {"type": "object", "required": ["authority", "knowledge", "reason", "message"], "additionalProperties": false,
+         "properties": {"authority": {"const": "filesystem"}, "knowledge": {"const": "unknown"}, "reason": {"enum": ["not_regular", "absent", "inspection_failed", "not_observed"]}, "message": {"type": "string"}}}
+      ]
+    },
+    "policy": {
+      "oneOf": [
+        {"type": "object", "required": ["authority", "knowledge", "source", "segment_bytes", "keep_rolls", "ceiling_bytes"], "additionalProperties": false,
+         "properties": {"authority": {"const": "runtime-configuration"}, "knowledge": {"const": "known"}, "source": {"enum": ["defaults", "profile"]}, "segment_bytes": {"type": "integer", "minimum": 1}, "keep_rolls": {"type": "integer", "minimum": 0}, "ceiling_bytes": {"type": "integer", "minimum": 1}}},
+        {"type": "object", "required": ["authority", "knowledge", "reason", "message"], "additionalProperties": false,
+         "properties": {"authority": {"const": "runtime-configuration"}, "knowledge": {"const": "unknown"}, "reason": {"enum": ["inspection_failed", "not_observed"]}, "message": {"type": "string"}}}
+      ]
+    }
+  }
+}

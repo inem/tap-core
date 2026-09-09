@@ -1,0 +1,12 @@
+{
+  "schema": "tap.where-capture-storage-carrier/v1",
+  "id": "tap-core.where-capture-storage-carrier/v1",
+  "receipt_schema": "tap.capture-storage-receipts/v1",
+  "errors_path": ["inspection_errors"],
+  "stream": {
+    "id": "capture_stream",
+    "base_address_source": {"path": ["data"], "error": "data"},
+    "relative_path": "stream.jsonl"
+  },
+  "policy_source": {"path": ["capture"], "error": "capture"}
+}

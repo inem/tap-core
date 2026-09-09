@@ -3,6 +3,8 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 
+from .capture_storage_view import (observed_result as observed_capture_storage,
+                                   validate_result as validate_capture_storage)
 from .filesystem_sensor import inspect_path
 from .material_view import observe, project_claims
 from .projection import (Atom, Derivation, ProjectionError, evaluate_rules,
@@ -13,6 +15,7 @@ MATERIAL = Path(__file__).with_name("data") / "where.json"
 CARRIER_ADAPTER = Path(__file__).with_name("data") / "where-carrier.json"
 FILESYSTEM_ADAPTER = Path(__file__).with_name("data") / "where-filesystem.json"
 PRESENCE_MATERIAL = Path(__file__).with_name("data") / "where-presence.json"
+STORAGE_MATERIAL = Path(__file__).with_name("data") / "where-storage.json"
 
 
 @dataclass(frozen=True)
@@ -211,21 +214,30 @@ def public_filesystem_result(receipt_carrier, adapter=None):
 
 def load_material(path=MATERIAL):
     value = _read_object(path, "where material")
-    if value.get("schema") == "tap.internal-where-material-overlay/v1":
+    if value.get("schema") in ("tap.internal-where-material-overlay/v1",
+                               "tap.internal-where-material-overlay/v2"):
+        structural = value["schema"].endswith("/v2")
         required_overlay = {"schema", "id", "extends", "effective_schema",
                             "input_schema", "semantic_rules", "presentation_rules",
                             "terminal_styles"}
+        if structural:
+            required_overlay |= {"sections", "locations"}
         base_name = value.get("extends")
+        supported = {
+            ("tap.internal-where-material/v3", "tap.where-result/v2"),
+            ("tap.internal-where-material/v4", "tap.where-result/v3"),
+        }
         if (set(value) != required_overlay
                 or not isinstance(value.get("id"), str) or not value["id"]
                 or not isinstance(base_name, str) or not base_name
                 or Path(base_name).name != base_name or Path(base_name).suffix != ".json"
                 or base_name == Path(path).name
-                or value.get("effective_schema") != "tap.internal-where-material/v3"
-                or value.get("input_schema") != "tap.where-result/v2"
+                or (value.get("effective_schema"), value.get("input_schema")) not in supported
                 or not isinstance(value.get("semantic_rules"), list)
                 or not isinstance(value.get("presentation_rules"), list)
-                or not isinstance(value.get("terminal_styles"), dict)):
+                or not isinstance(value.get("terminal_styles"), dict)
+                or (structural and (not isinstance(value.get("sections"), list)
+                                    or not isinstance(value.get("locations"), list)))):
             raise ProjectionError("invalid bundled where material overlay")
         base = load_material(Path(path).parent / base_name)
         value = {
@@ -233,6 +245,8 @@ def load_material(path=MATERIAL):
             "schema": value["effective_schema"],
             "id": value["id"],
             "input_schema": value["input_schema"],
+            "sections": [*base["sections"], *value.get("sections", [])],
+            "locations": [*base["locations"], *value.get("locations", [])],
             "semantic_rules": [*base["semantic_rules"], *value["semantic_rules"]],
             "presentation_rules": [*base["presentation_rules"],
                                    *value["presentation_rules"]],
@@ -244,6 +258,7 @@ def load_material(path=MATERIAL):
     material_inputs = {
         "tap.internal-where-material/v2": "tap.where-result/v1",
         "tap.internal-where-material/v3": "tap.where-result/v2",
+        "tap.internal-where-material/v4": "tap.where-result/v3",
     }
     if (set(value) != required
             or value.get("schema") not in material_inputs
@@ -347,15 +362,42 @@ def observed_where_result(snapshot, carrier_adapter=None, filesystem_adapter=Non
     return with_filesystem_observations(address_result, filesystem)
 
 
+def storage_where_result(snapshot, carrier_adapter=None, filesystem_adapter=None,
+                         filesystem_sensor=inspect_path, storage_carrier_adapter=None,
+                         storage_sensor=None):
+    """Add bounded Core capture storage observations to the established v2 result."""
+    base = observed_where_result(snapshot, carrier_adapter, filesystem_adapter,
+                                 filesystem_sensor)
+    arguments = {} if storage_sensor is None else {"sensor": storage_sensor}
+    storage = observed_capture_storage(snapshot, storage_carrier_adapter, **arguments)
+    return with_capture_storage(base, storage)
+
+
+def with_capture_storage(result, storage):
+    validate_where_result(result, load_material(PRESENCE_MATERIAL))
+    validate_capture_storage(storage)
+    return {"schema": "tap.where-result/v3", "addresses": result["addresses"],
+            "filesystem": result["filesystem"], "capture_storage": storage}
+
+
+def _material_for(result):
+    schema = result.get("schema") if isinstance(result, dict) else None
+    if schema == "tap.where-result/v3":
+        return load_material(STORAGE_MATERIAL)
+    if schema == "tap.where-result/v2":
+        return load_material(PRESENCE_MATERIAL)
+    return load_material(MATERIAL)
+
+
 def validate_where_result(result, material=None):
     if material is None:
-        schema = result.get("schema") if isinstance(result, dict) else None
-        material = load_material(PRESENCE_MATERIAL if schema == "tap.where-result/v2"
-                                 else MATERIAL)
+        material = _material_for(result)
     expected = {location["id"] for location in material["locations"]}
-    fields = ({"schema", "addresses", "filesystem"}
-              if material["input_schema"] == "tap.where-result/v2"
-              else {"schema", "addresses"})
+    fields = {
+        "tap.where-result/v1": {"schema", "addresses"},
+        "tap.where-result/v2": {"schema", "addresses", "filesystem"},
+        "tap.where-result/v3": {"schema", "addresses", "filesystem", "capture_storage"},
+    }[material["input_schema"]]
     if (not isinstance(result, dict) or set(result) != fields
             or result.get("schema") != material["input_schema"]
             or not isinstance(result.get("addresses"), dict)
@@ -378,6 +420,20 @@ def validate_where_result(result, material=None):
             raise ProjectionError("invalid where filesystem observations")
         for observation in result["filesystem"].values():
             _validate_filesystem_observation(observation)
+    if "capture_storage" in result:
+        validate_capture_storage(result["capture_storage"])
+
+
+def _human_bytes(value):
+    units = ("B", "KiB", "MiB", "GiB", "TiB")
+    amount = float(value)
+    unit = units[0]
+    for unit in units:
+        if amount < 1024 or unit == units[-1]:
+            break
+        amount /= 1024
+    text = str(int(amount)) if amount.is_integer() else f"{amount:.1f}".rstrip("0").rstrip(".")
+    return f"{text} {unit}"
 
 
 def _facts(result, material):
@@ -403,13 +459,48 @@ def _facts(result, material):
             observation.get("message", ""),
         ])
         claims[atom] = Derivation("supplied-where-result", tuple())
+    storage = result.get("capture_storage")
+    if storage is not None:
+        stream = storage["stream"]
+        address = stream["address"]
+        address_atom = Atom.from_value([
+            "capture-stream-address", stream["id"], address["knowledge"],
+            address.get("value"), address.get("reason"), address.get("message", ""),
+        ])
+        filesystem = stream["filesystem"]
+        filesystem_atom = Atom.from_value([
+            "capture-stream-filesystem", stream["id"], filesystem["authority"],
+            filesystem["knowledge"], filesystem.get("presence"), filesystem.get("kind"),
+            filesystem.get("reason"), filesystem.get("message", ""),
+        ])
+        size = stream["size"]
+        size_atom = Atom.from_value([
+            "capture-stream-size", stream["id"], size["authority"], size["knowledge"],
+            size.get("bytes"), size.get("reason"), size.get("message", ""),
+        ])
+        policy = storage["rotation_policy"]
+        policy_atom = Atom.from_value([
+            "capture-rotation-policy", policy["authority"], policy["knowledge"],
+            policy.get("source"), policy.get("segment_bytes"), policy.get("keep_rolls"),
+            policy.get("ceiling_bytes"), policy.get("reason"), policy.get("message", ""),
+        ])
+        for atom in (address_atom, filesystem_atom, size_atom, policy_atom):
+            claims[atom] = Derivation("supplied-where-result", tuple())
+        if size["knowledge"] == "known":
+            display = Atom.from_value(["byte-quantity", "capture_stream", "size",
+                                       _human_bytes(size["bytes"])])
+            claims[display] = Derivation("format-byte-quantity", (size_atom,))
+        if policy["knowledge"] == "known":
+            for name in ("segment_bytes", "ceiling_bytes"):
+                display = Atom.from_value(["byte-quantity", "capture_rotation", name,
+                                           _human_bytes(policy[name])])
+                claims[display] = Derivation("format-byte-quantity", (policy_atom,))
     return claims
 
 
 def project_where(result, material=None):
     if material is None:
-        material = load_material(PRESENCE_MATERIAL if result.get("schema") == "tap.where-result/v2"
-                                 else MATERIAL)
+        material = _material_for(result)
     validate_where_result(result, material)
     projection = project_claims(_facts(result, material), material,
                                 "supplied-where-result")
@@ -419,8 +510,7 @@ def project_where(result, material=None):
 
 def terminal_where(result, width=None, color=False, material=None):
     if material is None:
-        material = load_material(PRESENCE_MATERIAL if result.get("schema") == "tap.where-result/v2"
-                                 else MATERIAL)
+        material = _material_for(result)
     limit = 2 ** 31 - 1 if width is None else width
     return render_terminal(project_where(result, material).document, limit, color,
                            material["terminal_styles"])
