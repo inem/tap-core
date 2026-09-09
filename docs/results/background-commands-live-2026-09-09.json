@@ -1,0 +1,33 @@
+{
+  "date": "2026-09-09",
+  "core_base": "b7c3cdd",
+  "branch": "pack-background-jobs",
+  "packs": {
+    "chatgpt.work": "0.2.0",
+    "chatgpt.organizer": "0.2.0"
+  },
+  "live_jobs": {
+    "chatgpt.organizer:chatgpt organizer tick": {
+      "version": "0.2.0",
+      "phase": "ok",
+      "exit_code": 0,
+      "started_at": 1788944869.697024,
+      "finished_at": 1788944870.201252
+    },
+    "chatgpt.work:chatgpt work refresh": {
+      "version": "0.2.0",
+      "phase": "ok",
+      "exit_code": 0,
+      "started_at": 1788944870.202334,
+      "finished_at": 1788944881.5776021
+    }
+  },
+  "external_scheduler_removed": true,
+  "macos_isolated": "actual launchd invocation without capture; disable unloads; uninstall retains data",
+  "suite": {
+    "tests": 379,
+    "failures": 1,
+    "reason": "existing installer fixture proxy port is occupied by live Core; update correctly refuses"
+  },
+  "scheduled_effects": "Existing organizer opt-in and database preserved; no forced rename test"
+}

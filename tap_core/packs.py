@@ -161,7 +161,14 @@ def validate_manifest(manifest, root, host_api=PACK_API):
             paths = set()
             for declaration in entry["commands"]:
                 fields(declaration, ("path", "summary", "usage", "profile"),
-                       label="entrypoints.command.commands[]")
+                       optional=("schedule",), label="entrypoints.command.commands[]")
+                if "schedule" in declaration:
+                    schedule = declaration["schedule"]
+                    fields(schedule, ("interval_seconds", "timeout_seconds"), label="command.schedule")
+                    require(type(schedule["interval_seconds"]) is int and 10 <= schedule["interval_seconds"] <= 86400,
+                            "command.schedule interval must be 10..86400 seconds")
+                    require(type(schedule["timeout_seconds"]) is int and 1 <= schedule["timeout_seconds"] <= 3600,
+                            "command.schedule timeout must be 1..3600 seconds")
                 path = declaration["path"]
                 require(type(path) is list and 1 <= len(path) <= 8
                         and all(type(segment) is str and COMMAND_SEGMENT.fullmatch(segment)
@@ -197,7 +204,9 @@ def validate_manifest(manifest, root, host_api=PACK_API):
     for origin in access["origins"]:
         exact_origin(origin)
     strings(access["capabilities"], "access.capabilities")
-    supported = {value[1] for value in ROLES.values()}
+    if any("schedule" in declaration for declaration in entries.get("command", {}).get("commands", [])):
+        require("background.run" in access["capabilities"], "scheduled commands require background.run")
+    supported = {value[1] for value in ROLES.values()} | {"background.run"}
     require(set(access["capabilities"]) <= supported, "access.capabilities: unknown capability")
     for role in entries:
         require(ROLES[role][1] in access["capabilities"], f"access: missing capability for {role}")
