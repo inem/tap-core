@@ -1,5 +1,5 @@
 {
-  "schema": "tap.internal-status-material-fragment/v1",
+  "schema": "tap.internal-status-material-fragment/v2",
   "id": "status-document",
   "document_root": "status",
   "presentation_rules": [

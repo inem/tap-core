@@ -9,8 +9,9 @@ from .projection import (Atom, Derivation, ProjectionError, document_from_claims
 
 
 MATERIAL = Path(__file__).with_name("data") / "status" / "manifest.json"
-_FRAGMENT_SCHEMA = "tap.internal-status-material-fragment/v1"
-_MATERIAL_KEYS = {"schema", "result_schema", "observations", "observation_collections",
+CARRIER_ADAPTER = Path(__file__).with_name("data") / "status-carrier.json"
+_FRAGMENT_SCHEMA = "tap.internal-status-material-fragment/v2"
+_MATERIAL_KEYS = {"schema", "id", "input_schema", "observations", "observation_collections",
                   "semantic_rules", "composition_rules", "presentation_rules",
                   "document_root", "terminal_styles"}
 
@@ -23,13 +24,13 @@ class StatusProjection:
     provenance: dict
 
 
-def _read_object(path):
+def _read_object(path, kind="status material"):
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
-        raise ProjectionError(f"cannot load status material {path.name}: {error}") from error
+        raise ProjectionError(f"cannot load {kind} {path.name}: {error}") from error
     if not isinstance(value, dict):
-        raise ProjectionError(f"invalid status material object: {path.name}")
+        raise ProjectionError(f"invalid {kind} object: {path.name}")
     return value
 
 
@@ -37,16 +38,18 @@ def load_material(path=MATERIAL):
     """Compose the internal status material from named, non-overlapping fragments."""
     path = Path(path)
     manifest = _read_object(path)
-    if (set(manifest) != {"schema", "result_schema", "fragments"}
-            or manifest.get("schema") != "tap.internal-status-material-manifest/v1"
-            or not isinstance(manifest.get("result_schema"), str)
+    if (set(manifest) != {"schema", "id", "input_schema", "fragments"}
+            or manifest.get("schema") != "tap.internal-status-material-manifest/v2"
+            or not isinstance(manifest.get("id"), str) or not manifest["id"]
+            or not isinstance(manifest.get("input_schema"), str)
             or not isinstance(manifest.get("fragments"), list)
             or not manifest["fragments"]):
         raise ProjectionError("invalid bundled status material manifest")
 
     material = {
-        "schema": "tap.internal-status-material/v1",
-        "result_schema": manifest["result_schema"],
+        "schema": "tap.internal-status-material/v2",
+        "id": manifest["id"],
+        "input_schema": manifest["input_schema"],
         "observations": {},
         "observation_collections": {},
         "semantic_rules": [],
@@ -125,18 +128,109 @@ def load_material(path=MATERIAL):
     material["document_root"] = roots[0]
     if set(material) != _MATERIAL_KEYS or not material["observations"]:
         raise ProjectionError("invalid composed status material")
+    _validate_public_shape(material["observations"], material["observation_collections"])
     return material
 
 
-def observe(spec, snapshot):
-    """Read one declared observation from a supplied snapshot carrier."""
-    if (not isinstance(spec, dict) or set(spec) != {"path", "error"}
-            or not isinstance(spec["path"], list) or not spec["path"]
-            or not all(isinstance(part, str) and part for part in spec["path"])
-            or not isinstance(spec["error"], str) or not spec["error"]):
-        raise ProjectionError("invalid status observation source")
+def _validate_path(path, label):
+    if (not isinstance(path, list) or not path
+            or not all(isinstance(part, str) and part for part in path)):
+        raise ProjectionError(f"invalid {label}")
 
-    errors = snapshot.get("inspection_errors", {})
+
+def _validate_source(spec):
+    if (not isinstance(spec, dict) or set(spec) != {"path", "error"}
+            or not isinstance(spec.get("error"), str) or not spec["error"]):
+        raise ProjectionError("invalid status observation source")
+    _validate_path(spec["path"], "status observation source")
+
+
+def _validate_collection_source(spec):
+    if (not isinstance(spec, dict) or set(spec) != {"path", "error", "fields", "max_items"}
+            or not isinstance(spec.get("error"), str) or not spec["error"]
+            or not isinstance(spec.get("fields"), list) or not spec["fields"]
+            or type(spec.get("max_items")) is not int or spec["max_items"] < 1):
+        raise ProjectionError("invalid status observation collection source")
+    _validate_path(spec["path"], "status observation collection source")
+    names = set()
+    for field in spec["fields"]:
+        if (not isinstance(field, dict) or set(field) != {"name", "path"}
+                or not isinstance(field.get("name"), str) or not field["name"]
+                or field["name"] in names):
+            raise ProjectionError("invalid status observation collection field")
+        _validate_path(field["path"], "status observation collection field")
+        names.add(field["name"])
+
+
+def _validate_public_shape(observations, collections):
+    if not isinstance(observations, dict) or not observations:
+        raise ProjectionError("invalid status observation vocabulary")
+    if not isinstance(collections, dict):
+        raise ProjectionError("invalid status observation collection vocabulary")
+    overlap = set(observations) & set(collections)
+    if overlap:
+        raise ProjectionError(f"duplicate observation group: {sorted(overlap)[0]}")
+    for group, names in observations.items():
+        if (not isinstance(group, str) or not group or not isinstance(names, list) or not names
+                or not all(isinstance(name, str) and name for name in names)
+                or len(names) != len(set(names))):
+            raise ProjectionError(f"invalid observation vocabulary: {group}")
+    for group, declaration in collections.items():
+        if (not isinstance(group, str) or not group or not isinstance(declaration, dict)
+                or set(declaration) != {"fields", "max_items"}
+                or not isinstance(declaration["fields"], list) or not declaration["fields"]
+                or not all(isinstance(name, str) and name for name in declaration["fields"])
+                or len(declaration["fields"]) != len(set(declaration["fields"]))
+                or type(declaration["max_items"]) is not int or declaration["max_items"] < 1):
+            raise ProjectionError(f"invalid observation collection vocabulary: {group}")
+
+
+def load_carrier_adapter(path=CARRIER_ADAPTER):
+    """Load and validate the physical snapshot-to-result mapping."""
+    adapter = _read_object(Path(path), "status carrier adapter")
+    _validate_carrier_adapter(adapter)
+    return adapter
+
+
+def _validate_carrier_adapter(adapter):
+    if (not isinstance(adapter, dict)
+            or set(adapter) != {"schema", "id", "output_schema", "profile_path", "errors_path",
+                        "observations", "observation_collections"}
+            or adapter.get("schema") != "tap.status-snapshot-adapter/v1"
+            or not isinstance(adapter.get("id"), str) or not adapter["id"]
+            or not isinstance(adapter.get("output_schema"), str) or not adapter["output_schema"]):
+        raise ProjectionError("invalid status carrier adapter")
+    _validate_path(adapter["profile_path"], "status carrier profile path")
+    _validate_path(adapter["errors_path"], "status carrier errors path")
+    observations = adapter["observations"]
+    collections = adapter["observation_collections"]
+    if not isinstance(observations, dict) or not isinstance(collections, dict):
+        raise ProjectionError("invalid status carrier adapter declarations")
+    if set(observations) & set(collections):
+        raise ProjectionError("duplicate status carrier target group")
+    for group, declarations in observations.items():
+        if (not isinstance(group, str) or not group or not isinstance(declarations, list)
+                or not declarations):
+            raise ProjectionError("invalid status carrier observation group")
+        names = set()
+        for declaration in declarations:
+            if (not isinstance(declaration, dict) or set(declaration) != {"name", "source"}
+                    or not isinstance(declaration.get("name"), str) or not declaration["name"]
+                    or declaration["name"] in names):
+                raise ProjectionError("invalid status carrier observation declaration")
+            names.add(declaration["name"])
+            _validate_source(declaration["source"])
+    for group, declaration in collections.items():
+        if not isinstance(group, str) or not group:
+            raise ProjectionError("invalid status carrier collection group")
+        _validate_collection_source(declaration)
+
+
+def observe(spec, snapshot, errors):
+    """Read one declared observation from a supplied snapshot carrier."""
+    _validate_source(spec)
+    if not isinstance(errors, dict):
+        raise ProjectionError("status carrier errors must be an object")
     if spec["error"] in errors:
         return {"knowledge": "unknown", "reason": "inspection_failed",
                 "message": errors[spec["error"]]}
@@ -154,23 +248,10 @@ def _observe_path(path, carrier):
     return {"knowledge": "known", "value": value}
 
 
-def observe_collection(spec, snapshot):
+def observe_collection(spec, snapshot, errors):
     """Normalize one declared named-map observation without interpreting its items."""
-    if (not isinstance(spec, dict) or set(spec) != {"path", "error", "fields", "max_items"}
-            or not isinstance(spec.get("fields"), list) or not spec["fields"]
-            or type(spec.get("max_items")) is not int or spec["max_items"] < 1):
-        raise ProjectionError("invalid status observation collection source")
-    names = set()
-    for field in spec["fields"]:
-        if (not isinstance(field, dict) or set(field) != {"name", "path"}
-                or not isinstance(field["name"], str) or not field["name"]
-                or field["name"] in names or not isinstance(field["path"], list)
-                or not field["path"]
-                or not all(isinstance(part, str) and part for part in field["path"])):
-            raise ProjectionError("invalid status observation collection field")
-        names.add(field["name"])
-
-    collection = observe({"path": spec.get("path"), "error": spec.get("error")}, snapshot)
+    _validate_collection_source(spec)
+    collection = observe({"path": spec["path"], "error": spec["error"]}, snapshot, errors)
     if collection["knowledge"] == "unknown":
         return collection
     value = collection["value"]
@@ -192,27 +273,41 @@ def observe_collection(spec, snapshot):
     return {"knowledge": "known", "items": items}
 
 
-def public_status_result(snapshot, material=None):
+def _carrier_value(path, carrier, default):
+    value = carrier
+    for part in path:
+        if not isinstance(value, dict) or part not in value:
+            return default
+        value = value[part]
+    return value
+
+
+def public_status_result(snapshot, adapter=None):
     """Reduce the operational snapshot to the stable, compact public contract."""
-    material = load_material() if material is None else material
-    result = {"schema": material["result_schema"], "profile": snapshot.get("profile")}
-    for group, declarations in material["observations"].items():
-        result[group] = {item["name"]: observe(item["source"], snapshot)
+    adapter = load_carrier_adapter() if adapter is None else adapter
+    _validate_carrier_adapter(adapter)
+    errors = _carrier_value(adapter["errors_path"], snapshot, {})
+    if not isinstance(errors, dict):
+        raise ProjectionError("status carrier errors must be an object")
+    result = {"schema": adapter["output_schema"],
+              "profile": _carrier_value(adapter["profile_path"], snapshot, None)}
+    for group, declarations in adapter["observations"].items():
+        result[group] = {item["name"]: observe(item["source"], snapshot, errors)
                          for item in declarations}
-    for group, declaration in material["observation_collections"].items():
-        result[group] = observe_collection(declaration, snapshot)
+    for group, declaration in adapter["observation_collections"].items():
+        result[group] = observe_collection(declaration, snapshot, errors)
     return result
 
 
 def validate_status_result(result, material=None):
     material = load_material() if material is None else material
-    if not isinstance(result, dict) or result.get("schema") != material["result_schema"]:
+    if not isinstance(result, dict) or result.get("schema") != material["input_schema"]:
         raise ProjectionError("unsupported status result")
     if set(result) != {"schema", "profile", *material["observations"],
                        *material["observation_collections"]}:
         raise ProjectionError("invalid status result fields")
     for group, declarations in material["observations"].items():
-        expected = {item["name"] for item in declarations}
+        expected = set(declarations)
         if not isinstance(result[group], dict) or set(result[group]) != expected:
             raise ProjectionError(f"invalid {group} observations")
         for observation in result[group].values():
@@ -238,7 +333,7 @@ def validate_status_result(result, material=None):
         if (set(collection) != {"knowledge", "items"} or not isinstance(collection["items"], list)
                 or len(collection["items"]) > declaration["max_items"]):
             raise ProjectionError("invalid known observation collection")
-        expected = {field["name"] for field in declaration["fields"]}
+        expected = set(declaration["fields"])
         previous = None
         for ordinal, item in enumerate(collection["items"], 1):
             if (not isinstance(item, dict) or set(item) != {"name", "ordinal", "observations"}

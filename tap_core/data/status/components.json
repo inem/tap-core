@@ -1,28 +1,13 @@
 {
-  "schema": "tap.internal-status-material-fragment/v1",
+  "schema": "tap.internal-status-material-fragment/v2",
   "id": "managed-components",
   "observations": {
-    "components": [
-      {"name":"configured","source":{"path":["components","configured"],"error":"components"}},
-      {"name":"healthy","source":{"path":["components","healthy"],"error":"components"}},
-      {"name":"current_process","source":{"path":["components","current_process"],"error":"components"}},
-      {"name":"phase","source":{"path":["components","phase"],"error":"components"}},
-      {"name":"hub_pid","source":{"path":["components","hub_pid"],"error":"components"}},
-      {"name":"error","source":{"path":["components","error"],"error":"components"}}
-    ]
+    "components": ["configured","healthy","current_process","phase","hub_pid","error"]
   },
   "observation_collections": {
     "component_readers": {
-      "path": ["components","readers"],
-      "error": "components",
       "max_items": 8,
-      "fields": [
-        {"name":"healthy","path":["healthy"]},
-        {"name":"phase","path":["phase"]},
-        {"name":"progress","path":["progress"]},
-        {"name":"failures","path":["failures"]},
-        {"name":"error","path":["error"]}
-      ]
+      "fields": ["healthy","phase","progress","failures","error"]
     }
   },
   "semantic_rules": [

@@ -16,10 +16,12 @@ from tap_core.projection import (Atom, Derivation, Document, ProjectionConflict,
                                  render_terminal_result, select_candidates)
 from tap_core.status_view import (project_status, public_status_result,
                                   terminal_status, validate_status_result,
-                                  load_material, observe, observe_collection)
+                                  load_carrier_adapter, load_material, observe,
+                                  observe_collection)
 
 
 FIXTURES = Path(__file__).parents[1] / "contracts/status-result/v4/fixtures"
+CARRIER_FIXTURES = Path(__file__).parent / "fixtures/status-carriers"
 
 
 def snapshot(**changes):
@@ -309,26 +311,26 @@ class StatusContractTests(unittest.TestCase):
         flat = {"path": ["service_loaded"], "error": "service_loaded"}
         nested = {"path": ["capture", "healthy"], "error": "capture"}
         raw = snapshot()
-        self.assertEqual(observe(flat, raw), {"knowledge": "known", "value": True})
-        self.assertEqual(observe(nested, raw), {"knowledge": "known", "value": True})
+        self.assertEqual(observe(flat, raw, {}), {"knowledge": "known", "value": True})
+        self.assertEqual(observe(nested, raw, {}), {"knowledge": "known", "value": True})
 
     def test_nested_observation_is_data_and_uses_its_group_error_owner(self):
-        material = copy.deepcopy(load_material())
-        material["observations"]["capture_probe"] = [{
+        adapter = copy.deepcopy(load_carrier_adapter())
+        adapter["observations"]["capture_probe"] = [{
             "name": "healthy",
             "source": {"path": ["capture", "healthy"], "error": "capture"},
         }]
-        known = public_status_result(snapshot(), material)
+        known = public_status_result(snapshot(), adapter)
         self.assertEqual(known["capture_probe"]["healthy"], {
             "knowledge": "known", "value": True,
         })
         failed = public_status_result(
-            snapshot(inspection_errors={"capture": "cannot read health"}), material)
+            snapshot(inspection_errors={"capture": "cannot read health"}), adapter)
         self.assertEqual(failed["capture_probe"]["healthy"], {
             "knowledge": "unknown", "reason": "inspection_failed",
             "message": "cannot read health",
         })
-        absent = public_status_result(snapshot(capture={}), material)
+        absent = public_status_result(snapshot(capture={}), adapter)
         self.assertEqual(absent["capture_probe"]["healthy"]["reason"], "not_observed")
 
     def test_observation_source_shape_is_validated_at_the_operation_boundary(self):
@@ -337,7 +339,7 @@ class StatusContractTests(unittest.TestCase):
                         {"path": "capture.healthy", "error": "capture"}):
             with self.subTest(invalid=invalid), \
                     self.assertRaisesRegex(ProjectionError, "invalid status observation source"):
-                observe(invalid, snapshot())
+                observe(invalid, snapshot(), {})
 
     def test_free_collection_operation_only_normalizes_shape_and_order(self):
         spec = {
@@ -347,17 +349,81 @@ class StatusContractTests(unittest.TestCase):
         }
         raw = snapshot(components={"readers": {
             "zeta": {"phase": "failed"}, "alpha": {"phase": "waiting"}}})
-        result = observe_collection(spec, raw)
+        result = observe_collection(spec, raw, {})
         self.assertEqual([(item["name"], item["ordinal"])
                           for item in result["items"]], [("alpha", 1), ("zeta", 2)])
         self.assertEqual(result["items"][0]["observations"]["phase"]["value"], "waiting")
-        failed = observe_collection(spec, snapshot(inspection_errors={"components": "denied"}))
+        failed = observe_collection(spec, snapshot(), {"components": "denied"})
         self.assertEqual(failed["reason"], "inspection_failed")
         with self.assertRaisesRegex(ProjectionError, "named map"):
-            observe_collection(spec, snapshot(components={"readers": []}))
+            observe_collection(spec, snapshot(components={"readers": []}), {})
         bounded = dict(spec, max_items=1)
         with self.assertRaisesRegex(ProjectionError, "declared bound"):
-            observe_collection(bounded, raw)
+            observe_collection(bounded, raw, {})
+
+
+class CarrierMaterialBoundaryTests(unittest.TestCase):
+    def nested_snapshot(self, raw):
+        payload = {key: value for key, value in raw.items()
+                   if key not in ("profile", "inspection_errors")}
+        return {"metadata": {"profile": raw["profile"],
+                             "inspection_errors": raw["inspection_errors"]},
+                "payload": payload}
+
+    def test_two_physical_carriers_produce_the_same_public_material(self):
+        raw = snapshot(components={
+            "configured": True, "healthy": True, "current_process": True,
+            "phase": "ready", "hub_pid": 4321, "error": None,
+            "readers": {"reader-a": {"healthy": True, "phase": "waiting",
+                                      "progress": {"processed": 2}, "error": None}},
+        })
+        nested_adapter = load_carrier_adapter(CARRIER_FIXTURES / "nested.json")
+        self.assertEqual(public_status_result(raw),
+                         public_status_result(self.nested_snapshot(raw), nested_adapter))
+
+    def test_failure_and_absence_remain_distinct_across_adapter_boundary(self):
+        failed = public_status_result(snapshot(
+            inspection_errors={"port_owned": "probe timed out"}))
+        absent_raw = snapshot()
+        del absent_raw["port_owned"]
+        absent = public_status_result(absent_raw)
+        self.assertEqual(failed["runtime"]["port_owned"]["reason"], "inspection_failed")
+        self.assertEqual(absent["runtime"]["port_owned"]["reason"], "not_observed")
+        self.assertEqual(failed["runtime"]["port_owned"]["message"], "probe timed out")
+        self.assertNotIn("probe timed out", terminal_status(failed))
+
+    def test_material_contains_vocabulary_but_no_physical_carrier_paths(self):
+        material = load_material()
+
+        def keys(value):
+            if isinstance(value, dict):
+                return set(value) | set().union(*(keys(item) for item in value.values()))
+            if isinstance(value, list):
+                return set().union(*(keys(item) for item in value))
+            return set()
+
+        self.assertEqual(material["observations"]["runtime"],
+                         ["service_loaded", "pid", "port_owned", "port_open"])
+        self.assertTrue({"path", "source", "profile_path", "errors_path"}.isdisjoint(keys(material)))
+
+    def test_adapter_and_material_have_independent_schema_and_identity(self):
+        adapter = load_carrier_adapter()
+        material = load_material()
+        self.assertNotEqual(adapter["schema"], material["schema"])
+        self.assertNotEqual(adapter["id"], material["id"])
+        self.assertEqual(adapter["output_schema"], material["input_schema"])
+
+    def test_invalid_adapter_is_rejected_before_it_reads_a_snapshot(self):
+        adapter = copy.deepcopy(load_carrier_adapter())
+        adapter["observations"]["runtime"][1]["name"] = "service_loaded"
+        with self.assertRaisesRegex(ProjectionError, "invalid status carrier observation"):
+            public_status_result(object(), adapter)
+
+    def test_incompatible_adapter_result_is_rejected_by_material_boundary(self):
+        adapter = copy.deepcopy(load_carrier_adapter())
+        adapter["output_schema"] = "fixture.status-result/v9"
+        with self.assertRaisesRegex(ProjectionError, "unsupported status result"):
+            project_status(public_status_result(snapshot(), adapter))
 
 
 class ProjectionKernelTests(unittest.TestCase):
@@ -433,7 +499,7 @@ class ProjectionKernelTests(unittest.TestCase):
             if rule["id"] != "presentation-routing-02-direct"
         ]
         with self.assertRaisesRegex(ProjectionError, "meaning is not sourced"):
-            project_status(public_status_result(snapshot(), material), material)
+            project_status(public_status_result(snapshot()), material)
 
     def test_selected_meanings_must_preserve_every_supplied_observation(self):
         material = copy.deepcopy(load_material())
@@ -442,7 +508,7 @@ class ProjectionKernelTests(unittest.TestCase):
         running["when"] = [pattern for pattern in running["when"]
                            if pattern[2] != "port_owned"]
         with self.assertRaisesRegex(ProjectionError, "observation is not preserved"):
-            project_status(public_status_result(snapshot(), material), material)
+            project_status(public_status_result(snapshot()), material)
 
     def test_synthetic_non_product_document_uses_same_evaluator_and_renderer(self):
         fact = Atom.from_value(["reading", "forecast", "mild"])
@@ -474,8 +540,9 @@ class MaterialCompositionTests(unittest.TestCase):
 
     def test_fragments_have_distinct_section_and_assembly_owners(self):
         material = load_material()
-        self.assertEqual(material["schema"], "tap.internal-status-material/v1")
-        self.assertEqual(material["result_schema"], "tap.status-result/v4")
+        self.assertEqual(material["schema"], "tap.internal-status-material/v2")
+        self.assertEqual(material["id"], "tap-core.status-terminal-material/v1")
+        self.assertEqual(material["input_schema"], "tap.status-result/v4")
         self.assertEqual(set(material["observations"]),
                          {"runtime", "routing", "capture", "bridge", "components"})
         self.assertEqual(set(material["observation_collections"]), {"component_readers"})
@@ -499,6 +566,21 @@ class MaterialCompositionTests(unittest.TestCase):
         path.write_text(json.dumps(fragment))
         with self.assertRaisesRegex(ProjectionError, "exactly one document root owner"):
             load_material(directory / "manifest.json")
+
+    def test_fragment_order_does_not_change_carrier_or_projection(self):
+        directory = self.copied_material()
+        adapter = load_carrier_adapter()
+        manifest_path = directory / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["fragments"].reverse()
+        manifest_path.write_text(json.dumps(manifest))
+        reordered = load_material(manifest_path)
+        result = public_status_result(snapshot())
+        baseline = project_status(result)
+        changed = project_status(result, reordered)
+        self.assertEqual(load_carrier_adapter(), adapter)
+        self.assertEqual(changed.meanings, baseline.meanings)
+        self.assertEqual(changed.document, baseline.document)
 
 
 class StatusCliTests(unittest.TestCase):
