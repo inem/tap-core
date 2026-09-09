@@ -97,8 +97,8 @@ def _where(profile_root, argv):
     if options.output == "raw-json":
         print(json.dumps(result, indent=2))
         return 0
-    from .where_view import public_where_result, terminal_where
-    semantic = public_where_result(result)
+    from .where_view import observed_where_result, terminal_where
+    semantic = observed_where_result(result)
     if options.output == "semantic-json":
         print(json.dumps(semantic, indent=2))
     else:

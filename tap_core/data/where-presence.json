@@ -1,0 +1,322 @@
+{
+  "schema": "tap.internal-where-material-overlay/v1",
+  "id": "tap-core.where-address-and-presence-material/v1",
+  "extends": "where.json",
+  "effective_schema": "tap.internal-where-material/v3",
+  "input_schema": "tap.where-result/v2",
+  "semantic_rules": [
+    {
+      "id": "filesystem-10-present",
+      "when": [
+        [
+          "filesystem-observation",
+          "$id",
+          "$authority",
+          "known",
+          "present",
+          "$kind",
+          null,
+          ""
+        ]
+      ],
+      "emit": [
+        [
+          "candidate",
+          "$id",
+          "presence",
+          "present",
+          100,
+          "filesystem_observed",
+          [
+            [
+              "authority",
+              "$authority"
+            ]
+          ]
+        ],
+        [
+          "candidate",
+          "$id",
+          "kind",
+          "$kind",
+          100,
+          "filesystem_observed",
+          [
+            [
+              "authority",
+              "$authority"
+            ]
+          ]
+        ]
+      ]
+    },
+    {
+      "id": "filesystem-20-absent",
+      "when": [
+        [
+          "filesystem-observation",
+          "$id",
+          "$authority",
+          "known",
+          "absent",
+          null,
+          null,
+          "$message"
+        ]
+      ],
+      "emit": [
+        [
+          "candidate",
+          "$id",
+          "presence",
+          "absent",
+          100,
+          "filesystem_observed",
+          [
+            [
+              "authority",
+              "$authority"
+            ]
+          ]
+        ]
+      ]
+    },
+    {
+      "id": "filesystem-30-unknown",
+      "when": [
+        [
+          "filesystem-observation",
+          "$id",
+          "$authority",
+          "unknown",
+          null,
+          null,
+          "$reason",
+          "$message"
+        ]
+      ],
+      "emit": [
+        [
+          "candidate",
+          "$id",
+          "inspection",
+          "unknown",
+          100,
+          "$reason",
+          [
+            [
+              "authority",
+              "$authority"
+            ]
+          ]
+        ]
+      ]
+    }
+  ],
+  "presentation_rules": [
+    {
+      "id": "presentation-40-present-filesystem",
+      "when": [
+        [
+          "meaning",
+          "$id",
+          "presence",
+          "present",
+          "filesystem_observed",
+          "$presence_attrs"
+        ],
+        [
+          "meaning",
+          "$id",
+          "kind",
+          "$kind",
+          "filesystem_observed",
+          "$kind_attrs"
+        ]
+      ],
+      "emit": [
+        [
+          "slot",
+          {
+            "format": "entry-{}-filesystem",
+            "args": [
+              "$id"
+            ]
+          },
+          {
+            "format": "entry-{}",
+            "args": [
+              "$id"
+            ]
+          },
+          2,
+          "leaf",
+          "filesystem",
+          false,
+          {
+            "format": " · present · {}",
+            "args": [
+              "$kind"
+            ]
+          },
+          "present",
+          [
+            [
+              "meaning",
+              "$id",
+              "presence",
+              "present",
+              "filesystem_observed",
+              "$presence_attrs"
+            ],
+            [
+              "meaning",
+              "$id",
+              "kind",
+              "$kind",
+              "filesystem_observed",
+              "$kind_attrs"
+            ]
+          ]
+        ]
+      ]
+    },
+    {
+      "id": "presentation-50-absent-filesystem",
+      "when": [
+        [
+          "meaning",
+          "$id",
+          "presence",
+          "absent",
+          "filesystem_observed",
+          "$attrs"
+        ]
+      ],
+      "emit": [
+        [
+          "slot",
+          {
+            "format": "entry-{}-filesystem",
+            "args": [
+              "$id"
+            ]
+          },
+          {
+            "format": "entry-{}",
+            "args": [
+              "$id"
+            ]
+          },
+          2,
+          "leaf",
+          "filesystem",
+          false,
+          " · absent",
+          "unknown",
+          [
+            [
+              "meaning",
+              "$id",
+              "presence",
+              "absent",
+              "filesystem_observed",
+              "$attrs"
+            ]
+          ]
+        ]
+      ]
+    },
+    {
+      "id": "presentation-60-failed-filesystem",
+      "when": [
+        [
+          "meaning",
+          "$id",
+          "inspection",
+          "unknown",
+          "inspection_failed",
+          "$attrs"
+        ]
+      ],
+      "emit": [
+        [
+          "slot",
+          {
+            "format": "entry-{}-filesystem",
+            "args": [
+              "$id"
+            ]
+          },
+          {
+            "format": "entry-{}",
+            "args": [
+              "$id"
+            ]
+          },
+          2,
+          "leaf",
+          "filesystem",
+          false,
+          " · ? inspection failed",
+          "unknown",
+          [
+            [
+              "meaning",
+              "$id",
+              "inspection",
+              "unknown",
+              "inspection_failed",
+              "$attrs"
+            ]
+          ]
+        ]
+      ]
+    },
+    {
+      "id": "presentation-70-unobserved-filesystem",
+      "when": [
+        [
+          "meaning",
+          "$id",
+          "inspection",
+          "unknown",
+          "not_observed",
+          "$attrs"
+        ]
+      ],
+      "emit": [
+        [
+          "slot",
+          {
+            "format": "entry-{}-filesystem",
+            "args": ["$id"]
+          },
+          {
+            "format": "entry-{}",
+            "args": ["$id"]
+          },
+          2,
+          "leaf",
+          "filesystem",
+          false,
+          " · ? not observed",
+          "unknown",
+          [
+            [
+              "meaning",
+              "$id",
+              "inspection",
+              "unknown",
+              "not_observed",
+              "$attrs"
+            ]
+          ]
+        ]
+      ]
+    }
+  ],
+  "terminal_styles": {
+    "present": "\u001b[32m"
+  }
+}

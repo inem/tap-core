@@ -1,0 +1,34 @@
+{
+  "schema": "tap.where-filesystem-adapter/v1",
+  "id": "tap-core.where-filesystem-observation/v1",
+  "receipt_schema": "tap.filesystem-sensor-receipts/v1",
+  "output_schema": "tap.filesystem-observation/v1",
+  "targets": [
+    {
+      "name": "config",
+      "address_source": {"path": ["config"], "error": "config"}
+    }
+  ],
+  "semantic_rules": [
+    {
+      "id": "filesystem-10-present",
+      "when": [["filesystem-receipt", "$id", "present", "$kind", null, ""]],
+      "emit": [["filesystem-observation", "$id", "filesystem", "known", "present", "$kind", null, ""]]
+    },
+    {
+      "id": "filesystem-20-absent",
+      "when": [["filesystem-receipt", "$id", "absent", null, "$errno", "$message"]],
+      "emit": [["filesystem-observation", "$id", "filesystem", "known", "absent", null, null, "$message"]]
+    },
+    {
+      "id": "filesystem-30-failed",
+      "when": [["filesystem-receipt", "$id", "failed", null, "$errno", "$message"]],
+      "emit": [["filesystem-observation", "$id", "filesystem", "unknown", null, null, "inspection_failed", "$message"]]
+    },
+    {
+      "id": "filesystem-40-not-observed",
+      "when": [["filesystem-receipt", "$id", "not_observed", null, null, "$message"]],
+      "emit": [["filesystem-observation", "$id", "filesystem", "unknown", null, null, "not_observed", "$message"]]
+    }
+  ]
+}
