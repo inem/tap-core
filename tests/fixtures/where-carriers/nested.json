@@ -1,0 +1,163 @@
+{
+  "schema": "tap.where-snapshot-adapter/v1",
+  "id": "fixture.where-nested/v1",
+  "output_schema": "tap.where-result/v1",
+  "errors_path": [
+    "metadata",
+    "inspection_errors"
+  ],
+  "observations": {
+    "addresses": [
+      {
+        "name": "profile",
+        "source": {
+          "path": [
+            "payload",
+            "profile"
+          ],
+          "error": "profile"
+        }
+      },
+      {
+        "name": "config",
+        "source": {
+          "path": [
+            "payload",
+            "config"
+          ],
+          "error": "config"
+        }
+      },
+      {
+        "name": "data",
+        "source": {
+          "path": [
+            "payload",
+            "data"
+          ],
+          "error": "data"
+        }
+      },
+      {
+        "name": "state",
+        "source": {
+          "path": [
+            "payload",
+            "state"
+          ],
+          "error": "state"
+        }
+      },
+      {
+        "name": "certificates",
+        "source": {
+          "path": [
+            "payload",
+            "certificates"
+          ],
+          "error": "certificates"
+        }
+      },
+      {
+        "name": "log",
+        "source": {
+          "path": [
+            "payload",
+            "log"
+          ],
+          "error": "log"
+        }
+      },
+      {
+        "name": "packs",
+        "source": {
+          "path": [
+            "payload",
+            "packs"
+          ],
+          "error": "packs"
+        }
+      },
+      {
+        "name": "resources",
+        "source": {
+          "path": [
+            "payload",
+            "resources"
+          ],
+          "error": "resources"
+        }
+      },
+      {
+        "name": "pack_registry",
+        "source": {
+          "path": [
+            "payload",
+            "pack_registry"
+          ],
+          "error": "pack_registry"
+        }
+      },
+      {
+        "name": "launch_agent",
+        "source": {
+          "path": [
+            "payload",
+            "launch_agent"
+          ],
+          "error": "launch_agent"
+        }
+      },
+      {
+        "name": "component_launch_agent",
+        "source": {
+          "path": [
+            "payload",
+            "component_launch_agent"
+          ],
+          "error": "component_launch_agent"
+        }
+      },
+      {
+        "name": "component_log",
+        "source": {
+          "path": [
+            "payload",
+            "component_log"
+          ],
+          "error": "component_log"
+        }
+      },
+      {
+        "name": "handler_logs",
+        "source": {
+          "path": [
+            "payload",
+            "handler_logs"
+          ],
+          "error": "handler_logs"
+        }
+      },
+      {
+        "name": "backend",
+        "source": {
+          "path": [
+            "payload",
+            "backend"
+          ],
+          "error": "backend"
+        }
+      },
+      {
+        "name": "checkout",
+        "source": {
+          "path": [
+            "payload",
+            "checkout"
+          ],
+          "error": "checkout"
+        }
+      }
+    ]
+  }
+}

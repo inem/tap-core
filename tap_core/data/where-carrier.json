@@ -1,0 +1,147 @@
+{
+  "schema": "tap.where-snapshot-adapter/v1",
+  "id": "tap-core.where-operation-snapshot/v1",
+  "output_schema": "tap.where-result/v1",
+  "errors_path": [
+    "inspection_errors"
+  ],
+  "observations": {
+    "addresses": [
+      {
+        "name": "profile",
+        "source": {
+          "path": [
+            "profile"
+          ],
+          "error": "profile"
+        }
+      },
+      {
+        "name": "config",
+        "source": {
+          "path": [
+            "config"
+          ],
+          "error": "config"
+        }
+      },
+      {
+        "name": "data",
+        "source": {
+          "path": [
+            "data"
+          ],
+          "error": "data"
+        }
+      },
+      {
+        "name": "state",
+        "source": {
+          "path": [
+            "state"
+          ],
+          "error": "state"
+        }
+      },
+      {
+        "name": "certificates",
+        "source": {
+          "path": [
+            "certificates"
+          ],
+          "error": "certificates"
+        }
+      },
+      {
+        "name": "log",
+        "source": {
+          "path": [
+            "log"
+          ],
+          "error": "log"
+        }
+      },
+      {
+        "name": "packs",
+        "source": {
+          "path": [
+            "packs"
+          ],
+          "error": "packs"
+        }
+      },
+      {
+        "name": "resources",
+        "source": {
+          "path": [
+            "resources"
+          ],
+          "error": "resources"
+        }
+      },
+      {
+        "name": "pack_registry",
+        "source": {
+          "path": [
+            "pack_registry"
+          ],
+          "error": "pack_registry"
+        }
+      },
+      {
+        "name": "launch_agent",
+        "source": {
+          "path": [
+            "launch_agent"
+          ],
+          "error": "launch_agent"
+        }
+      },
+      {
+        "name": "component_launch_agent",
+        "source": {
+          "path": [
+            "component_launch_agent"
+          ],
+          "error": "component_launch_agent"
+        }
+      },
+      {
+        "name": "component_log",
+        "source": {
+          "path": [
+            "component_log"
+          ],
+          "error": "component_log"
+        }
+      },
+      {
+        "name": "handler_logs",
+        "source": {
+          "path": [
+            "handler_logs"
+          ],
+          "error": "handler_logs"
+        }
+      },
+      {
+        "name": "backend",
+        "source": {
+          "path": [
+            "backend"
+          ],
+          "error": "backend"
+        }
+      },
+      {
+        "name": "checkout",
+        "source": {
+          "path": [
+            "checkout"
+          ],
+          "error": "checkout"
+        }
+      }
+    ]
+  }
+}

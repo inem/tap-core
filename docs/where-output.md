@@ -11,11 +11,12 @@ tap --profile PROFILE where --output semantic-json
 tap --profile PROFILE where --output terminal [--width N] [--color auto|always|never]
 ```
 
-`raw-json` is the existing flat object. `semantic-json` emits
-`tap.where-result/v1`. Each location records an id, section, role, owner, local
-order and an address observation. A supplied path has `knowledge: known`; an
-address omitted by the operation has `knowledge: unknown` and
-`reason: not_observed`.
+`raw-json` is the existing flat carrier. A separate
+`tap.where-snapshot-adapter/v1` owns its physical keys and inspection-error
+correlation. `semantic-json` emits `tap.where-result/v1`: a map of addressed
+`known` or `unknown` observations with no carrier paths, labels, sections or
+presentation metadata. A second, nested carrier fixture produces the identical
+public result through a different adapter.
 
 Known means only that the operation supplied an address. It makes no claim that
 the path exists, is readable, is fresh, has a particular kind or belongs to a
@@ -23,10 +24,11 @@ running process. Those facts require filesystem or system observations before
 projection. Optional component addresses are therefore unknown when components
 are not configured; they are not reported as absent.
 
-The terminal mode derives nested sections and entries from the same public
-result. Sections, labels, ownership and address roles live in bundled material;
-the Python projection path does not branch on raw keys such as `config`,
-`backend` or `launch_agent`. The terminal renderer sees only document slots.
+The terminal mode joins those addressed observations to separately validated
+material declarations. Sections, labels, ownership and address roles live in
+that material; physical `source.path` declarations do not. The Python projection
+path does not branch on raw keys such as `config`, `backend` or `launch_agent`.
+The terminal renderer sees only document slots.
 
 Addresses are required terminal content. With no `--width`, they are emitted in
 full. If an explicit width is too narrow, the command fails clearly instead of
