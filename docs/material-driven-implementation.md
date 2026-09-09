@@ -70,6 +70,12 @@ Pure semantic and presentation code receives no ambient filesystem, process,
 network, credential, or clock authority. Effect runners receive only declared
 capabilities and emit receipts as data.
 
+Material is visible through an explicit view for a principal. The existence of
+an internal receipt or derivation does not make its raw errors, credentials,
+payload, or full provenance part of a public result or terminal surface.
+Redaction and omission belong to a policy-bearing transformation with declared
+loss; the renderer does not discover and scrub secrets opportunistically.
+
 ## Where domain choices belong
 
 Final generic infrastructure may contain code for parsing, validation,
@@ -178,6 +184,8 @@ For an affected PR, answer briefly:
 6. What controls ordering, conflicts, recursion, I/O, retries, and effects?
 7. Can the output be regenerated and traced to its authoring source?
 8. Which evidence level supports each claim?
+9. Which principal and view may resolve the inputs, witnesses, receipts, and
+   projections?
 
 Use these questions together with [the repository review lenses](review-planes.md).
 The review lenses cover product boundaries, execution, authority, delivery, and
