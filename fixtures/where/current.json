@@ -1,0 +1,14 @@
+{
+  "profile": "/fixture/profile",
+  "config": "/fixture/profile/profile.json",
+  "data": "/fixture/profile/data",
+  "state": "/fixture/profile/state",
+  "certificates": "/fixture/profile/certificates",
+  "log": "/fixture/profile/logs/capture.log",
+  "packs": "/fixture/profile/packs",
+  "resources": "/fixture/profile/resources",
+  "pack_registry": "/fixture/profile/state/pack-registry.json",
+  "launch_agent": "/fixture/Library/LaunchAgents/tap.fixture.plist",
+  "backend": "/fixture/runtime/mitmdump",
+  "checkout": "/fixture/checkout"
+}

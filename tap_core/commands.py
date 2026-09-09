@@ -1,6 +1,7 @@
 """Declarative command registry and argv subprocess host for installed packs."""
 
 from dataclasses import dataclass
+import argparse
 import json
 import os
 from pathlib import Path
@@ -56,11 +57,22 @@ class Registry:
                 if path[:len(prefix)] == prefix]
 
 
-def _where(profile_root, argv):
-    if argv:
-        raise TapError("where accepts no arguments")
-    profile = Profile.load(profile_root)
-    result = {
+class _CommandParser(argparse.ArgumentParser):
+    def error(self, message):
+        raise TapError(message)
+
+
+def _where_options(argv):
+    parser = _CommandParser(prog="tap where", add_help=False, allow_abbrev=False)
+    parser.add_argument("--output", choices=("raw-json", "semantic-json", "terminal"),
+                        default="raw-json")
+    parser.add_argument("--width", type=int)
+    parser.add_argument("--color", choices=("auto", "always", "never"), default="auto")
+    return parser.parse_args(argv)
+
+
+def _where_result(profile_root, profile):
+    return {
         "profile": str(profile_root), "config": str(profile_root / "profile.json"),
         "data": str(profile_root / "data"), "state": str(profile_root / "state"),
         "certificates": str(profile_root / "certificates"),
@@ -71,19 +83,37 @@ def _where(profile_root, argv):
         "launch_agent": str(profile.plist), "backend": profile.backend,
         "checkout": str(Path(__file__).resolve().parent.parent),
     }
+
+
+def _where(profile_root, argv):
+    options = _where_options(argv)
+    profile = Profile.load(profile_root)
+    result = _where_result(profile_root, profile)
     if profile.components is not None:
         from .components import Job
         result["component_launch_agent"] = str(Job(profile).plist)
         result["component_log"] = str(profile_root / "logs/components.log")
         result["handler_logs"] = str(profile_root / "logs/handlers")
-    print(json.dumps(result, indent=2))
+    if options.output == "raw-json":
+        print(json.dumps(result, indent=2))
+        return 0
+    from .where_view import public_where_result, terminal_where
+    semantic = public_where_result(result)
+    if options.output == "semantic-json":
+        print(json.dumps(semantic, indent=2))
+    else:
+        if options.width is not None and options.width < 1:
+            raise TapError("Where width must be a positive integer")
+        color = options.color == "always" or (options.color == "auto" and sys.stdout.isatty())
+        print(terminal_where(semantic, options.width, color))
     return 0
 
 
 def builtin_commands():
     command = Command(
         path=("where",), summary="Show profile-owned paths and runtime locations",
-        usage="", profile="required", provider_id="tap-core",
+        usage="[--output raw-json|semantic-json|terminal] [--width N] [--color auto|always|never]",
+        profile="required", provider_id="tap-core",
         provider_version=CORE_PROVIDER_VERSION, source="builtin",
     )
     return {command.path: command}

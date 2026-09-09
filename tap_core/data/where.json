@@ -1,0 +1,85 @@
+{
+  "schema": "tap.internal-where-material/v1",
+  "result_schema": "tap.where-result/v1",
+  "document_root": "where",
+  "sections": [
+    {"id": "profile", "label": "Profile", "order": 0},
+    {"id": "system", "label": "System bindings", "order": 1},
+    {"id": "components", "label": "Component bindings", "order": 2},
+    {"id": "runtime", "label": "Runtime and source", "order": 3}
+  ],
+  "locations": [
+    {"id": "profile", "label": "profile", "section": "profile", "order": 1, "role": "profile-root", "owner": "profile", "source": {"path": ["profile"], "error": "profile"}},
+    {"id": "config", "label": "config", "section": "profile", "order": 2, "role": "configuration", "owner": "profile", "source": {"path": ["config"], "error": "config"}},
+    {"id": "data", "label": "data", "section": "profile", "order": 3, "role": "captured-data", "owner": "profile", "source": {"path": ["data"], "error": "data"}},
+    {"id": "state", "label": "state", "section": "profile", "order": 4, "role": "runtime-state", "owner": "profile", "source": {"path": ["state"], "error": "state"}},
+    {"id": "certificates", "label": "certificates", "section": "profile", "order": 5, "role": "certificate-store", "owner": "profile", "source": {"path": ["certificates"], "error": "certificates"}},
+    {"id": "log", "label": "capture log", "section": "profile", "order": 6, "role": "capture-log", "owner": "profile", "source": {"path": ["log"], "error": "log"}},
+    {"id": "packs", "label": "packs", "section": "profile", "order": 7, "role": "pack-store", "owner": "profile", "source": {"path": ["packs"], "error": "packs"}},
+    {"id": "resources", "label": "resources", "section": "profile", "order": 8, "role": "resource-store", "owner": "profile", "source": {"path": ["resources"], "error": "resources"}},
+    {"id": "pack_registry", "label": "pack registry", "section": "profile", "order": 9, "role": "pack-registry", "owner": "profile", "source": {"path": ["pack_registry"], "error": "pack_registry"}},
+    {"id": "launch_agent", "label": "capture service", "section": "system", "order": 1, "role": "launch-agent", "owner": "macos", "source": {"path": ["launch_agent"], "error": "launch_agent"}},
+    {"id": "component_launch_agent", "label": "component service", "section": "system", "order": 2, "role": "launch-agent", "owner": "macos", "source": {"path": ["component_launch_agent"], "error": "component_launch_agent"}},
+    {"id": "component_log", "label": "component log", "section": "components", "order": 1, "role": "component-log", "owner": "profile", "source": {"path": ["component_log"], "error": "component_log"}},
+    {"id": "handler_logs", "label": "handler logs", "section": "components", "order": 2, "role": "handler-logs", "owner": "profile", "source": {"path": ["handler_logs"], "error": "handler_logs"}},
+    {"id": "backend", "label": "backend", "section": "runtime", "order": 1, "role": "executable", "owner": "runtime-binding", "source": {"path": ["backend"], "error": "backend"}},
+    {"id": "checkout", "label": "core checkout", "section": "runtime", "order": 2, "role": "source-checkout", "owner": "tap-core", "source": {"path": ["checkout"], "error": "checkout"}}
+  ],
+  "semantic_rules": [
+    {
+      "id": "location-10-known-address",
+      "when": [["location-observation", "$id", "$section", "$role", "$owner", "$label", "$order", "known", {"var": "$address", "test": "non-empty-string"}]],
+      "emit": [["candidate", "$id", "address", "$address", 100, "declared_address", [["section", "$section"], ["role", "$role"], ["owner", "$owner"], ["label", "$label"], ["order", "$order"]]]]
+    },
+    {
+      "id": "location-20-unknown-address",
+      "when": [["location-observation", "$id", "$section", "$role", "$owner", "$label", "$order", "unknown", "$reason"]],
+      "emit": [["candidate", "$id", "address", "unknown", 100, "not_observed", [["section", "$section"], ["role", "$role"], ["owner", "$owner"], ["label", "$label"], ["order", "$order"]]]]
+    }
+  ],
+  "presentation_rules": [
+    {
+      "id": "presentation-00-document",
+      "when": [["document", "where"]],
+      "emit": [["slot", "where", null, 0, "group", "document", false, "", null, [["document", "where"]]]]
+    },
+    {
+      "id": "presentation-10-section",
+      "when": [["section", "$section", "$label", "$order"]],
+      "emit": [
+        ["slot", {"format": "section-{}", "args": ["$section"]}, "where", "$order", "group", "section", false, "", null, [["section", "$section", "$label", "$order"]]],
+        ["slot", {"format": "section-{}-header", "args": ["$section"]}, {"format": "section-{}", "args": ["$section"]}, 0, "group", "line", false, "", null, [["section", "$section", "$label", "$order"]]],
+        ["slot", {"format": "section-{}-title", "args": ["$section"]}, {"format": "section-{}-header", "args": ["$section"]}, 0, "leaf", "heading", false, "$label", "heading", [["section", "$section", "$label", "$order"]]]
+      ]
+    },
+    {
+      "id": "presentation-20-known-address",
+      "when": [
+        ["meaning", "$id", "address", "$address", "declared_address", "$attrs"],
+        ["attribute", "$id", "section", "$section"],
+        ["attribute", "$id", "label", "$label"],
+        ["attribute", "$id", "order", "$order"]
+      ],
+      "emit": [
+        ["slot", {"format": "entry-{}", "args": ["$id"]}, {"format": "section-{}", "args": ["$section"]}, "$order", "group", "line", false, "", null, [["meaning", "$id", "address", "$address", "declared_address", "$attrs"]]],
+        ["slot", {"format": "entry-{}-label", "args": ["$id"]}, {"format": "entry-{}", "args": ["$id"]}, 0, "leaf", "label", false, {"format": "  {:<18} ", "args": ["$label"]}, null, [["meaning", "$id", "address", "$address", "declared_address", "$attrs"]]],
+        ["slot", {"format": "entry-{}-address", "args": ["$id"]}, {"format": "entry-{}", "args": ["$id"]}, 1, "leaf", "address", false, "$address", null, [["meaning", "$id", "address", "$address", "declared_address", "$attrs"]]]
+      ]
+    },
+    {
+      "id": "presentation-30-unknown-address",
+      "when": [
+        ["meaning", "$id", "address", "unknown", "not_observed", "$attrs"],
+        ["attribute", "$id", "section", "$section"],
+        ["attribute", "$id", "label", "$label"],
+        ["attribute", "$id", "order", "$order"]
+      ],
+      "emit": [
+        ["slot", {"format": "entry-{}", "args": ["$id"]}, {"format": "section-{}", "args": ["$section"]}, "$order", "group", "line", false, "", null, [["meaning", "$id", "address", "unknown", "not_observed", "$attrs"]]],
+        ["slot", {"format": "entry-{}-label", "args": ["$id"]}, {"format": "entry-{}", "args": ["$id"]}, 0, "leaf", "label", false, {"format": "  {:<18} ", "args": ["$label"]}, null, [["meaning", "$id", "address", "unknown", "not_observed", "$attrs"]]],
+        ["slot", {"format": "entry-{}-unknown", "args": ["$id"]}, {"format": "entry-{}", "args": ["$id"]}, 1, "leaf", "unknown", false, "? not observed", "unknown", [["meaning", "$id", "address", "unknown", "not_observed", "$attrs"]]]
+      ]
+    }
+  ],
+  "terminal_styles": {"heading": "\u001b[1m", "unknown": "\u001b[33m"}
+}

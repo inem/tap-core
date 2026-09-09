@@ -43,6 +43,9 @@ surface. This is not yet a packaged clean-Mac release.
 The default `tap status` JSON remains compatible; explicit
 [`semantic-json` and terminal projections](docs/status-output.md) provide a
 compact public status contract and a readable view of the same observations.
+The same projection kernel now serves [`tap where`](docs/where-output.md), whose
+versioned result and terminal tree describe declared addresses without claiming
+filesystem presence or health.
 A first [one-line installer](docs/install.md) exists for #7:
 
 ```bash
