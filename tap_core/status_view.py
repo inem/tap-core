@@ -3,9 +3,8 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 
-from .projection import (Atom, Derivation, ProjectionError, document_from_claims,
-                         evaluate_rules, render_terminal, select_candidates,
-                         validate_conservation)
+from .material_view import observe as _observe, observe_path as _observe_path, project_claims
+from .projection import Atom, Derivation, ProjectionError, render_terminal
 
 
 MATERIAL = Path(__file__).with_name("data") / "status" / "manifest.json"
@@ -231,21 +230,7 @@ def observe(spec, snapshot, errors):
     _validate_source(spec)
     if not isinstance(errors, dict):
         raise ProjectionError("status carrier errors must be an object")
-    if spec["error"] in errors:
-        return {"knowledge": "unknown", "reason": "inspection_failed",
-                "message": errors[spec["error"]]}
-
-    return _observe_path(spec["path"], snapshot)
-
-
-def _observe_path(path, carrier):
-    value = carrier
-    for part in path:
-        if not isinstance(value, dict) or part not in value:
-            return {"knowledge": "unknown", "reason": "not_observed",
-                    "message": "observation was not supplied"}
-        value = value[part]
-    return {"knowledge": "known", "value": value}
+    return _observe(spec, snapshot, errors)
 
 
 def observe_collection(spec, snapshot, errors):
@@ -383,20 +368,10 @@ def project_status(result, material=None):
     """Run the two explicit chains: observations to meanings, meanings to slots."""
     material = load_material() if material is None else material
     validate_status_result(result, material)
-    semantic = evaluate_rules(_facts(result, material), material["semantic_rules"])
-    section_selected = select_candidates(semantic)
-    composed = evaluate_rules({**semantic, **section_selected}, material["composition_rules"])
-    selected = select_candidates(composed)
-    meanings = tuple(sorted((atom for atom in selected if atom.relation == "meaning"),
-                            key=Atom.identifier))
-    interpreted = {atom: derivation for atom, derivation in composed.items()
-                   if atom.relation != "meaning"}
-    interpreted.update(selected)
-    presented = evaluate_rules(interpreted, material["presentation_rules"])
-    trace = {**composed, **selected, **presented}
-    document = document_from_claims(trace, material["document_root"])
-    validate_conservation(trace, meanings, document, "supplied-status-result")
-    return StatusProjection(result, meanings, document, trace)
+    projection = project_claims(_facts(result, material), material,
+                                "supplied-status-result")
+    return StatusProjection(result, projection.meanings, projection.document,
+                            projection.provenance)
 
 
 def terminal_status(result, width=80, color=False, material=None):
