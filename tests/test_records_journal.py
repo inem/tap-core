@@ -107,6 +107,14 @@ class RecordTests(unittest.TestCase):
         with self.assertRaises(RecordError):
             validate_record(dict(record, body='unexpected'))
 
+    def test_nonstandard_three_digit_status_remains_readable(self):
+        valid = capture_record()
+        self.assertEqual(validate_record(dict(valid, status=101))['status'], 101)
+        self.assertEqual(validate_record(dict(valid, status=999))['status'], 999)
+        for status in (99, 1000, True, '999'):
+            with self.subTest(status=status), self.assertRaisesRegex(RecordError, 'response status'):
+                validate_record(dict(valid, status=status))
+
     def test_bad_json_duplicate_keys_and_invalid_utf8_are_errors(self):
         for value in [b'[]', b'{', b'\xff\n', b'{"url":"a","url":"b","status":200}',
                       b'{"url":"a","status":200,"body":NaN}',
