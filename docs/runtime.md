@@ -104,8 +104,12 @@ the packaged installer remain #7 work.
 
 Before arming, the runtime saves both proxy settings and bypasses for all enabled
 services. It refuses to replace an already enabled system proxy, including an
-existing TAP installation. `off` restores the saved routing state and bypasses and verifies them before
-stopping the job. Recovery failure leaves the snapshot and service available;
+existing TAP installation. `off` is the network escape hatch: it restores and
+verifies the saved routing state before waiting for an ordinary profile command
+to drain, then repeats the idempotent recovery under the normal lifecycle locks
+before stopping the job. If bounded cleanup cannot obtain the profile lease, the
+command reports that networking was restored and cleanup remains pending.
+Recovery failure leaves the snapshot and service available;
 after correcting the OS/permission problem, run `off` again. It refuses to
 overwrite an unrelated proxy enabled after its snapshot was created.
 

@@ -138,13 +138,27 @@ class Profile:
 
 
 @contextmanager
-def profile_lock(root, *, busy_message="Another command is changing this profile"):
+def profile_lock(root, *, busy_message="Another command is changing this profile", wait_seconds=0):
+    """Acquire a profile lease, optionally waiting for a bounded drain.
+
+    Ordinary commands keep fail-fast semantics. Safety operations such as
+    network recovery may restore the host first and then wait briefly for a
+    running command to release the profile before process cleanup.
+    """
+    if type(wait_seconds) not in (int, float) or wait_seconds < 0:
+        raise ValueError("Lock wait must be a non-negative number of seconds")
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     with (root / "command.lock").open("a") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as error:
-            raise TapError(busy_message) from error
+        deadline = time.monotonic() + wait_seconds
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError as error:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TapError(busy_message) from error
+                time.sleep(min(0.05, remaining))
         yield lock
 
 
