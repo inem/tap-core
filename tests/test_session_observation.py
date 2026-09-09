@@ -49,3 +49,9 @@ class SessionObservationTests(unittest.TestCase):
         req.headers={'cookie':'synthetic'}
         for _ in range(30):addon.requestheaders(SimpleNamespace(request=req))
         self.assertEqual(addon.pending.qsize(),16)
+
+    def test_command_observer_coexists_with_bridge_without_expanding_origins(self):
+        from tap_core.bridge import configuration, effective_configuration
+        base=configuration({'version':1,'enabled':True,'hub_port':19002,'allow_origins':['https://page.example'],'exclude_origins':[],'page_scripts':[]})
+        result=effective_configuration(self.profile,base)
+        self.assertNotIn('https://fixture.example',result['allow_origins'])
