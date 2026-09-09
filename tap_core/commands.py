@@ -238,7 +238,7 @@ def _private_runtime_directory(store, path):
     return path
 
 
-def _run_pack(command, profile_root, argv, lease_fd=None):
+def _run_pack(command, profile_root, argv, lease_fd=None, timeout=None, log=None):
     from .pack_store import PackStore
     profile_root = Path(profile_root).expanduser().resolve()
     store = PackStore(profile_root)
@@ -269,13 +269,22 @@ def _run_pack(command, profile_root, argv, lease_fd=None):
             raise TapError(f"Unsupported command runtime: {command.runtime}")
         process = subprocess.Popen(
             [sys.executable, "-B", str(executable), *argv], cwd=state,
-            env=environment, stdin=None, stdout=None, stderr=None,
+            env=environment, stdin=subprocess.DEVNULL if timeout else None, stdout=log, stderr=log,
+            start_new_session=bool(timeout),
             pass_fds=(() if lease_fd is None else (lease_fd,)),
         )
-        returncode = process.wait()
+        try:
+            returncode = process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
+            return 124
     except KeyboardInterrupt:
         if process is not None and process.poll() is None:
-            process.send_signal(signal.SIGINT)
+            if timeout:
+                os.killpg(process.pid, signal.SIGKILL)
+            else:
+                process.send_signal(signal.SIGINT)
         if process is not None:
             process.wait()
         return 130

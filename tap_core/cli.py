@@ -94,6 +94,8 @@ def status(profile, adapter):
     from .components import status as component_status
     result['components'] = observe('components', lambda: component_status(profile, adapter),
                                    {'configured': profile.components is not None, 'healthy': None})
+    from .background import status as background_status
+    result["background"] = observe("background", lambda: background_status(profile.root))
     result["inspection_errors"] = errors
     return result
 
@@ -296,6 +298,11 @@ def main(argv=None):
                         output = store.disable(args.id, live=live)
                     else:
                         output = store.uninstall(args.id, args.version)
+                    from .background import reconcile
+                    try:
+                        reconcile(root, adapter)
+                    except (TapError, OSError) as error:
+                        raise TapError(f"Pack state saved, but background registration failed: {error}; retry pack enable/disable to reconcile") from error
                     if isinstance(output, dict) and 'applies' in output and live:
                         output = dict(output)
                         output['applies'] = (
@@ -458,9 +465,18 @@ def mutate(command, profile, adapter):
     if command == "install":
         if (profile.root / "profile.json").exists():
             raise TapError("Profile already exists; use on, or choose a new directory")
-        return lifecycle.install()
+        result = lifecycle.install()
+        from .background import reconcile
+        reconcile(profile.root, adapter)
+        return result
     if command == "uninstall":
         lifecycle.off()
+        from .background import reconcile
+        reconcile(profile.root, adapter, remove=True)
         profile.plist.unlink(missing_ok=True)
         return "Profile service removed; configuration, captured data and certificates retained"
-    return getattr(lifecycle, command)()
+    result = getattr(lifecycle, command)()
+    if command == "on":
+        from .background import reconcile
+        reconcile(profile.root, adapter)
+    return result
