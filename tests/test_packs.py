@@ -57,6 +57,21 @@ class PackManifestTests(unittest.TestCase):
         self.invalid(lambda m: m.update(typo=True), "unknown fields")
         self.invalid(lambda m: m.pop("config"), "missing fields")
 
+    def test_static_features_are_bounded_plain_text(self):
+        self.manifest["features"] = [
+            {"id": "session.archive", "label": "Session archive", "value": "Versioned JSON"},
+        ]
+        validate_manifest(self.manifest, self.root)
+        self.invalid(lambda m: m.update(features=[{"id": "bad", "label": "", "value": "x"}]),
+                     "label")
+        self.invalid(lambda m: m.update(features=[
+            {"id": "same", "label": "One", "value": "x"},
+            {"id": "same", "label": "Two", "value": "y"},
+        ]), "duplicate")
+        self.invalid(lambda m: m.update(features=[
+            {"id": "feature", "label": "Feature", "value": "x", "command": "run"},
+        ]), "unknown fields")
+
     def test_files_exist_are_declared_and_stay_inside_pack(self):
         for name in ("missing.py", "../outside.py", "/tmp/outside.py", "./reader.py", "x\\reader.py"):
             self.invalid(lambda m: m.update(files=[name]), "files")

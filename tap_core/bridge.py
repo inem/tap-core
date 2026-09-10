@@ -369,6 +369,15 @@ def effective_configuration(root, base):
                 or len(manifest['files']) != len(set(manifest['files']))
                 or type(manifest.get('entrypoints')) is not dict):
             raise ValueError(f'Enabled pack manifest is incompatible: {pack_id}@{version}')
+        features = manifest.get('features', [])
+        if (type(features) is not list or len(features) > 32
+                or any(type(feature) is not dict or set(feature) != {'id', 'label', 'value'}
+                       or type(feature['id']) is not str or not RESOURCE_ID.fullmatch(feature['id'])
+                       or type(feature['label']) is not str or not 1 <= len(feature['label']) <= 80
+                       or type(feature['value']) is not str or not 1 <= len(feature['value']) <= 160
+                       for feature in features)
+                or len({feature['id'] for feature in features}) != len(features)):
+            raise ValueError(f'Enabled pack features are malformed: {pack_id}@{version}')
         roles = set(manifest['entrypoints'])
         if not roles or not roles <= {'page', 'reader', 'handler', 'command'}:
             raise ValueError(f'Enabled pack has unsupported host roles: {pack_id}@{version}')
@@ -410,6 +419,9 @@ def effective_configuration(root, base):
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
             if metadata['hashes'].get(name) != digest:
                 raise ValueError(f'Enabled pack integrity check failed: {pack_id}@{version}')
+        page_pack_origins.append({'id': pack_id, 'version': version,
+                                  'origins': list(requested_origins),
+                                  'features': json.loads(json.dumps(features))})
         if roles & {'page', 'handler'}:
             has_bridge_bindings = True
             for origin in requested_origins:
@@ -418,8 +430,6 @@ def effective_configuration(root, base):
                     result['allow_origins'].append(origin)
         if 'page' not in roles:
             continue
-        page_pack_origins.append({'id': pack_id, 'version': version,
-                                  'origins': list(requested_origins)})
         page = manifest['entrypoints']['page']
         resources = manifest.get('resources')
         if (type(page) is not dict or set(page) != {'interface', 'uses'}
@@ -588,7 +598,8 @@ class Bridge:
     def page_plan(self, origin):
         access = 'current' if self.allowed(origin) else 'revoked'
         scripts = self.origin_digests(origin) if access == 'current' else []
-        packs = ([{'id': item['id'], 'version': item['version']}
+        packs = ([{'id': item['id'], 'version': item['version'],
+                   'features': item.get('features', [])}
                   for item in self.page_pack_origins if origin in item['origins']]
                  if access == 'current' else [])
         revision = hashlib.sha256(json.dumps({'access': access, 'scripts': scripts, 'packs': packs},

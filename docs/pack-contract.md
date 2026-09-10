@@ -40,6 +40,7 @@ Each pack directory contains UTF-8 `pack.json`, with these required fields:
 | `requires.dependencies` | Array of `{id, version}` declarations for additional executable/package dependencies, with exact release versions. A pack cannot depend on itself. Host inventory must match before activation. No downloads or dependency resolution here. |
 | `files` | Unique canonical relative file paths. Every file must exist and resolve inside the pack. Absolute paths, traversal, backslashes and escaping symlinks fail. |
 | `resources` | Optional provider objects conforming to [`tap.page-resource/v1`](../contracts/page-resource/v1/README.md). Each pins an ID, exact version, kind, packaged file, SHA-256, license and source revision. Installed page uses must have a provider in the same artifact in v1. |
+| `features` | Optional static user-facing facts `{id, label, value}` describing what the enabled pack contributes on each granted origin. At most 32; labels and values are bounded plain text. Core transports these facts without interpreting them. Dynamic page state remains page-owned runtime observation. |
 | `entrypoints` | One or more roles from the table below. File-based roles use `{file, interface}`; `browser-scripts-v1` uses `{interface, uses}`. |
 | `config` | Named settings, each `{type, default}`. Only string, integer and boolean values; unknown overrides and wrong types fail. No expressions or configuration language. |
 | `access.origins` | Nonempty list of exact canonical HTTP(S) origins, including a nondefault port when relevant. No wildcard, credentials, path, query or fragment. ASCII DNS names and IPv4 supported here; IPv6/IDN syntax remains future work. |
@@ -64,6 +65,9 @@ dependency's provenance or install it.
 | `command`: `process-argv-v1` | Selected runtime receives exact argv and `TAP_COMMAND_CONTEXT`; stdin/stdout/stderr are inherited and exit status is preserved. | Discover enabled immutable versions, render declarative help without execution, resolve conflicts and lease the selected version for the invocation. The first explicit runtime binding is `host-python`; see [command provider contract v1](commands.md). |
 
 Roles are independent: a page-only, handler-only, reader-only or command-only pack is valid.
+When a page bridge is active for an origin, its plan lists every enabled pack
+granted for that origin, including reader-only and command-only packs. Static
+`features` travel with that identity; their presence never grants page execution.
 The second fixture deliberately combines its HTML mutator, page and handler to
 exercise the connection shape. This does not require a local handler for every
 page injection or claim that every combination has been integrated.
