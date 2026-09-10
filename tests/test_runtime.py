@@ -1,5 +1,7 @@
 from tap_core.routing import select_routing
 import copy
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
 import json
 from pathlib import Path
 import plistlib
@@ -11,6 +13,7 @@ from unittest.mock import patch, PropertyMock
 
 from tap_core.capture import Capture, Writer, wants_body
 from tap_core.runtime import Lifecycle, MacOS, Profile, TapError, StartupError
+from tap_core.cli import main, mutate
 
 
 class NetworkFixture(MacOS):
@@ -138,6 +141,82 @@ class RuntimeTests(unittest.TestCase):
         self.os.fail_start = True
         with self.assertRaisesRegex(TapError, "Installation failed"):
             self.runtime.install()
+
+    def test_repair_install_restores_network_replaces_jobs_and_preserves_profile(self):
+        self.runtime.on()
+        saved = (self.profile.root / "profile.json").read_bytes()
+        self.os.events.clear()
+
+        result = self.runtime.install(repair=True)
+
+        self.assertEqual(result, "Repaired profile service; use on to verify traffic")
+        self.assertRestored()
+        self.assertEqual(self.os.events[-2:], ["stop", "start"])
+        self.assertTrue(all(event[0] == "set" for event in self.os.events[:-2]))
+        self.assertEqual((self.profile.root / "profile.json").read_bytes(), saved)
+        self.assertFalse(self.profile.snapshot.exists())
+
+    def test_repair_failure_leaves_network_direct(self):
+        self.runtime.on()
+        self.os.fail_start = True
+
+        with self.assertRaisesRegex(TapError, "Installation failed"):
+            self.runtime.install(repair=True)
+
+        self.assertRestored()
+
+    def test_repair_with_missing_backend_still_restores_network_first(self):
+        self.runtime.on()
+
+        with patch.object(self.os, 'backend_version', side_effect=TapError('backend missing')):
+            with self.assertRaisesRegex(TapError, 'backend missing'):
+                self.runtime.install(repair=True)
+
+        self.assertRestored()
+        self.assertEqual(self.os.events[-1], 'stop')
+
+    def test_legacy_recovery_ladder_returns_to_verified_capture(self):
+        self.runtime.on()
+        self.os.fail_start = True
+        with self.assertRaises(TapError):
+            self.runtime.on()
+
+        self.runtime.off()
+        self.os.fail_start = False
+        self.runtime.install(repair=True)
+        self.runtime.on()
+
+        self.assertTrue(select_routing(self.profile, self.os).verified())
+        self.assertIn('probe', self.os.events)
+
+    def test_bare_install_reconciles_an_existing_profile(self):
+        self.profile.routing = 'explicit'
+        self.profile.save()
+        stdout = StringIO()
+        with patch('tap_core.cli.platform.system', return_value='Darwin'), \
+             patch('tap_core.cli.MacOS'), \
+             patch('tap_core.cli.mutate', return_value='repaired') as mutate, \
+             patch('tap_core.background.reconcile'), redirect_stdout(stdout):
+            result = main(['--profile', str(self.profile.root), 'install'])
+
+        self.assertEqual(result, 0)
+        self.assertEqual(stdout.getvalue(), 'repaired\n')
+        self.assertTrue(mutate.call_args.kwargs['repair_install'])
+
+    def test_new_install_still_requires_creation_parameters(self):
+        stderr = StringIO()
+        with patch('tap_core.cli.platform.system', return_value='Darwin'), redirect_stderr(stderr):
+            result = main(['--profile', str(self.root / 'new'), 'install'])
+
+        self.assertEqual(result, 1)
+        self.assertIn('New profile install requires: --backend, --port, --routing', stderr.getvalue())
+
+    def test_background_reconciliation_cannot_fail_capture_repair(self):
+        with patch.object(Lifecycle, 'install', return_value='repaired'), \
+             patch('tap_core.background.reconcile', side_effect=TapError('scheduler broken')):
+            result = mutate('install', self.profile, self.os, repair_install=True)
+
+        self.assertEqual(result, 'repaired; background commands unavailable: scheduler broken')
 
     def test_crash_restart_failure_recovers_already_armed_network(self):
         self.runtime.on()

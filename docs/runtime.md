@@ -33,6 +33,10 @@ through the proxy, not storage completion or browser certificate trust.
 
 `install` registers a unique user LaunchAgent and starts capture, without
 changing system routing. `on` starts/verifies that service and probes traffic.
+Repeating `install` for an existing owned profile is a repair operation: it
+uses the saved configuration, restores direct routing before replacing the
+owned jobs, and preserves captured data, certificates, pack state and reader
+checkpoints. Creation options are accepted only for a new profile.
 An explicit profile requires clients to select its proxy endpoint. Its `off`
 stops the service and removes its autoload plist until the next `on`; clients still explicitly configured to use that endpoint must
 stop using it themselves. There is no claim that an explicit client's traffic
