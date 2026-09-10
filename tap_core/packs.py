@@ -55,7 +55,7 @@ def validate_features(value):
             "features: expected at most 32 feature declarations")
     identifiers = set()
     for feature in value:
-        fields(feature, ("id", "label", "value"), label="features[]")
+        fields(feature, ("id", "label", "value"), ("folder",), label="features[]")
         require(type(feature["id"]) is str and ID.fullmatch(feature["id"]),
                 "features[].id: invalid identifier")
         require(feature["id"] not in identifiers, "features[].id: duplicate")
@@ -64,6 +64,15 @@ def validate_features(value):
                 "features[].label: expected 1..80 characters")
         require(type(feature["value"]) is str and 1 <= len(feature["value"]) <= 160,
                 "features[].value: expected 1..160 characters")
+        if "folder" in feature:
+            folder = feature["folder"]
+            require(type(folder) is str and 1 <= len(folder) <= 240,
+                    "features[].folder: expected 1..240 characters")
+            path = PurePosixPath(folder)
+            require(not path.is_absolute() and ".." not in path.parts and str(path) == folder
+                    and "\\" not in folder and "\x00" not in folder
+                    and path.parts and path.parts[0] == "data",
+                    "features[].folder: expected a canonical path under profile data")
 
 
 def exact_origin(value):

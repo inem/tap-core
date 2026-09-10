@@ -34,6 +34,15 @@ RUNTIME_PATH = PREFIX + 'runtime.js'
 PLAN_VERSION = 'tap.page-plan/v1'
 
 
+def valid_feature_folder(value):
+    if type(value) is not str or not 1 <= len(value) <= 240:
+        return False
+    path = PurePosixPath(value)
+    return (not path.is_absolute() and '..' not in path.parts and str(path) == value
+            and '\\' not in value and '\x00' not in value
+            and bool(path.parts) and path.parts[0] == 'data')
+
+
 class HTMLScanError(ValueError):
     """Markup cannot be safely scanned for this limited injection operation."""
 
@@ -371,10 +380,12 @@ def effective_configuration(root, base):
             raise ValueError(f'Enabled pack manifest is incompatible: {pack_id}@{version}')
         features = manifest.get('features', [])
         if (type(features) is not list or len(features) > 32
-                or any(type(feature) is not dict or set(feature) != {'id', 'label', 'value'}
+                or any(type(feature) is not dict
+                       or not {'id', 'label', 'value'} <= set(feature) <= {'id', 'label', 'value', 'folder'}
                        or type(feature['id']) is not str or not RESOURCE_ID.fullmatch(feature['id'])
                        or type(feature['label']) is not str or not 1 <= len(feature['label']) <= 80
                        or type(feature['value']) is not str or not 1 <= len(feature['value']) <= 160
+                       or ('folder' in feature and not valid_feature_folder(feature['folder']))
                        for feature in features)
                 or len({feature['id'] for feature in features}) != len(features)):
             raise ValueError(f'Enabled pack features are malformed: {pack_id}@{version}')

@@ -59,7 +59,8 @@ class PackManifestTests(unittest.TestCase):
 
     def test_static_features_are_bounded_plain_text(self):
         self.manifest["features"] = [
-            {"id": "session.archive", "label": "Session archive", "value": "Versioned JSON"},
+            {"id": "session.archive", "label": "Session archive", "value": "Versioned JSON",
+             "folder": "data/readers/chatgpt.sessions"},
         ]
         validate_manifest(self.manifest, self.root)
         self.invalid(lambda m: m.update(features=[{"id": "bad", "label": "", "value": "x"}]),
@@ -71,6 +72,10 @@ class PackManifestTests(unittest.TestCase):
         self.invalid(lambda m: m.update(features=[
             {"id": "feature", "label": "Feature", "value": "x", "command": "run"},
         ]), "unknown fields")
+        for folder in ("/tmp/archive", "../archive", "readers/archive", "data/../archive", "data\\archive"):
+            self.invalid(lambda m, folder=folder: m.update(features=[
+                {"id": "archive", "label": "Archive", "value": "Local", "folder": folder},
+            ]), "folder")
 
     def test_files_exist_are_declared_and_stay_inside_pack(self):
         for name in ("missing.py", "../outside.py", "/tmp/outside.py", "./reader.py", "x\\reader.py"):
