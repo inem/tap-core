@@ -84,6 +84,7 @@ class Reader:
         self.logs = profile.root / 'logs/readers' / name
         self.work = self.state / 'work'
         self.checkpoint = self.state / 'checkpoint.json'
+        self.last_gap = self.state / 'last-gap.json'
 
     def prepare(self):
         for path in (self.state, self.output, self.logs):
@@ -153,20 +154,41 @@ class Reader:
                 raise ReaderError('Reader definition changed; use a new reader name or explicit replay')
             completed = 0
             try:
-                with closing(Journal(self.profile.root / 'data').scan(after=state['cursor'])) as entries:
-                    for entry in entries:
-                        if cancelled and cancelled():
-                            raise ReaderError('Reader stopped; cursor was not advanced')
-                        delivery_id = hashlib.sha256(entry.cursor.encode()).hexdigest()
-                        invocation_id = fingerprint([self.name, state['generation'], delivery_id])
-                        self.store(state, phase='running', inflight=invocation_id, error=None)
-                        self.execute(spec, entry.record, delivery_id, invocation_id, state['generation'], timeout, lock,
-                                     guard_parent, cancelled)
-                        self.store(state, cursor=entry.cursor, processed=state['processed'] + 1,
-                                   inflight=None, phase='ready', error=None)
-                        completed += 1
-                        if completed == max_records:
-                            break
+                recovered_gap = False
+                while True:
+                    try:
+                        with closing(Journal(self.profile.root / 'data').scan(after=state['cursor'])) as entries:
+                            for entry in entries:
+                                if cancelled and cancelled():
+                                    raise ReaderError('Reader stopped; cursor was not advanced')
+                                delivery_id = hashlib.sha256(entry.cursor.encode()).hexdigest()
+                                invocation_id = fingerprint([self.name, state['generation'], delivery_id])
+                                self.store(state, phase='running', inflight=invocation_id, error=None)
+                                self.execute(spec, entry.record, delivery_id, invocation_id, state['generation'], timeout, lock,
+                                             guard_parent, cancelled)
+                                self.store(state, cursor=entry.cursor, processed=state['processed'] + 1,
+                                           inflight=None, phase='ready', error=None)
+                                completed += 1
+                                if completed == max_records:
+                                    break
+                        break
+                    except JournalGap as gap:
+                        # Retention has already made the old prefix unavailable.
+                        # Preserve a receipt, drop only the unusable position and
+                        # continue from the earliest retained record. A fresh scan
+                        # that is itself ambiguous still fails on the second pass.
+                        if state['cursor'] is None or recovered_gap:
+                            raise
+                        save(self.last_gap, {
+                            'version': 1,
+                            'cursor': state['cursor'],
+                            'error': str(gap),
+                            'recovery': 'earliest-retained',
+                            'recovered_at': time.time(),
+                        })
+                        self.store(state, cursor=None, inflight=None, phase='ready',
+                                   error='JournalGap skipped: ' + str(gap))
+                        recovered_gap = True
                 self.store(state, phase='idle', error=None)
             except Exception as error:
                 # Keep the last acknowledged cursor, including after a timeout or

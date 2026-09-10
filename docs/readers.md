@@ -164,9 +164,15 @@ be finite JSON numbers; NaN, Infinity and exponent overflow fail before status
 serialization or run/replay can change progress. This is a bounded addition,
 not completion of all diagnostics in #13.
 
-A missing journal anchor stops with `gap`. Only explicit replay/new identity may
-start from remaining history. A malformed complete record stops before later
-records; an unfinished active tail waits for a later run. See
+A missing journal anchor is recorded in `state/readers/<name>/last-gap.json` and
+the reader continues from the earliest retained record without changing its
+generation or clearing its projection. This accepts the already-unavoidable loss
+of the unavailable prefix so later capture can keep flowing. Because the missing
+cursor cannot order itself against surviving segments, some retained records may
+be delivered again with their original stable delivery IDs; readers still own
+effect deduplication. If retained history is itself ambiguous, the fresh scan
+still stops with `gap`. A malformed complete
+record stops before later records; an unfinished active tail waits for a later run. See
 [capture records](capture-records.md) for conservative retention-gap behavior and
 legacy compatibility limits. No fsync/power-loss durability was added.
 

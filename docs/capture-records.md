@@ -97,11 +97,13 @@ a scan. Newly appended records belong to the next scan. Close the generator on
 early exit to release descriptors and space promptly.
 
 A missing acknowledged segment, changed anchor, or truncated position raises
-`JournalGap` before any newer records are yielded. The caller must surface the
-uncertainty and choose replay/reset explicitly. Even a fully consumed segment
-removed before its next scan causes a conservative gap: there is no successor
-ledger proving whether records were missed. No exact lost-record count is
-claimed. A missing/unreadable directory is an error, not empty history.
+`JournalGap` before any newer records are yielded. The finite scanner does not
+choose recovery. The Core reader host records the lost boundary, removes the
+unusable cursor and scans again from the earliest retained record; other callers
+may choose differently. Even a fully consumed segment removed before its next
+scan creates this gap because there is no successor ledger proving whether
+records were missed. No exact lost-record count is claimed. A missing/unreadable
+directory is an error, not empty history.
 
 Only complete lines are yielded. An unfinished active tail is deferred without
 advancing a cursor; writer recovery may later remove it. A malformed complete
