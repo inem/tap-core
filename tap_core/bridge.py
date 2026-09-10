@@ -34,6 +34,32 @@ class HTMLScanError(ValueError):
     """Markup cannot be safely scanned for this limited injection operation."""
 
 
+def authorize_script_policy(value, nonce):
+    """Extend script elements only; keep other directives and each policy."""
+    policies = []
+    for policy in value.split(','):
+        parts = policy.split(';')
+        directives = {}
+        for index, part in enumerate(parts):
+            words = part.split()
+            if words: directives.setdefault(words[0].lower(), (index, words[1:]))
+        source = next((directives[k] for k in ('script-src-elem', 'script-src', 'default-src') if k in directives), None)
+        if source is None:
+            policies.append(policy); continue
+        # Adding a nonce disables an otherwise active unsafe-inline source.
+        # Preserve that policy rather than break the site's existing inline code.
+        if "'unsafe-inline'" in source[1] and not any(w.startswith(("'nonce-", "'sha256-", "'sha384-", "'sha512-")) for w in source[1]):
+            policies.append(policy); continue
+        words = [word for word in source[1] if word.lower() != "'none'"]
+        permission = "'nonce-" + nonce + "'"
+        if permission not in words: words.append(permission)
+        directive = 'script-src-elem ' + ' '.join(words)
+        if 'script-src-elem' in directives: parts[directives['script-src-elem'][0]] = directive
+        else: parts.append(directive)
+        policies.append(';'.join(parts))
+    return ','.join(policies)
+
+
 class DocumentScripts:
     """Scan complete HTML for nonce/marker attributes and a body insertion point.
 
@@ -63,7 +89,7 @@ class DocumentScripts:
         return cls.ENTITY.sub(decode, raw)
 
     @classmethod
-    def tag_end(cls, body, position):
+    def tag_end(cls, body, position, meta=False):
         values = {}
         while position < len(body):
             position = cls.SPACE.match(body, position).end()
@@ -75,14 +101,15 @@ class DocumentScripts:
             if attribute is None:
                 raise HTMLScanError('Incomplete or unsupported tag')
             name = attribute[1].lower()
-            if name in ('nonce', 'id') and name not in values:
+            if (name in ('nonce', 'id') or meta and name in ('http-equiv', 'content')) and name not in values:
                 raw = next((value for value in attribute.groups()[1:] if value is not None), None)
-                values[name] = cls.attribute_value(raw)
+                values[name] = None if name == 'content' and raw is not None and len(raw) > 4096 else cls.attribute_value(raw)
             position = attribute.end()
         raise HTMLScanError('Unclosed tag')
 
     def __init__(self, body):
         self.nonce, self.has_bootstrap, self.body_end = '', False, None
+        self.meta_policies = []
         position = 0
         while position < len(body):
             start = body.find('<', position)
@@ -121,13 +148,17 @@ class DocumentScripts:
                 position = start + 1
                 continue
             closing, name = tag[1], tag[2].lower()
-            position, values = self.tag_end(body, tag.end())
+            position, values = self.tag_end(body, tag.end(), meta=name == 'meta')
             if closing:
                 if name == 'body' and self.body_end is None:
                     self.body_end = start
                 continue
             if values.get('id') == MARKER:
                 self.has_bootstrap = True
+            if name == 'meta' and (values.get('http-equiv') or '').lower() == 'content-security-policy' and not isinstance(values.get('content'), str):
+                raise HTMLScanError('CSP meta content unavailable or oversized')
+            if name == 'meta' and (values.get('http-equiv') or '').lower() == 'content-security-policy' and isinstance(values.get('content'), str):
+                self.meta_policies.append((start, position, html.unescape(values['content'])))
             nonce = values.get('nonce')
             if name == 'script' and not self.nonce and isinstance(nonce, str) and re.fullmatch(r'[A-Za-z0-9_+/-]{1,256}={0,2}', nonce):
                 self.nonce = nonce
@@ -607,7 +638,7 @@ class Bridge:
         allowed = self.allowed(origin)
         path = urlsplit(request.path)
         if not path.path.startswith(PREFIX):
-            if allowed and request.headers.get('sec-fetch-dest', '') in ('', 'document'):
+            if allowed and request.headers.get('sec-fetch-dest', '') in ('', 'document', 'empty'):
                 request.headers.pop('if-none-match', None)
                 request.headers.pop('if-modified-since', None)
             return
@@ -657,7 +688,7 @@ class Bridge:
         self.refresh_plan()
         if 'text/html' not in response.headers.get('content-type', '').lower():
             return
-        if flow.request.headers.get('sec-fetch-dest', '') not in ('', 'document'):
+        if flow.request.headers.get('sec-fetch-dest', '') not in ('', 'document', 'empty'):
             return
         origin = self.origin(flow.request)
         if not self.allowed(origin):
@@ -673,7 +704,22 @@ class Bridge:
             return
         if parsed.has_bootstrap:
             return
-        nonce_attr = ' nonce="' + html.escape(parsed.nonce, quote=True) + '"' if parsed.nonce else ''
+        # Per-response authority goes only on TAP-owned script elements.
+        # Site nonces, inline handlers, connections and other permissions stay intact.
+        nonce = os.urandom(24).hex() if parsed.meta_policies or response.headers.get('content-security-policy') else parsed.nonce
+        for start, end, policy in reversed(parsed.meta_policies):
+            tag = '<meta http-equiv="Content-Security-Policy" content="' + html.escape(authorize_script_policy(policy, nonce), quote=True) + '">'
+            body = body[:start] + tag + body[end:]
+        if parsed.meta_policies:
+            parsed = DocumentScripts(body)
+        header = 'content-security-policy'
+        if hasattr(response.headers, 'get_all'):
+            policies = response.headers.get_all(header)
+            if policies: response.headers.set_all(header, [authorize_script_policy(value, nonce) for value in policies])
+        elif header in response.headers:
+            response.headers[header] = authorize_script_policy(response.headers[header], nonce)
+        nonce_attr = ' nonce="' + nonce + '"' if nonce else ''
+
         # Document <base> must never redirect token-bearing bootstrap/assets.
         asset_root = html.escape(self.origin(flow.request) + PREFIX, quote=True)
         scripts = [f'<script id="{MARKER}"{nonce_attr} data-tap-token="{self.token}" '
