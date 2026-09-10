@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import runpy
 import shutil
 from types import SimpleNamespace
@@ -11,7 +12,8 @@ import time
 import unittest
 from unittest.mock import Mock, patch
 
-from tap_core.bridge import Bridge, configuration, decision, read_json, read_scripts, read_token
+from tap_core.bridge import (Bridge, authorize_script_policy, configuration, decision,
+                             read_json, read_scripts, read_token)
 from tap_core.runtime import Profile, MacOS, TapError
 from tap_core.cli import main, bridge_status, doctor
 
@@ -241,6 +243,37 @@ class BridgeTests(unittest.TestCase):
         self.assertLess(once.index('runtime.js?'), once.index(f'core/{digest(b"window.fixture = true;")}.js?'))
         self.assertNotIn('etag', f.response.headers)
         self.assertEqual(f.response.headers['cache-control'], 'no-store')
+
+    def test_csp_header_authorizes_only_tap_script_elements(self):
+        response = Response('<html><body>fixture</body></html>')
+        original = "default-src 'self'; script-src https://static.example; img-src 'none'"
+        response.headers['content-security-policy'] = original
+        f = flow(response=response)
+        self.bridge.response(f)
+        nonce = re.search(r'id="tap-probe-bootstrap" nonce="([a-f0-9]+)"', response.body).group(1)
+        policy = response.headers['content-security-policy']
+        self.assertIn("script-src https://static.example", policy)
+        self.assertIn("script-src-elem https://static.example 'nonce-" + nonce + "'", policy)
+        self.assertIn("img-src 'none'", policy)
+        self.assertNotIn(nonce, original)
+
+    def test_csp_meta_policy_is_rewritten_with_the_same_fresh_nonce(self):
+        source = ('<html><head><meta http-equiv="Content-Security-Policy" '
+                  'content="default-src &apos;self&apos;; script-src https://static.example"></head>'
+                  '<body>fixture</body></html>')
+        f = flow(response=Response(source))
+        self.bridge.response(f)
+        nonce = re.search(r'id="tap-probe-bootstrap" nonce="([a-f0-9]+)"', f.response.body).group(1)
+        self.assertIn("script-src-elem https://static.example &#x27;nonce-" + nonce + "&#x27;", f.response.body)
+
+    def test_unsafe_inline_only_policy_is_not_weakened_by_adding_nonce(self):
+        policy = "script-src 'self' 'unsafe-inline'; object-src 'none'"
+        self.assertEqual(authorize_script_policy(policy, 'fixture'), policy)
+
+    def test_empty_fetch_destination_can_deliver_a_top_level_document(self):
+        f = flow(headers={'sec-fetch-dest': 'empty'}, response=Response('<html><body>fixture</body></html>'))
+        self.bridge.response(f)
+        self.assertIn('tap-probe-bootstrap', f.response.body)
 
     def test_valid_nonce_attribute_forms_and_fake_script_text(self):
         for attr, value in (('nonce = "YWJjZA=="', 'YWJjZA=='), ("nonce = 'YWJjZA=='", 'YWJjZA=='),
