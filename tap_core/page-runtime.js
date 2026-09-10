@@ -9,10 +9,33 @@
   const planVersion = 'tap.page-plan/v1';
   let appliedPlan = bootstrap.dataset.tapPlan, appliedPacks = [];
   const pending = new Map();
+  const exposed = new Map(), inbound = new Set();
+  let activitySequence = 0;
   let socket, session, timer, planTimer, checkingPlan = false, reloading = false, planState = 'current';
   let closed = false, attempt = 0, paused = !websocketEnabled;
   let state = websocketEnabled ? 'connecting' : 'disabled';
   const error = code => Object.assign(new Error(code), {code, completion: 'unknown'});
+  function send(value) {
+    if (session && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({version, session, ...value}));
+  }
+  function commandResult(id, ok, value) {
+    let result = {kind:'CommandResult', id, ok, ...(ok ? {value: value ?? null} : {error:value})};
+    let encoded;
+    try { encoded = JSON.stringify({version, session, ...result}); }
+    catch { result = {kind:'CommandResult', id, ok:false, error:{code:'output_invalid', message:'Command result is not JSON'}}; encoded = JSON.stringify({version, session, ...result}); }
+    if (new TextEncoder().encode(encoded).length > 262144)
+      encoded = JSON.stringify({version, session, kind:'CommandResult', id, ok:false, error:{code:'output_limit', message:'Command result exceeds 256 KiB'}});
+    if (socket?.readyState === WebSocket.OPEN) socket.send(encoded);
+  }
+  async function runCommand(value) {
+    if (inbound.size >= 4) return commandResult(value.id, false, {code:'busy', message:'Page command capacity exceeded'});
+    const handler = exposed.get(value.operation);
+    if (!handler) return commandResult(value.id, false, {code:'operation_unavailable', message:'Page operation is not exposed'});
+    inbound.add(value.id); activitySequence++;
+    try { commandResult(value.id, true, await handler(value.args)); }
+    catch (cause) { commandResult(value.id, false, {code:cause?.code || 'operation_failed', message:String(cause?.message || cause).slice(0,1024)}); }
+    finally { inbound.delete(value.id); }
+  }
   function schedulePlan(delay = 2000) {
     clearTimeout(planTimer);
     if (!closed && !reloading) planTimer = setTimeout(checkPlan, delay);
@@ -69,6 +92,9 @@
       if (value.kind === 'Welcome' && value.page === page) { session = value.session; attempt = 0; state = 'ready'; checkPlan(); return; }
       if (value.session !== session) return;
       if (value.kind === 'PlanChanged') { checkPlan(); return; }
+      if (value.kind === 'Command' && typeof value.id === 'string' && typeof value.operation === 'string') {
+        void runCommand(value); return;
+      }
       if (value.kind === 'Result') {
         const task = pending.get(value.id);
         if (task) { pending.delete(value.id); clearTimeout(task.timer); value.ok ? task.resolve(value.value) : task.reject(Object.assign(error(value.error?.code || 'handler_error'), value.error)); }
@@ -92,17 +118,26 @@
   }
   window.TapBridge = Object.freeze({
     status: () => ({state, scope:'document', pending:pending.size,
+      activity:{pending:pending.size + inbound.size, outbound:pending.size, inbound:inbound.size, sequence:activitySequence},
       plan: appliedPlan, plan_state: planState, packs: appliedPacks,
       actions: !websocketEnabled ? [] : paused ? ['connect'] : state === 'unavailable' ? ['reconnect','disconnect'] : ['disconnect']}),
     disconnect() { if (!websocketEnabled) return; paused = true; stop(); state = 'paused'; },
     connect() { if (!websocketEnabled || closed) return; paused = false; attempt = 0; connect(); },
     reconnect() { if (!websocketEnabled || closed) return; paused = false; attempt = 0; stop(); connect(); },
     isReady: () => !!session && socket?.readyState === WebSocket.OPEN,
+    expose(operation, handler) {
+      if (typeof operation !== 'string' || !/^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)+$/.test(operation) || typeof handler !== 'function')
+        throw new TypeError('invalid_operation');
+      if (exposed.has(operation)) throw new Error('operation_already_exposed');
+      exposed.set(operation, handler);
+      return () => { if (exposed.get(operation) === handler) exposed.delete(operation); };
+    },
     request(handler, args) {
       if (!session || socket?.readyState !== WebSocket.OPEN) return Promise.reject(error('not_connected'));
       if (pending.size >= 4) return Promise.reject(error('busy'));
       const id = crypto.randomUUID(), value = JSON.stringify({version, kind: 'Request', session, id, handler, args});
       if (new TextEncoder().encode(value).length > 65536) return Promise.reject(error('input_limit'));
+      activitySequence++;
       return new Promise((resolve, reject) => {
         const timeout = setTimeout(() => { pending.delete(id); reject(error('request_timeout')); }, 6500);
         pending.set(id, {resolve, reject, timer: timeout});

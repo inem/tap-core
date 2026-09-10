@@ -93,6 +93,7 @@ first applied command provider.
 - Traffic capture and explicit routing policies by host, transport and source application.
 - Local records, body storage and repeatable processing by independent readers.
 - Response mutators, injected page code and a same-origin WebSocket bridge to local tools.
+- Bidirectional opaque page commands: packs expose operations; Core only routes bounded JSON over the local WebSocket.
 - Pack installation, lifecycle, configuration, compatibility checks and diagnostics.
 - Installation, update, recovery and removal on supported macOS configurations.
 

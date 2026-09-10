@@ -321,6 +321,13 @@ def parser():
         command.add_argument("id")
         if action == "uninstall":
             command.add_argument("--version")
+    commands.add_parser("pages", help="List live pages connected to the local WebSocket bridge")
+    page = commands.add_parser("page", help="Send an opaque command to an operation exposed by a page pack")
+    page_actions = page.add_subparsers(dest="page_action", required=True)
+    page_call = page_actions.add_parser("call")
+    page_call.add_argument("page_id")
+    page_call.add_argument("operation")
+    page_call.add_argument("--args", default="{}", help="JSON value passed unchanged to the page operation")
     return result
 
 
@@ -439,6 +446,18 @@ def main(argv=None):
                 profile.components = configuration(read_json(args.components_config), profile)
         else:
             profile = Profile.load(root)
+        if args.command == "pages":
+            from .page_control import pages
+            print(json.dumps(pages(root), indent=2))
+            return 0
+        if args.command == "page":
+            from .page_control import call
+            try:
+                page_args = json.loads(args.args)
+            except ValueError as error:
+                raise TapError(f"Invalid --args JSON: {error}") from error
+            print(json.dumps(call(root, args.page_id, args.operation, page_args), indent=2))
+            return 0
         if args.command == 'components':
             from .components import configuration, Job
             from .bridge import read_json

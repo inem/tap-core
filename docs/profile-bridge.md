@@ -115,6 +115,23 @@ rejected plan. Stopping the proxy closes existing
 proxied WS connections; with the bridge disabled, their reconnects are denied
 and new pages receive no bootstrap.
 
+## Local page commands
+
+The bridge is bidirectional at the transport boundary. A page pack may register a
+bounded operation with `TapBridge.expose(operation, handler)`. A same-user local
+controller can list connected pages with `tap pages` and send an opaque JSON value
+with `tap page call PAGE_ID OPERATION --args JSON`. Core routes the operation name
+and values to the selected volatile page session; it does not define the operation's
+meaning or inspect its arguments. Page packs own operation names, validation,
+effects and result shapes.
+
+Controller HTTP routes bind only to loopback and require the profile's private
+component token. Commands have per-page and global concurrency bounds, a deadline
+and a 256 KiB page-result limit. They are not replayed across disconnects or page
+replacement. `TapBridge.status().activity` exposes only generic inbound/outbound
+counts and a monotonic sequence so page UI can show transport activity without
+learning command semantics.
+
 ## Diagnostics and verification
 
 Status/doctor check that `state/bridge.json` belongs to the current service PID
