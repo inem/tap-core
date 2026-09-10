@@ -729,6 +729,18 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(asset.response.status_code, 200)
         self.assertEqual(asset.response.content, b'window.keep = true;\n')
 
+    def test_enabled_managed_bridge_offers_ws_to_every_allowed_origin(self):
+        import sys
+        self.profile.bridge = config(allow_origins=['https://one.test', 'https://two.test'],
+                                     exclude_origins=['https://two.test'], page_scripts=[])
+        self.profile.components = {'version': 1, 'python': sys.executable,
+                                   'bun': '/absolute/bun', 'readers': {}, 'handlers': {}}
+        self.profile.save()
+        bridge = Bridge()
+        with patch.dict(os.environ, {'TAP_CORE_PROFILE': str(self.root)}):
+            bridge.load(None)
+        self.assertEqual(bridge.ws_origins, {'https://one.test'})
+
     def test_plan_refresh_picks_up_enabled_pack_without_reload(self):
         from tap_core.pack_store import PackStore, build_artifact
         source = Path(__file__).resolve().parents[1] / 'fixtures/packs/installed-page'

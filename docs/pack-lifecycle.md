@@ -110,13 +110,13 @@ handlers using `python-jsonl-v1` also bind to the existing managed host. Mutator
 activation and `browser-module-v1` remain unsupported.
 
 Reader/handler packs require an existing components configuration with an
-absolute Python path. Absolute Bun and Hub are required when handlers are
-projected. Page-only and reader-only packs run without Bun/Hub; Core serves the
-bootstrap and plan directly from the proxy and marks WebSocket transport as
-disabled. A components block still
-requires a bridge object (`enabled=false` is the hubless shape; `bridge: null`
-is rejected). On startup, the host refreshes the effective origins and handler
-bindings from enabled immutable pack versions.
+absolute Python path. An enabled browser/control bridge requires absolute Bun
+and runs its Hub even for a page-only pack, so its local development channel is
+available by default. A reader-only profile remains the explicit hubless shape:
+`bridge.enabled=false`; `bridge: null` is rejected. Page-plan polling and page
+injection still travel through the proxy and do not depend on handler presence.
+On startup, the host refreshes the effective origins and handler bindings from
+enabled immutable pack versions.
 The component name is the pack ID; existing reader checkpoints and handler
 state/output/log directories remain under their respective `readers/<id>` and
 `handlers/<id>` roots. See [managed component protocols](managed-components.md)

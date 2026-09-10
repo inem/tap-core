@@ -34,9 +34,11 @@ output, concurrency and timeout limits. They are not replayed after disconnect.
 Arbitrary development source is trusted same-user code and may mutate site state;
 reloading the selected page is its general reset operation.
 
-This first slice reuses a running Hub and connected page. It does not yet start an
-optional development Hub for a handler-free profile, watch a source tree, publish
-development resource generations, suspend one overlay, or freeze a successful
-generation into an immutable pack candidate. Those are authoring lifecycle work
-under #41. None requires stopping capture or changing system routing.
+An enabled managed browser/control bridge starts its Hub even without installed
+handlers and offers the development channel to every allowed, non-excluded
+origin. A reader-only profile explicitly disables the bridge and remains hubless.
 
+The protocol does not yet watch a source tree, publish development resource
+generations, suspend one overlay, or freeze a successful generation into an
+immutable pack candidate. Those are authoring lifecycle work under #41. None
+requires stopping capture or changing system routing.

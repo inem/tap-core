@@ -10,7 +10,7 @@ import time
 import unittest
 from unittest.mock import Mock
 from tap_core.runtime import Profile, MacOS, TapError
-from tap_core.components import configuration, identity, secret, stop, Job
+from tap_core.components import _start, configuration, identity, needs_hub, secret, status, stop, Job
 from test_bridge import config
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -56,6 +56,14 @@ class ComponentTests(unittest.TestCase):
         self.binding['handlers']['echo']['config'] = {'value': float('nan')}
         with self.assertRaises(TapError):
             configuration(self.binding, self.profile)
+
+    def test_enabled_bridge_requires_managed_hub_even_without_handlers(self):
+        binding = dict(self.binding, handlers={})
+        self.assertTrue(needs_hub(binding, self.profile.bridge))
+        self.profile.components = None
+        self.assertFalse(status(self.profile, Mock())['healthy'])
+        with self.assertRaisesRegex(TapError, 'requires managed Hub components'):
+            _start(self.profile, Mock())
 
     def test_component_identity_ignores_page_only_resource_changes(self):
         from unittest.mock import patch

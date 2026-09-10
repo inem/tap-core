@@ -84,6 +84,8 @@ class HublessReaderTests(unittest.TestCase):
             return subprocess.CompletedProcess(args, 0, stdout='', stderr='')
         if args[:2] == [sys.executable, '-c']:
             return subprocess.CompletedProcess(args, 0, stdout='', stderr='')
+        if len(args) == 2 and args[1] == '--version' and args[0] == self.components['bun']:
+            return subprocess.CompletedProcess(args, 0, stdout='1.3.11\n', stderr='')
         return subprocess.CompletedProcess(args, 0, stdout='', stderr='')
 
     def start_hubless(self):
@@ -116,16 +118,37 @@ class HublessReaderTests(unittest.TestCase):
                 'echo': {'command': [sys.executable, '-c', 'pass'], 'config': {},
                          'origins': ['https://fixture.example']}}), self.profile)
 
-    def test_enabled_page_bridge_is_hubless_without_handlers(self):
+    def test_enabled_page_bridge_requires_hub_without_handlers(self):
         bridge = config(enabled=True, hub_port=19311, allow_origins=[], exclude_origins=[],
                         page_scripts=[])
         components = dict(version=1, python=sys.executable, bun='/usr/bin/true',
                           readers={}, handlers={})
         profile = Profile(self.root / 'hubful', '/fixture/backend', 19312, 'explicit',
                           'http://fixture.example', [], bridge=bridge, components=components)
-        self.assertFalse(needs_hub(components, bridge))
+        self.assertTrue(needs_hub(components, bridge))
         configuration(components, profile)
-        configuration(dict(components, bun='relative-bun'), profile)
+        with self.assertRaisesRegex(TapError, 'absolute path when Hub is required'):
+            configuration(dict(components, bun='relative-bun'), profile)
+
+    def test_enabled_page_bridge_starts_hub_without_handlers(self):
+        import socket
+        bun = os.environ.get('TAP_TEST_BUN') or shutil.which('bun')
+        if not bun:
+            self.skipTest('Set TAP_TEST_BUN for the mandatory development Hub')
+        with socket.socket() as reservation:
+            reservation.bind(('127.0.0.1', 0))
+            hub_port = reservation.getsockname()[1]
+        self.bridge = config(enabled=True, hub_port=hub_port,
+                             allow_origins=['https://fixture.example'],
+                             exclude_origins=[], page_scripts=[])
+        self.components['bun'] = bun
+        self.profile.bridge = self.bridge
+        self.profile.components = self.components
+        self.profile.save()
+        adapter = self.start_hubless()
+        observed = status(Profile.load(self.profile_root), adapter)
+        self.assertTrue(observed['ready'], observed)
+        self.assertIsInstance(observed.get('hub_pid'), int)
 
     def test_components_without_bridge_rejected_before_save(self):
         components = dict(version=1, python=sys.executable, bun='/hubless/unused-bun',
@@ -147,13 +170,13 @@ class HublessReaderTests(unittest.TestCase):
         busy = own._profile_processes_busy(adapter, profile)
         self.assertIn('components service', busy)
         self.assertNotIn('hub port', busy)
-        # Page-only bridge remains hubless even when its unused Hub port is open.
+        # Enabling the browser/control plane makes its Hub port owned infrastructure.
         profile.bridge['enabled'] = True
         profile.save()
         adapter.port_open.side_effect = lambda target: isinstance(target, Job)
         busy = own._profile_processes_busy(adapter, Profile.load(self.profile_root))
         self.assertIn('components service', busy)
-        self.assertNotIn('hub port', busy)
+        self.assertIn('hub port', busy)
 
     def test_hubless_on_off_preserves_checkpoint_without_bun(self):
         self.install_reader()

@@ -618,11 +618,16 @@ class Bridge:
         return {'version': PLAN_VERSION, 'revision': revision, 'scripts': scripts,
                 'packs': packs, 'access': access, 'application': 'reload'}
 
-    def _read_ws_origins(self, profile):
-        # Unmanaged profiles retain their external Hub contract. Managed profiles
-        # need the Hub only when an installed handler is present.
+    def _read_ws_origins(self, profile, bridge=None):
+        # Unmanaged profiles retain their external Hub contract. An enabled
+        # managed browser/control plane exposes the local development channel on
+        # every allowed origin, independently of installed handler bindings.
         if profile.get('components') is None:
             return None
+        bridge = bridge or self.config
+        if type(bridge) is dict and bridge.get('enabled'):
+            excluded = set(bridge.get('exclude_origins') or profile.get('bridge', {}).get('exclude_origins') or [])
+            return {origin for origin in bridge.get('allow_origins', []) if origin not in excluded}
         try:
             runtime = read_json(self._profile_root / 'state/effective-runtime.json')
             components = runtime.get('components')
@@ -672,7 +677,7 @@ class Bridge:
                 self.component_token = read_token(self._profile_root, 'component-token')
             else:
                 self.component_token = None
-            self.ws_origins = self._read_ws_origins(profile)
+            self.ws_origins = self._read_ws_origins(profile, plan)
             self.token = read_token(self._profile_root)
             previous = fingerprint(self.config) if self.config is not None else None
             self._apply_plan(plan)
@@ -689,7 +694,7 @@ class Bridge:
         if profile.get('components') is not None:
             self.component_token = read_token(root, 'component-token')
         self.token = read_token(root)
-        self.ws_origins = self._read_ws_origins(profile)
+        self.ws_origins = self._read_ws_origins(profile, self.config)
         self._apply_plan(self.config)
         self._plan_checked_at = time.monotonic()
 
