@@ -60,6 +60,16 @@ def secret(profile):
         raise TapError(str(error)) from error
 
 
+def runtime_bridge(bridge, profile):
+    """Project only the bridge fields consumed by managed components and Hub."""
+    return {
+        'enabled': bridge['enabled'],
+        'hub_port': bridge['hub_port'],
+        'allow_origins': list(bridge['allow_origins']),
+        'exclude_origins': list(bridge.get('exclude_origins') or profile.bridge.get('exclude_origins') or []),
+    }
+
+
 def prepare(profile):
     configuration(profile.components, profile)
     from .readers import private_dir
@@ -78,12 +88,7 @@ def prepare(profile):
     effective_components = store.effective_components(profile.components)
     configuration(effective_components, profile)
     atomic_json(profile.root / 'state/effective-runtime.json', {
-        'bridge': {
-            'enabled': effective_bridge['enabled'],
-            'hub_port': effective_bridge['hub_port'],
-            'allow_origins': list(effective_bridge['allow_origins']),
-            'exclude_origins': list(effective_bridge.get('exclude_origins') or profile.bridge.get('exclude_origins') or []),
-        },
+        'bridge': runtime_bridge(effective_bridge, profile),
         'components': effective_components,
     })
     for name in effective_components['handlers']:
@@ -112,7 +117,8 @@ def identity(profile):
     store = PackStore(profile.root)
     effective_bridge = store.effective_bridge(profile.bridge) or profile.bridge
     effective_components = store.effective_components(profile.components)
-    return fingerprint({'components': effective_components, 'bridge': effective_bridge})
+    return fingerprint({'components': effective_components,
+                        'bridge': runtime_bridge(effective_bridge, profile)})
 
 
 def hub_health(profile):

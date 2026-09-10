@@ -10,7 +10,7 @@ import time
 import unittest
 from unittest.mock import Mock
 from tap_core.runtime import Profile, MacOS, TapError
-from tap_core.components import configuration, secret, stop, Job
+from tap_core.components import configuration, identity, secret, stop, Job
 from test_bridge import config
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -56,6 +56,17 @@ class ComponentTests(unittest.TestCase):
         self.binding['handlers']['echo']['config'] = {'value': float('nan')}
         with self.assertRaises(TapError):
             configuration(self.binding, self.profile)
+
+    def test_component_identity_ignores_page_only_resource_changes(self):
+        from unittest.mock import patch
+        self.profile.components = self.binding
+        first = dict(config(), page_scripts=['/packs/inspector/0.2.0/page.js'],
+                     page_script_origins=[['https://www.linkedin.com']])
+        second = dict(config(), page_scripts=['/packs/inspector/0.3.0/page.js'],
+                      page_script_origins=[['https://www.linkedin.com']])
+        with patch('tap_core.pack_store.PackStore.effective_components', return_value=self.binding), \
+                patch('tap_core.pack_store.PackStore.effective_bridge', side_effect=[first, second]):
+            self.assertEqual(identity(self.profile), identity(self.profile))
 
     def test_failed_start_cleanup_does_not_wait_on_foreign_listener(self):
         self.profile.components = self.binding
