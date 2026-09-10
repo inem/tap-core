@@ -329,6 +329,18 @@ def parser():
     page_call.add_argument("page_id")
     page_call.add_argument("operation")
     page_call.add_argument("--args", default="{}", help="JSON value passed unchanged to the page operation")
+    dev = commands.add_parser("dev", help="Inspect and change one live page through the local development channel")
+    dev_actions = dev.add_subparsers(dest="dev_action", required=True)
+    dev_actions.add_parser("pages", help="List pages currently connected to the development channel")
+    dev_inspect = dev_actions.add_parser("inspect", help="Read a bounded DOM projection from one live page")
+    dev_inspect.add_argument("page_id")
+    dev_inspect.add_argument("selector")
+    dev_inspect.add_argument("--limit", type=int, default=20)
+    dev_execute = dev_actions.add_parser("execute", help="Run explicit development JavaScript in one live page")
+    dev_execute.add_argument("page_id")
+    dev_source = dev_execute.add_mutually_exclusive_group(required=True)
+    dev_source.add_argument("--source", help="JavaScript function body; use return to produce a result")
+    dev_source.add_argument("--file", type=Path, help="Read the JavaScript function body from this local file")
     return result
 
 
@@ -472,6 +484,24 @@ def main(argv=None):
             except ValueError as error:
                 raise TapError(f"Invalid --args JSON: {error}") from error
             print(json.dumps(call(root, args.page_id, args.operation, page_args), indent=2))
+            return 0
+        if args.command == "dev":
+            from .page_control import execute, inspect, pages
+            if args.dev_action == "pages":
+                output = pages(root)
+            elif args.dev_action == "inspect":
+                if not 1 <= args.limit <= 100:
+                    raise TapError("Development inspection limit must be between 1 and 100")
+                output = inspect(root, args.page_id, args.selector, args.limit)
+            else:
+                try:
+                    source = args.file.expanduser().resolve().read_text() if args.file else args.source
+                except OSError as error:
+                    raise TapError(f"Cannot read development source: {error}") from error
+                if not source or len(source.encode()) > 65536:
+                    raise TapError("Development source must contain 1 to 65536 UTF-8 bytes")
+                output = execute(root, args.page_id, source)
+            print(json.dumps(output, indent=2))
             return 0
         if args.command == 'components':
             from .components import configuration, Job
