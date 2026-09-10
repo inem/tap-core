@@ -1,0 +1,162 @@
+{
+  "schema": "tap.internal-where-material-overlay/v2",
+  "id": "tap-core.where-capture-storage-material/v1",
+  "extends": "where-presence.json",
+  "effective_schema": "tap.internal-where-material/v4",
+  "input_schema": "tap.where-result/v3",
+  "sections": [
+    {"id": "capture-storage", "label": "Capture storage", "order": 4}
+  ],
+  "locations": [],
+  "semantic_rules": [
+    {
+      "id": "capture-storage-10-known-address",
+      "when": [["capture-stream-address", "$id", "known", "$address", null, ""]],
+      "emit": [["candidate", "$id", "address", "$address", 100, "derived_address", [["owner", "tap-core"], ["role", "capture-stream"]]]]
+    },
+    {
+      "id": "capture-storage-11-unknown-address",
+      "when": [["capture-stream-address", "$id", "unknown", null, "$reason", "$message"]],
+      "emit": [["candidate", "$id", "address", "unknown", 100, "$reason", [["owner", "tap-core"], ["role", "capture-stream"]]]]
+    },
+    {
+      "id": "capture-storage-20-present",
+      "when": [["capture-stream-filesystem", "$id", "$authority", "known", "present", "$kind", null, ""]],
+      "emit": [
+        ["candidate", "$id", "presence", "present", 100, "capture_storage_observed", [["authority", "$authority"]]],
+        ["candidate", "$id", "kind", "$kind", 100, "capture_storage_observed", [["authority", "$authority"]]]
+      ]
+    },
+    {
+      "id": "capture-storage-21-absent",
+      "when": [["capture-stream-filesystem", "$id", "$authority", "known", "absent", null, null, "$message"]],
+      "emit": [["candidate", "$id", "presence", "absent", 100, "capture_storage_observed", [["authority", "$authority"]]]]
+    },
+    {
+      "id": "capture-storage-22-unknown-filesystem",
+      "when": [["capture-stream-filesystem", "$id", "$authority", "unknown", null, null, "$reason", "$message"]],
+      "emit": [["candidate", "$id", "inspection", "unknown", 100, "$reason", [["authority", "$authority"]]]]
+    },
+    {
+      "id": "capture-storage-30-known-size",
+      "when": [["capture-stream-size", "$id", "$authority", "known", "$bytes", null, ""]],
+      "emit": [["candidate", "$id", "size", "$bytes", 100, "capture_storage_observed", [["authority", "$authority"]]]]
+    },
+    {
+      "id": "capture-storage-31-unknown-size",
+      "when": [["capture-stream-size", "$id", "$authority", "unknown", null, "$reason", "$message"]],
+      "emit": [["candidate", "$id", "size", "unknown", 100, "$reason", [["authority", "$authority"]]]]
+    },
+    {
+      "id": "capture-storage-40-known-policy",
+      "when": [["capture-rotation-policy", "$authority", "known", "$source", "$segment", "$keep", "$ceiling", null, ""]],
+      "emit": [["candidate", "capture_rotation", "policy", "effective", 100, "effective_policy", [["authority", "$authority"], ["policy_basis", "$source"], ["segment_bytes", "$segment"], ["keep_rolls", "$keep"], ["ceiling_bytes", "$ceiling"]]]]
+    },
+    {
+      "id": "capture-storage-41-unknown-policy",
+      "when": [["capture-rotation-policy", "$authority", "unknown", null, null, null, null, "$reason", "$message"]],
+      "emit": [["candidate", "capture_rotation", "policy", "unknown", 100, "$reason", [["authority", "$authority"]]]]
+    }
+  ],
+  "presentation_rules": [
+    {
+      "id": "capture-storage-presentation-10-regular",
+      "when": [
+        ["meaning", "capture_stream", "address", "$address", "derived_address", "$address_attrs"],
+        ["meaning", "capture_stream", "presence", "present", "capture_storage_observed", "$presence_attrs"],
+        ["meaning", "capture_stream", "kind", "regular", "capture_storage_observed", "$kind_attrs"],
+        ["meaning", "capture_stream", "size", "$bytes", "capture_storage_observed", "$size_attrs"],
+        ["byte-quantity", "capture_stream", "size", "$display"]
+      ],
+      "emit": [
+        ["slot", "capture-storage-stream", "section-capture-storage", 1, "group", "line", false, "", null, [["meaning", "capture_stream", "address", "$address", "derived_address", "$address_attrs"]]],
+        ["slot", "capture-storage-stream-label", "capture-storage-stream", 0, "leaf", "label", false, "  stream             ", null, [["meaning", "capture_stream", "address", "$address", "derived_address", "$address_attrs"]]],
+        ["slot", "capture-storage-stream-address", "capture-storage-stream", 1, "leaf", "address", false, "$address", null, [["meaning", "capture_stream", "address", "$address", "derived_address", "$address_attrs"]]],
+        ["slot", "capture-storage-stream-facts", "capture-storage-stream", 2, "leaf", "filesystem", false, {"format": " · present · regular · {}", "args": ["$display"]}, "present", [["meaning", "capture_stream", "presence", "present", "capture_storage_observed", "$presence_attrs"], ["meaning", "capture_stream", "kind", "regular", "capture_storage_observed", "$kind_attrs"], ["meaning", "capture_stream", "size", "$bytes", "capture_storage_observed", "$size_attrs"]]]
+      ]
+    },
+    {
+      "id": "capture-storage-presentation-20-nonregular",
+      "when": [
+        ["meaning", "capture_stream", "address", "$address", "derived_address", "$address_attrs"],
+        ["meaning", "capture_stream", "presence", "present", "capture_storage_observed", "$presence_attrs"],
+        ["meaning", "capture_stream", "kind", "$kind", "capture_storage_observed", "$kind_attrs"],
+        ["meaning", "capture_stream", "size", "unknown", "not_regular", "$size_attrs"]
+      ],
+      "emit": [
+        ["slot", "capture-storage-stream", "section-capture-storage", 1, "group", "line", false, "", null, [["meaning", "capture_stream", "address", "$address", "derived_address", "$address_attrs"]]],
+        ["slot", "capture-storage-stream-label", "capture-storage-stream", 0, "leaf", "label", false, "  stream             ", null, [["meaning", "capture_stream", "address", "$address", "derived_address", "$address_attrs"]]],
+        ["slot", "capture-storage-stream-address", "capture-storage-stream", 1, "leaf", "address", false, "$address", null, [["meaning", "capture_stream", "address", "$address", "derived_address", "$address_attrs"]]],
+        ["slot", "capture-storage-stream-facts", "capture-storage-stream", 2, "leaf", "filesystem", false, {"format": " · present · {}", "args": ["$kind"]}, "present", [["meaning", "capture_stream", "presence", "present", "capture_storage_observed", "$presence_attrs"], ["meaning", "capture_stream", "kind", "$kind", "capture_storage_observed", "$kind_attrs"], ["meaning", "capture_stream", "size", "unknown", "not_regular", "$size_attrs"]]]
+      ]
+    },
+    {
+      "id": "capture-storage-presentation-30-absent",
+      "when": [
+        ["meaning", "capture_stream", "address", "$address", "derived_address", "$address_attrs"],
+        ["meaning", "capture_stream", "presence", "absent", "capture_storage_observed", "$presence_attrs"],
+        ["meaning", "capture_stream", "size", "unknown", "absent", "$size_attrs"]
+      ],
+      "emit": [
+        ["slot", "capture-storage-stream", "section-capture-storage", 1, "group", "line", false, "", null, [["meaning", "capture_stream", "address", "$address", "derived_address", "$address_attrs"]]],
+        ["slot", "capture-storage-stream-label", "capture-storage-stream", 0, "leaf", "label", false, "  stream             ", null, [["meaning", "capture_stream", "address", "$address", "derived_address", "$address_attrs"]]],
+        ["slot", "capture-storage-stream-address", "capture-storage-stream", 1, "leaf", "address", false, "$address", null, [["meaning", "capture_stream", "address", "$address", "derived_address", "$address_attrs"]]],
+        ["slot", "capture-storage-stream-facts", "capture-storage-stream", 2, "leaf", "filesystem", false, " · absent", "unknown", [["meaning", "capture_stream", "presence", "absent", "capture_storage_observed", "$presence_attrs"], ["meaning", "capture_stream", "size", "unknown", "absent", "$size_attrs"]]]
+      ]
+    },
+    {
+      "id": "capture-storage-presentation-40-inspection",
+      "when": [
+        ["meaning", "capture_stream", "address", "$address", "derived_address", "$address_attrs"],
+        ["meaning", "capture_stream", "inspection", "unknown", "$reason", "$inspection_attrs"],
+        ["meaning", "capture_stream", "size", "unknown", "$reason", "$size_attrs"]
+      ],
+      "emit": [
+        ["slot", "capture-storage-stream", "section-capture-storage", 1, "group", "line", false, "", null, [["meaning", "capture_stream", "address", "$address", "derived_address", "$address_attrs"]]],
+        ["slot", "capture-storage-stream-label", "capture-storage-stream", 0, "leaf", "label", false, "  stream             ", null, [["meaning", "capture_stream", "address", "$address", "derived_address", "$address_attrs"]]],
+        ["slot", "capture-storage-stream-address", "capture-storage-stream", 1, "leaf", "address", false, "$address", null, [["meaning", "capture_stream", "address", "$address", "derived_address", "$address_attrs"]]],
+        ["slot", "capture-storage-stream-facts", "capture-storage-stream", 2, "leaf", "filesystem", false, {"format": " · ? {}", "args": ["$reason"]}, "unknown", [["meaning", "capture_stream", "inspection", "unknown", "$reason", "$inspection_attrs"], ["meaning", "capture_stream", "size", "unknown", "$reason", "$size_attrs"]]]
+      ]
+    },
+    {
+      "id": "capture-storage-presentation-50-unobserved-address",
+      "when": [
+        ["meaning", "capture_stream", "address", "unknown", "$reason", "$address_attrs"],
+        ["meaning", "capture_stream", "inspection", "unknown", "$reason", "$inspection_attrs"],
+        ["meaning", "capture_stream", "size", "unknown", "$reason", "$size_attrs"]
+      ],
+      "emit": [
+        ["slot", "capture-storage-stream", "section-capture-storage", 1, "group", "line", false, "", null, [["meaning", "capture_stream", "address", "unknown", "$reason", "$address_attrs"]]],
+        ["slot", "capture-storage-stream-label", "capture-storage-stream", 0, "leaf", "label", false, "  stream             ", null, [["meaning", "capture_stream", "address", "unknown", "$reason", "$address_attrs"]]],
+        ["slot", "capture-storage-stream-unknown", "capture-storage-stream", 1, "leaf", "unknown", false, {"format": "? {}", "args": ["$reason"]}, "unknown", [["meaning", "capture_stream", "address", "unknown", "$reason", "$address_attrs"], ["meaning", "capture_stream", "inspection", "unknown", "$reason", "$inspection_attrs"], ["meaning", "capture_stream", "size", "unknown", "$reason", "$size_attrs"]]]
+      ]
+    },
+    {
+      "id": "capture-storage-presentation-60-policy-known",
+      "when": [
+        ["meaning", "capture_rotation", "policy", "effective", "effective_policy", "$attrs"],
+        ["attribute", "capture_rotation", "policy_basis", "$source"],
+        ["attribute", "capture_rotation", "segment_bytes", "$segment"],
+        ["attribute", "capture_rotation", "keep_rolls", "$keep"],
+        ["attribute", "capture_rotation", "ceiling_bytes", "$ceiling"],
+        ["byte-quantity", "capture_rotation", "segment_bytes", "$segment_display"],
+        ["byte-quantity", "capture_rotation", "ceiling_bytes", "$ceiling_display"]
+      ],
+      "emit": [
+        ["slot", "capture-storage-rotation", "section-capture-storage", 2, "group", "line", false, "", null, [["meaning", "capture_rotation", "policy", "effective", "effective_policy", "$attrs"]]],
+        ["slot", "capture-storage-rotation-label", "capture-storage-rotation", 0, "leaf", "label", false, "  rotation           ", null, [["meaning", "capture_rotation", "policy", "effective", "effective_policy", "$attrs"]]],
+        ["slot", "capture-storage-rotation-value", "capture-storage-rotation", 1, "leaf", "policy", false, {"format": "{} per segment · keeps {} · ceiling {} · {}", "args": ["$segment_display", "$keep", "$ceiling_display", "$source"]}, null, [["meaning", "capture_rotation", "policy", "effective", "effective_policy", "$attrs"]]]
+      ]
+    },
+    {
+      "id": "capture-storage-presentation-70-policy-unknown",
+      "when": [["meaning", "capture_rotation", "policy", "unknown", "$reason", "$attrs"]],
+      "emit": [
+        ["slot", "capture-storage-rotation", "section-capture-storage", 2, "group", "line", false, "", null, [["meaning", "capture_rotation", "policy", "unknown", "$reason", "$attrs"]]],
+        ["slot", "capture-storage-rotation-label", "capture-storage-rotation", 0, "leaf", "label", false, "  rotation           ", null, [["meaning", "capture_rotation", "policy", "unknown", "$reason", "$attrs"]]],
+        ["slot", "capture-storage-rotation-value", "capture-storage-rotation", 1, "leaf", "unknown", false, {"format": "? {}", "args": ["$reason"]}, "unknown", [["meaning", "capture_rotation", "policy", "unknown", "$reason", "$attrs"]]]
+      ]
+    }
+  ],
+  "terminal_styles": {}
+}

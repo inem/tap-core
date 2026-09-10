@@ -1,0 +1,53 @@
+{
+  "schema": "tap.capture-storage-observation-adapter/v1",
+  "id": "tap-core.where-capture-storage-observation/v1",
+  "receipt_schema": "tap.capture-storage-receipts/v1",
+  "output_schema": "tap.capture-storage-observation/v1",
+  "semantic_rules": [
+    {
+      "id": "stream-10-present-regular",
+      "when": [["capture-stream-receipt", "$id", "$address", "present", "regular", "$size", null, ""]],
+      "emit": [["capture-stream-observation", "$id", "known", "$address", "known", "present", "regular", "known", "$size", null, ""]]
+    },
+    {
+      "id": "stream-20-present-other",
+      "when": [["capture-stream-receipt", "$id", "$address", "present", "$kind", null, null, ""]],
+      "emit": [["capture-stream-observation", "$id", "known", "$address", "known", "present", "$kind", "unknown", null, "not_regular", ""]]
+    },
+    {
+      "id": "stream-30-absent",
+      "when": [["capture-stream-receipt", "$id", "$address", "absent", null, null, "$errno", "$message"]],
+      "emit": [["capture-stream-observation", "$id", "known", "$address", "known", "absent", null, "unknown", null, "absent", "$message"]]
+    },
+    {
+      "id": "stream-40-failed",
+      "when": [["capture-stream-receipt", "$id", "$address", "failed", null, null, "$errno", "$message"]],
+      "emit": [["capture-stream-observation", "$id", "known", "$address", "unknown", null, null, "unknown", null, "inspection_failed", "$message"]]
+    },
+    {
+      "id": "stream-50-source-failed",
+      "when": [["capture-stream-receipt", "$id", null, "source_failed", null, null, null, "$message"]],
+      "emit": [["capture-stream-observation", "$id", "unknown", null, "unknown", null, null, "unknown", null, "inspection_failed", "$message"]]
+    },
+    {
+      "id": "stream-60-not-observed",
+      "when": [["capture-stream-receipt", "$id", null, "not_observed", null, null, null, "$message"]],
+      "emit": [["capture-stream-observation", "$id", "unknown", null, "unknown", null, null, "unknown", null, "not_observed", "$message"]]
+    },
+    {
+      "id": "policy-10-effective",
+      "when": [["capture-policy-receipt", "effective", "$source", "$segment", "$keep", "$ceiling", ""]],
+      "emit": [["capture-policy-observation", "known", "$source", "$segment", "$keep", "$ceiling", null, ""]]
+    },
+    {
+      "id": "policy-20-failed",
+      "when": [["capture-policy-receipt", "failed", null, null, null, null, "$message"]],
+      "emit": [["capture-policy-observation", "unknown", null, null, null, null, "inspection_failed", "$message"]]
+    },
+    {
+      "id": "policy-30-not-observed",
+      "when": [["capture-policy-receipt", "not_observed", null, null, null, null, "$message"]],
+      "emit": [["capture-policy-observation", "unknown", null, null, null, null, "not_observed", "$message"]]
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "schema": "tap.capture-storage-receipt-corpus/v1",
+  "cases": [
+    {
+      "name": "present-regular",
+      "stream": {"outcome": "present", "kind": "regular", "size_bytes": 54525952, "errno": null, "message": ""},
+      "expected": {"filesystem": "present", "size_knowledge": "known", "size_bytes": 54525952}
+    },
+    {
+      "name": "known-absence",
+      "stream": {"outcome": "absent", "kind": null, "size_bytes": null, "errno": 2, "message": "missing"},
+      "expected": {"filesystem": "absent", "size_knowledge": "unknown", "size_reason": "absent"}
+    },
+    {
+      "name": "inspection-failure",
+      "stream": {"outcome": "failed", "kind": null, "size_bytes": null, "errno": 13, "message": "denied"},
+      "expected": {"filesystem": "unknown", "filesystem_reason": "inspection_failed", "size_knowledge": "unknown", "size_reason": "inspection_failed"}
+    }
+  ]
+}
