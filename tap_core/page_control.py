@@ -7,6 +7,49 @@ from urllib.request import Request, urlopen
 from .runtime import TapError
 
 
+def allow(profile, origin: str):
+    """Persist one same-user development origin and refresh the live snapshot."""
+    from .bridge import exact_origin
+    try:
+        origin = exact_origin(origin)
+    except ValueError as error:
+        raise TapError(str(error)) from error
+    bridge = profile.bridge
+    if not bridge or not bridge.get("enabled"):
+        raise TapError("Development channel requires an enabled bridge")
+    from .bridge import development_configuration
+    from .pack_store import PackStore
+    from .runtime import atomic_json
+    development = development_configuration(profile.root)
+    tools = list(development["tools"])
+    registry = PackStore(profile.root).load()
+    inspector = registry.get("packs", {}).get("tap.inspector")
+    if inspector and inspector.get("enabled") and "tap.inspector" not in tools:
+        tools.append("tap.inspector")
+    changed = (origin not in bridge["allow_origins"] or origin in bridge["exclude_origins"]
+               or origin not in development["origins"] or tools != development["tools"])
+    if origin not in bridge["allow_origins"]:
+        bridge["allow_origins"].append(origin)
+    if origin in bridge["exclude_origins"]:
+        bridge["exclude_origins"].remove(origin)
+    if changed:
+        origins = list(development["origins"])
+        if origin not in origins:
+            origins.append(origin)
+        atomic_json(profile.root / "state/development.json",
+                    {"version": 1, "origins": origins, "tools": tools})
+        profile.save()
+    return {
+        "origin": origin,
+        "allowed": True,
+        "changed": changed,
+        "applies": "immediately to Hub authorization; reload an already-open page for bootstrap injection",
+        "mode": "development",
+        "tools": tools,
+        "pack_grants": "unchanged; named development tools receive a local page-only binding",
+    }
+
+
 def _runtime(root: Path):
     try:
         effective = json.loads((root / "state/effective-runtime.json").read_text())

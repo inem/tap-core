@@ -334,6 +334,8 @@ def parser():
     page_call.add_argument("--args", default="{}", help="JSON value passed unchanged to the page operation")
     dev = commands.add_parser("dev", help="Inspect and change one live page through the local development channel")
     dev_actions = dev.add_subparsers(dest="dev_action", required=True)
+    dev_allow = dev_actions.add_parser("allow", help="Allow one exact origin on the live development channel")
+    dev_allow.add_argument("origin")
     dev_actions.add_parser("pages", help="List pages currently connected to the development channel")
     dev_inspect = dev_actions.add_parser("inspect", help="Read a bounded DOM projection from one live page")
     dev_inspect.add_argument("page_id")
@@ -489,8 +491,12 @@ def main(argv=None):
             print(json.dumps(call(root, args.page_id, args.operation, page_args), indent=2))
             return 0
         if args.command == "dev":
-            from .page_control import execute, inspect, pages
-            if args.dev_action == "pages":
+            from .page_control import allow, execute, inspect, pages
+            if args.dev_action == "allow":
+                with profile_lock(root):
+                    profile = Profile.load(root)
+                    output = allow(profile, args.origin)
+            elif args.dev_action == "pages":
                 output = pages(root)
             elif args.dev_action == "inspect":
                 if not 1 <= args.limit <= 100:

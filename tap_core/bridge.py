@@ -34,6 +34,26 @@ RUNTIME_PATH = PREFIX + 'runtime.js'
 PLAN_VERSION = 'tap.page-plan/v1'
 
 
+def development_configuration(root):
+    """Read the private local-authoring overlay; absence means installed mode."""
+    try:
+        value = read_json(Path(root) / 'state/development.json')
+    except FileNotFoundError:
+        return {'version': 1, 'origins': [], 'tools': []}
+    if (type(value) is not dict or set(value) != {'version', 'origins', 'tools'}
+            or value['version'] != 1
+            or type(value['origins']) is not list or len(value['origins']) > 64
+            or type(value['tools']) is not list or len(value['tools']) > 16
+            or len(value['origins']) != len(set(value['origins']))
+            or len(value['tools']) != len(set(value['tools']))
+            or not all(type(origin) is str for origin in value['origins'])
+            or not all(type(tool) is str and RESOURCE_ID.fullmatch(tool) for tool in value['tools'])):
+        raise ValueError('Development configuration is malformed')
+    for origin in value['origins']:
+        exact_origin(origin)
+    return value
+
+
 def valid_feature_folder(value):
     if type(value) is not str or not 1 <= len(value) <= 240:
         return False
@@ -345,6 +365,9 @@ def effective_configuration(root, base):
     if (type(registry) is not dict or set(registry) != {'version', 'packs'}
             or registry['version'] != 1 or type(registry['packs']) is not dict):
         raise ValueError('Pack registry is malformed or incompatible')
+    development = development_configuration(root)
+    development_origins = set(development['origins'])
+    development_tools = set(development['tools'])
     result = json.loads(json.dumps(base))
     base_origins = list(result['allow_origins'])
     script_origins = [list(base_origins) for _ in result['page_scripts']]
@@ -430,8 +453,11 @@ def effective_configuration(root, base):
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
             if metadata['hashes'].get(name) != digest:
                 raise ValueError(f'Enabled pack integrity check failed: {pack_id}@{version}')
+        page_origins = list(requested_origins)
+        if pack_id in development_tools and 'page' in roles:
+            page_origins += sorted(development_origins - set(page_origins))
         page_pack_origins.append({'id': pack_id, 'version': version,
-                                  'origins': list(requested_origins),
+                                  'origins': page_origins,
                                   'features': json.loads(json.dumps(features))})
         if roles & {'page', 'handler'}:
             has_bridge_bindings = True
@@ -481,7 +507,7 @@ def effective_configuration(root, base):
             if (resource['file'] not in expected
                     or metadata['hashes'].get(resource['file']) != resource['sha256']):
                 raise ValueError(f'Enabled pack page script is undeclared: {pack_id}@{version}')
-        use_orders.append({'pack': pack_id, 'origins': tuple(requested_origins),
+        use_orders.append({'pack': pack_id, 'origins': tuple(page_origins),
                            'resources': tuple(use['id'] for use in page['uses'])})
         for use in page['uses']:
             resource = resource_index[(use['id'], use['version'])]
@@ -495,7 +521,7 @@ def effective_configuration(root, base):
             declaration = {'version': use['version'],
                            'digest': resource['sha256'],
                            'path': str(shared),
-                           'origins': set(requested_origins),
+                           'origins': set(page_origins),
                            'pack': pack_id}
             current = declarations.get(resource_id)
             if current is None:
@@ -507,7 +533,7 @@ def effective_configuration(root, base):
             if current['digest'] != declaration['digest']:
                 raise ValueError(f"Page resource {resource_id}@{use['version']} has conflicting "
                                  f"content in {current['pack']} and {pack_id}")
-            current['origins'].update(requested_origins)
+            current['origins'].update(page_origins)
     if not any_enabled or not has_bridge_bindings:
         return base
     if declarations:
@@ -565,6 +591,7 @@ class Bridge:
         self.bootstrap_origins = set()
         self._profile_root = None
         self._plan_checked_at = 0.0
+        self.development_origins = set()
         if config:
             self.bootstrap_origins.update(origin for origin in config['allow_origins']
                                           if origin not in config['exclude_origins'])
@@ -608,15 +635,16 @@ class Bridge:
 
     def page_plan(self, origin):
         access = 'current' if self.allowed(origin) else 'revoked'
+        mode = 'development' if origin in self.development_origins else 'installed'
         scripts = self.origin_digests(origin) if access == 'current' else []
         packs = ([{'id': item['id'], 'version': item['version'],
                    'features': item.get('features', [])}
                   for item in self.page_pack_origins if origin in item['origins']]
                  if access == 'current' else [])
-        revision = hashlib.sha256(json.dumps({'access': access, 'scripts': scripts, 'packs': packs},
+        revision = hashlib.sha256(json.dumps({'access': access, 'mode': mode, 'scripts': scripts, 'packs': packs},
                                              sort_keys=True, separators=(',', ':')).encode()).hexdigest()
         return {'version': PLAN_VERSION, 'revision': revision, 'scripts': scripts,
-                'packs': packs, 'access': access, 'application': 'reload'}
+                'packs': packs, 'access': access, 'mode': mode, 'application': 'reload'}
 
     def _read_ws_origins(self, profile, bridge=None):
         # Unmanaged profiles retain their external Hub contract. An enabled
@@ -671,6 +699,7 @@ class Bridge:
         self._plan_checked_at = now
         try:
             profile = read_json(self._profile_root / 'profile.json')
+            self.development_origins = set(development_configuration(self._profile_root)['origins'])
             base = configuration(profile['bridge'])
             plan = effective_configuration(self._profile_root, base)
             if profile.get('components') is not None:
@@ -690,6 +719,7 @@ class Bridge:
         root = Path(os.environ['TAP_CORE_PROFILE'])
         self._profile_root = root
         profile = read_json(root / 'profile.json')
+        self.development_origins = set(development_configuration(root)['origins'])
         self.config = effective_configuration(root, configuration(profile['bridge']))
         if profile.get('components') is not None:
             self.component_token = read_token(root, 'component-token')
@@ -825,6 +855,7 @@ class Bridge:
         websocket_enabled = self.ws_origins is None or origin in self.ws_origins
         scripts = [f'<script id="{MARKER}"{nonce_attr} data-tap-token="{self.token}" '
                    f'data-tap-plan="{plan["revision"]}" data-tap-ws="{str(websocket_enabled).lower()}" '
+                   f'data-tap-mode="{plan["mode"]}" '
                    f'src="{asset_root}runtime.js?token={self.token}"></script>']
         digests = plan['scripts']
         scripts += [f'<script{nonce_attr} src="{asset_root}core/{digest}.js?token={self.token}"></script>'

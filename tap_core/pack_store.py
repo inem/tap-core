@@ -387,6 +387,10 @@ class PackStore:
         return enabled
 
     def _effective_bridge(self, registry, base):
+        from .bridge import development_configuration
+        development = development_configuration(self.root)
+        development_origins = set(development["origins"])
+        development_tools = set(development["tools"])
         enabled = self._enabled_packs(registry)
         page_packs = []
         origin_packs = []
@@ -404,12 +408,15 @@ class PackStore:
         result = json.loads(json.dumps(base))
         base_origins = list(result["allow_origins"])
         script_origins = [list(base_origins) for _ in result["page_scripts"]]
-        page_pack_origins = [
-            {"id": pack_id, "version": manifest["version"],
-             "origins": list(manifest["access"]["origins"]),
-             "features": json.loads(json.dumps(manifest.get("features", [])))}
-            for pack_id, _root, manifest, _record in enabled
-        ]
+        page_pack_origins = []
+        for pack_id, _root, manifest, _record in enabled:
+            origins = list(manifest["access"]["origins"])
+            if pack_id in development_tools and "page" in manifest["entrypoints"]:
+                origins += sorted(development_origins - set(origins))
+            page_pack_origins.append({
+                "id": pack_id, "version": manifest["version"], "origins": origins,
+                "features": json.loads(json.dumps(manifest.get("features", []))),
+            })
         for _pack_id, manifest in origin_packs:
             for origin in manifest["access"]["origins"]:
                 if origin not in result["allow_origins"]:
@@ -424,7 +431,9 @@ class PackStore:
         declarations = {}
         use_orders = []
         for pack_id, root, manifest, page, record in page_packs:
-            origins = manifest["access"]["origins"]
+            origins = list(manifest["access"]["origins"])
+            if pack_id in development_tools:
+                origins += sorted(development_origins - set(origins))
             use_orders.append({"pack": pack_id, "origins": tuple(origins),
                                "resources": tuple(use["id"] for use in page["uses"])})
             resources = {(resource["id"], resource["version"]): resource

@@ -135,6 +135,24 @@ class PackStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(PackError, "shared page resource"):
             self.store.effective_bridge(bridge())
 
+    def test_development_tool_gets_page_only_binding_on_dev_origin(self):
+        artifact = self.artifact(SOURCE, "tool.tap-pack")
+        self.store.install(artifact)
+        self.store.enable(PACK_ID, "0.1.0",
+                          origins=ORIGINS, capabilities=CAPABILITIES)
+        development_origin = "https://www.google.com"
+        (self.profile / "state/development.json").write_text(json.dumps({
+            "version": 1, "origins": [development_origin], "tools": [PACK_ID],
+        }) + "\n")
+        base = bridge()
+        base["allow_origins"] = [development_origin]
+        effective = self.store.effective_bridge(base)
+        self.assertTrue(all(development_origin in origins
+                            for origins in effective["page_script_origins"]))
+        pack = next(item for item in effective["page_pack_origins"]
+                    if item["id"] == PACK_ID)
+        self.assertEqual(pack["origins"], ORIGINS + [development_origin])
+
     def test_update_rollback_disable_and_uninstall_preserve_owned_data(self):
         first = self.artifact(SOURCE, "v1.tap-pack")
         second = self.artifact(self.source_version("0.2.0", "version two"), "v2.tap-pack")
