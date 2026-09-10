@@ -57,6 +57,13 @@ try {
   }
   assert.equal((await fetch(base+'/health')).status,403); checks++;
   assert.equal((await fetch(base+'/__tap/probe/runtime.js',{headers})).status,200); checks++;
+  const liveOrigin = 'https://live.example';
+  const liveHeaders = {...headers, 'x-tap-probe-origin':liveOrigin, origin:liveOrigin};
+  assert.equal((await fetch(base+'/__tap/probe/runtime.js',{headers:liveHeaders})).status,403);
+  const effective = JSON.parse(readFileSync(join(root, 'state/effective-runtime.json')));
+  effective.bridge.allow_origins.push(liveOrigin);
+  writeFileSync(join(root, 'state/effective-runtime.json'), JSON.stringify(effective));
+  assert.equal((await fetch(base+'/__tap/probe/runtime.js',{headers:liveHeaders})).status,200); checks++;
   assert.equal((await fetch(base+'/__tap/probe/runtime.js',{headers,method:'POST'})).status,405); checks++;
   const a = await connect(), b = await connect();
   assert.equal((await fetch(base+'/v1/pages')).status,403); checks++;

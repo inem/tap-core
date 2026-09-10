@@ -5,6 +5,7 @@
   const bootstrap = document.currentScript;
   const token = bootstrap.dataset.tapToken;
   const websocketEnabled = bootstrap.dataset.tapWs !== 'false';
+  let appliedMode = bootstrap.dataset.tapMode === 'development' ? 'development' : 'installed';
   const version = 'tap.bridge/v1', page = crypto.randomUUID();
   const planVersion = 'tap.page-plan/v1';
   let appliedPlan = bootstrap.dataset.tapPlan, appliedPacks = [];
@@ -103,6 +104,7 @@
       const plan = await response.json();
       if (!plan || plan.version !== planVersion || !/^[a-f0-9]{64}$/.test(plan.revision)
           || !Array.isArray(plan.scripts) || !['current','revoked'].includes(plan.access)
+          || !['installed','development'].includes(plan.mode)
           || !Array.isArray(plan.packs) || plan.packs.some((pack, index) => !pack
             || typeof pack.id !== 'string' || !/^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/.test(pack.id)
             || typeof pack.version !== 'string' || !/^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/.test(pack.version)
@@ -123,7 +125,7 @@
         location.replace(target.href);
         return;
       }
-      appliedPlan = plan.revision; appliedPacks = plan.packs.map(pack => Object.freeze({
+      appliedPlan = plan.revision; appliedMode = plan.mode; appliedPacks = plan.packs.map(pack => Object.freeze({
         ...pack, features:Object.freeze((pack.features || []).map(feature => Object.freeze({...feature}))),
       })); planState = plan.access;
       schedulePlan();
@@ -174,7 +176,7 @@
   window.TapBridge = Object.freeze({
     status: () => ({state, scope:'document', pending:pending.size,
       activity:{pending:pending.size + inbound.size, outbound:pending.size, inbound:inbound.size, sequence:activitySequence},
-      plan: appliedPlan, plan_state: planState, packs: appliedPacks,
+      plan: appliedPlan, plan_state: planState, mode: appliedMode, packs: appliedPacks,
       actions: !websocketEnabled ? [] : paused ? ['connect'] : state === 'unavailable' ? ['reconnect','disconnect'] : ['disconnect']}),
     disconnect() { if (!websocketEnabled) return; paused = true; stop(); state = 'paused'; },
     connect() { if (!websocketEnabled || closed) return; paused = false; attempt = 0; connect(); },

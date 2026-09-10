@@ -22,11 +22,26 @@ The page bootstrap exposes two Core-owned development operations:
 The installed CLI gives these operations a development vocabulary:
 
 ```sh
+tap dev allow https://example.com
 tap dev pages
 tap dev inspect PAGE_ID 'main' --limit 20
 tap dev execute PAGE_ID --source 'return document.title'
 tap dev execute PAGE_ID --file /absolute/path/to/experiment.js
 ```
+
+`tap dev allow` accepts one exact canonical HTTP(S) origin. It persists the
+same-user development grant and refreshes the effective runtime snapshot. A
+running Hub reads that snapshot for new bootstrap and WebSocket requests, so
+the command does not restart capture, readers, the controller or system
+routing. Reload a document that was already open before the grant so its next
+HTML response receives the bootstrap. Repeating the command is a no-op.
+
+The page runtime exposes `mode: development` through `TapBridge.status()`, so
+development UI can render a distinct state. If the optional `tap.inspector` pack
+is already enabled, Core binds its page resource to development origins and the
+inspector lamp appears there. This local page-only binding does not expand the
+pack's installed grants or handler authority. Other page packs remain scoped to
+their installed origin grants.
 
 The caller must possess the profile-local component token, and every command is
 addressed to one volatile page/session. Calls are bounded by the existing input,

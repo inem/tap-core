@@ -5,15 +5,15 @@ class WS {static OPEN=1;constructor(){this.readyState=0;this.messages=[];sockets
 const location={href:'https://fixture.test/path?q=1',origin:'https://fixture.test',protocol:'https:',replace:value=>{replaced=value;}};
 const fixtureNode={tagName:'MAIN',id:'content',classList:['wide'],innerText:'Visible content',outerHTML:'<main id="content" class="wide">Visible content</main>',getAttribute:name=>name==='role'?'main':null,getBoundingClientRect:()=>({x:1,y:2,width:300,height:200})};
 let context;
-const document={currentScript:{dataset:{tapToken:'synthetic',tapPlan:currentPlan,tapWs:'true'},nonce:'fixture-nonce'},title:'Fixture page',querySelectorAll:selector=>selector==='main'?[fixtureNode]:[],createElement:()=>({textContent:'',nonce:'',remove(){}}),documentElement:{appendChild:script=>vm.runInContext(script.textContent,context)}};
-const scope={WebSocket:WS,URL,TextEncoder,crypto:{randomUUID:()=>String(++n)},fetch:async()=>({ok:fetchOk,json:async()=>({version:'tap.page-plan/v1',revision:currentPlan,scripts:[],packs:currentPacks,access:'current',application:'reload'})}),document,getComputedStyle:()=>({display:'block',visibility:'visible'}),location,addEventListener:(name,f)=>events[name]=f,setTimeout:(f,delay)=>{timers.set(++n,{f,delay});return n;},clearTimeout:id=>timers.delete(id)};
+const document={currentScript:{dataset:{tapToken:'synthetic',tapPlan:currentPlan,tapWs:'true',tapMode:'development'},nonce:'fixture-nonce'},title:'Fixture page',querySelectorAll:selector=>selector==='main'?[fixtureNode]:[],createElement:()=>({textContent:'',nonce:'',remove(){}}),documentElement:{appendChild:script=>vm.runInContext(script.textContent,context)}};
+const scope={WebSocket:WS,URL,TextEncoder,crypto:{randomUUID:()=>String(++n)},fetch:async()=>({ok:fetchOk,json:async()=>({version:'tap.page-plan/v1',revision:currentPlan,scripts:[],packs:currentPacks,access:'current',mode:'development',application:'reload'})}),document,getComputedStyle:()=>({display:'block',visibility:'visible'}),location,addEventListener:(name,f)=>events[name]=f,setTimeout:(f,delay)=>{timers.set(++n,{f,delay});return n;},clearTimeout:id=>timers.delete(id)};
 scope.window=scope;scope.top=scope;context=vm.createContext(scope);vm.runInContext(fs.readFileSync(process.argv[2],'utf8'),context);
 const b=scope.TapBridge;
 function welcome(s){s.readyState=1;s.onopen();s.onmessage({data:JSON.stringify({version:'tap.bridge/v1',kind:'Welcome',page:s.sent.page,session:'fixture'})});}
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
 async function runDelay(delay){const item=[...timers].find(([,v])=>v.delay===delay);assert(item);timers.delete(item[0]);await item[1].f();await flush();}
 (async()=>{
- await runDelay(0);assert.equal(b.status().packs[0].id,'fixture.page');assert.equal(b.status().packs[0].features[0].folder,'data/readers/fixture.page');
+ await runDelay(0);assert.equal(b.status().mode,'development');assert.equal(b.status().packs[0].id,'fixture.page');assert.equal(b.status().packs[0].features[0].folder,'data/readers/fixture.page');
  assert.equal(sockets.length,1);b.connect();assert.equal(sockets.length,1);
  welcome(sockets[0]);await flush();assert(b.isReady());
  sockets[0].onmessage({data:JSON.stringify({version:'tap.bridge/v1',kind:'Command',session:'fixture',id:'dev-inspect',operation:'tap.dev.inspect',args:{selector:'main',limit:20}})});

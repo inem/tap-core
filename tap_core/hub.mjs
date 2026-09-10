@@ -18,9 +18,21 @@ const pages = new Map(), commands = new Map();
 let active = 0;
 let planRevision = null;
 const equal = (a, b) => typeof a === 'string' && Buffer.byteLength(a) === Buffer.byteLength(b) && timingSafeEqual(Buffer.from(a), Buffer.from(b));
-const allowed = origin => bridge.enabled
-  && bridge.allow_origins.includes(origin)
-  && !(profile.bridge?.exclude_origins ?? bridge.exclude_origins).includes(origin);
+function liveBridge() {
+  try {
+    const value = JSON.parse(readFileSync(join(root, 'state/effective-runtime.json'), 'utf8'))?.bridge;
+    const saved = JSON.parse(readFileSync(join(root, 'profile.json'), 'utf8'))?.bridge;
+    if (value && typeof value.enabled === 'boolean' && Array.isArray(value.allow_origins) && Array.isArray(value.exclude_origins))
+      return {...value, exclude_origins:Array.isArray(saved?.exclude_origins) ? saved.exclude_origins : value.exclude_origins};
+  } catch {}
+  return bridge;
+}
+const allowed = origin => {
+  const current = liveBridge();
+  return current.enabled
+    && current.allow_origins.includes(origin)
+    && !current.exclude_origins.includes(origin);
+};
 const encode = value => JSON.stringify(value);
 const fail = (code, message) => ({ok: false, error: {code, message, completion: 'unknown'}});
 function send(ws, value) { if (!ws.data.closed) ws.send(encode({version: VERSION, session: ws.data.session, ...value})); }
