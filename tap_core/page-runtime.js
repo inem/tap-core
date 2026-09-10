@@ -58,7 +58,10 @@
               || pack.features.some(feature => !feature || typeof feature.id !== 'string'
                 || !/^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/.test(feature.id)
                 || typeof feature.label !== 'string' || !feature.label || feature.label.length > 80
-                || typeof feature.value !== 'string' || !feature.value || feature.value.length > 160))
+                || typeof feature.value !== 'string' || !feature.value || feature.value.length > 160
+                || feature.folder !== undefined && (typeof feature.folder !== 'string'
+                  || !feature.folder || feature.folder.length > 240
+                  || !/^data(?:\/(?!\.{1,2}(?:\/|$))[^/\\\0]+)*$/.test(feature.folder))))
             || plan.packs.findIndex(other => other.id === pack.id) !== index)
           || plan.application !== 'reload') throw new Error('plan_invalid');
       if (appliedPlan && plan.revision !== appliedPlan) {

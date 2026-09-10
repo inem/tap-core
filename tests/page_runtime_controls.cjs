@@ -1,6 +1,6 @@
 const vm=require('node:vm'),fs=require('node:fs'),assert=require('node:assert/strict');
 const sockets=[],events={},timers=new Map();let n=0,replaced=null,fetchOk=true;
-let currentPlan='a'.repeat(64),currentPacks=[{id:'fixture.page',version:'1.2.3'}];
+let currentPlan='a'.repeat(64),currentPacks=[{id:'fixture.page',version:'1.2.3',features:[{id:'archive',label:'Archive',value:'Local',folder:'data/readers/fixture.page'}]}];
 class WS {static OPEN=1;constructor(){this.readyState=0;this.messages=[];sockets.push(this);}send(s){this.sent=JSON.parse(s);this.messages.push(this.sent);}close(){this.readyState=3;this.onclose?.();}}
 const location={href:'https://fixture.test/path?q=1',origin:'https://fixture.test',protocol:'https:',replace:value=>{replaced=value;}};
 const scope={WebSocket:WS,URL,TextEncoder,crypto:{randomUUID:()=>String(++n)},fetch:async()=>({ok:fetchOk,json:async()=>({version:'tap.page-plan/v1',revision:currentPlan,scripts:[],packs:currentPacks,access:'current',application:'reload'})}),document:{currentScript:{dataset:{tapToken:'synthetic',tapPlan:currentPlan,tapWs:'true'}}},location,addEventListener:(name,f)=>events[name]=f,setTimeout:(f,delay)=>{timers.set(++n,{f,delay});return n;},clearTimeout:id=>timers.delete(id)};
@@ -10,7 +10,7 @@ function welcome(s){s.readyState=1;s.onopen();s.onmessage({data:JSON.stringify({
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
 async function runDelay(delay){const item=[...timers].find(([,v])=>v.delay===delay);assert(item);timers.delete(item[0]);await item[1].f();await flush();}
 (async()=>{
- await runDelay(0);assert.equal(b.status().packs[0].id,'fixture.page');
+ await runDelay(0);assert.equal(b.status().packs[0].id,'fixture.page');assert.equal(b.status().packs[0].features[0].folder,'data/readers/fixture.page');
  assert.equal(sockets.length,1);b.connect();assert.equal(sockets.length,1);
  welcome(sockets[0]);await flush();assert(b.isReady());
  let finish;
