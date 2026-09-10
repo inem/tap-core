@@ -94,6 +94,7 @@ first applied command provider.
 - Local records, body storage and repeatable processing by independent readers.
 - Response mutators, injected page code and a same-origin WebSocket bridge to local tools.
 - Bidirectional opaque page commands: packs expose operations; Core only routes bounded JSON over the local WebSocket.
+- An addressed local development channel can inspect and change one connected page before code becomes a pack artifact.
 - Pack installation, lifecycle, configuration, compatibility checks and diagnostics.
 - Installation, update, recovery and removal on supported macOS configurations.
 

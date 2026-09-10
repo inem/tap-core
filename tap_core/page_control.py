@@ -52,3 +52,11 @@ def call(root: Path, page: str, operation: str, args):
     from urllib.parse import quote
     return request(root, "POST", f"/v1/pages/{quote(page, safe='')}/commands",
                    {"operation": operation, "args": args})
+
+
+def inspect(root: Path, page: str, selector: str, limit: int):
+    return call(root, page, "tap.dev.inspect", {"selector": selector, "limit": limit})
+
+
+def execute(root: Path, page: str, source: str):
+    return call(root, page, "tap.dev.execute", {"source": source})

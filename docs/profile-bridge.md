@@ -132,6 +132,13 @@ replacement. `TapBridge.status().activity` exposes only generic inbound/outbound
 counts and a monotonic sequence so page UI can show transport activity without
 learning command semantics.
 
+Core also reserves `tap.dev.inspect` and `tap.dev.execute` on every connected page
+for local authoring. They expose a bounded DOM projection and explicit trusted
+development JavaScript without requiring a pack artifact or version. See
+[live page development](page-development.md). Pack operations continue to use
+their own names through `TapBridge.expose`; they cannot replace the reserved
+development operations.
+
 ## Diagnostics and verification
 
 Status/doctor check that `state/bridge.json` belongs to the current service PID

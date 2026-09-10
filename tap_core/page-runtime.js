@@ -10,6 +10,7 @@
   let appliedPlan = bootstrap.dataset.tapPlan, appliedPacks = [];
   const pending = new Map();
   const exposed = new Map(), inbound = new Set();
+  const devExecutions = new Map();
   let activitySequence = 0;
   let socket, session, timer, planTimer, checkingPlan = false, reloading = false, planState = 'current';
   let closed = false, attempt = 0, paused = !websocketEnabled;
@@ -27,6 +28,57 @@
       encoded = JSON.stringify({version, session, kind:'CommandResult', id, ok:false, error:{code:'output_limit', message:'Command result exceeds 256 KiB'}});
     if (socket?.readyState === WebSocket.OPEN) socket.send(encoded);
   }
+  function inspectPage(args) {
+    if (!args || typeof args.selector !== 'string' || !args.selector || args.selector.length > 2048
+        || !Number.isInteger(args.limit) || args.limit < 1 || args.limit > 100)
+      throw Object.assign(new Error('Expected selector and limit from 1 to 100'), {code:'invalid_arguments'});
+    let selected;
+    try { selected = document.querySelectorAll(args.selector); }
+    catch { throw Object.assign(new Error('Selector is invalid'), {code:'invalid_selector'}); }
+    const nodes = Array.from(selected).slice(0, args.limit).map(node => {
+      const rect = node.getBoundingClientRect();
+      const style = getComputedStyle(node);
+      return {
+        tag:String(node.tagName || '').toLowerCase(), id:node.id || null,
+        classes:Array.from(node.classList || []).slice(0, 32), role:node.getAttribute?.('role') || null,
+        text:String(node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 1024),
+        rect:{x:rect.x, y:rect.y, width:rect.width, height:rect.height},
+        visible:style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0,
+        html:String(node.outerHTML || '').slice(0, 4096),
+      };
+    });
+    return {url:location.href, title:document.title, selector:args.selector, total:selected.length, nodes};
+  }
+  const devCallback = '__tapDevResult_' + page.replaceAll('-', '');
+  Object.defineProperty(window, devCallback, {enumerable:false, configurable:false, value:(id, outcome) => {
+    const task = devExecutions.get(id);
+    if (!task) return;
+    Promise.resolve(outcome).then(task.resolve, task.reject).finally(() => {
+      clearTimeout(task.timer); devExecutions.delete(id);
+    });
+  }});
+  function executeDevelopmentSource(args) {
+    if (!args || typeof args.source !== 'string' || !args.source
+        || new TextEncoder().encode(args.source).length > 65536)
+      throw Object.assign(new Error('Expected 1 to 65536 UTF-8 bytes of source'), {code:'invalid_arguments'});
+    const id = crypto.randomUUID();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        devExecutions.delete(id);
+        reject(Object.assign(new Error('Development source did not complete'), {code:'execution_timeout'}));
+      }, 5000);
+      devExecutions.set(id, {resolve, reject, timer});
+      const script = document.createElement('script');
+      if (bootstrap.nonce) script.nonce = bootstrap.nonce;
+      script.textContent = `window[${JSON.stringify(devCallback)}](${JSON.stringify(id)},(async()=>{\n${args.source}\n})())`;
+      try { (document.head || document.documentElement).appendChild(script); }
+      catch (cause) {
+        clearTimeout(timer); devExecutions.delete(id); reject(cause);
+      } finally { script.remove(); }
+    });
+  }
+  exposed.set('tap.dev.inspect', inspectPage);
+  exposed.set('tap.dev.execute', executeDevelopmentSource);
   async function runCommand(value) {
     if (inbound.size >= 4) return commandResult(value.id, false, {code:'busy', message:'Page command capacity exceeded'});
     const handler = exposed.get(value.operation);
