@@ -37,7 +37,10 @@ class DevelopmentOriginTests(unittest.TestCase):
         self.assertFalse(allow(self.profile, "https://www.google.com")["changed"])
 
     def test_cli_accepts_allow_origin(self):
-        args = parser().parse_args(["dev", "allow", "https://example.test"])
+        args = parser().parse_args([
+            "--profile", str(self.root),
+            "dev", "allow", "https://example.test",
+        ])
         self.assertEqual((args.command, args.dev_action, args.origin),
                          ("dev", "allow", "https://example.test"))
 
