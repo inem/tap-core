@@ -14,6 +14,7 @@ from unittest.mock import Mock, PropertyMock, patch
 
 from tap_core.components import Job, _start, configuration, needs_hub, status, stop
 from tap_core.pack_store import PackStore, build_artifact
+from tap_core.readers import Reader
 from tap_core.runtime import Profile, TapError
 from test_bridge import config
 from test_records_journal import capture_record, encoded
@@ -163,7 +164,7 @@ class HublessReaderTests(unittest.TestCase):
         self.seed_journal('{"item":1}')
         adapter = self.start_hubless()
         observed = status(Profile.load(self.profile_root), adapter)
-        self.assertTrue(observed['healthy'], observed)
+        self.assertTrue(observed['ready'], observed)
         self.assertIsNone(observed.get('hub_pid'))
         self.assertIn('example.reader', observed['readers'])
         deadline = time.monotonic() + 10
@@ -212,4 +213,37 @@ class HublessReaderTests(unittest.TestCase):
         self.assertGreater(resumed['processed'], first['processed'])
         self.assertEqual(resumed['definition'], first['definition'])
         self.assertIn('"item": 2', output.read_text())
+        stop(Profile.load(self.profile_root), adapter)
+
+    def test_retention_gap_does_not_block_component_infrastructure_startup(self):
+        self.install_reader()
+        self.seed_journal('{"item":"retained-before-gap"}')
+        profile = Profile.load(self.profile_root)
+        spec = self.store.effective_components(self.components)['readers']['example.reader']
+        Reader(profile, 'example.reader').run(spec, max_records=1, timeout=5)
+
+        # Replace the only segment after the acknowledged cursor. The reader
+        # must preserve and report the gap rather than silently skipping it.
+        self.seed_journal('{"item":"current-after-gap"}')
+        adapter = self.start_hubless()
+        observed = status(Profile.load(self.profile_root), adapter)
+        self.assertTrue(observed['ready'], observed)
+
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            observed = status(Profile.load(self.profile_root), adapter)
+            reader = observed.get('readers', {}).get('example.reader', {})
+            if reader.get('phase') == 'failed':
+                break
+            time.sleep(0.05)
+        else:
+            self.fail('reader did not expose the retention gap: ' + repr(observed))
+
+        self.assertTrue(observed['ready'], observed)
+        self.assertFalse(observed['healthy'], observed)
+        self.assertIn('JournalGap', reader['error'])
+        self.assertEqual(reader['failures'], 3)
+        checkpoint = Reader(profile, 'example.reader').load()
+        self.assertEqual(checkpoint['processed'], 1)
+        self.assertEqual(checkpoint['phase'], 'gap')
         stop(Profile.load(self.profile_root), adapter)
