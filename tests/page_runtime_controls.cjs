@@ -37,5 +37,5 @@ async function runDelay(delay){const item=[...timers].find(([,v])=>v.delay===del
  await flush();assert.equal(b.status().plan_state,'unavailable');assert.equal(replaced,null);
  fetchOk=true;await runDelay(5000);
  assert.equal(replaced,'https://fixture.test/path?q=1&tap-ui='+currentPlan.slice(0,12));
- console.log('PASS development inspect/execute, connection controls, pending unknown/no replay, stale sockets, BFCache pause, retry cancellation, plan refresh');
+ console.log('PASS connection controls, development inspect/execute, pending unknown/no replay, stale sockets, BFCache pause, retry cancellation, plan refresh');
 })().catch(e=>{console.error(e);process.exitCode=1;});
