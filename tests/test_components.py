@@ -65,6 +65,28 @@ class ComponentTests(unittest.TestCase):
         with self.assertRaisesRegex(TapError, 'requires managed Hub components'):
             _start(self.profile, Mock())
 
+    def test_failed_reader_does_not_make_live_control_plane_unhealthy(self):
+        from unittest.mock import patch
+        self.profile.components = self.binding
+        self.profile.save()
+        state = {
+            'pid': 4321, 'updated_at': time.time(), 'configuration': identity(self.profile),
+            'phase': 'ready', 'healthy': False, 'hub_pid': 9876, 'error': None,
+            'readers': {
+                'broken': {'healthy': False, 'phase': 'failed', 'failures': 3,
+                           'error': 'JournalGap: retained segment unavailable'}
+            }
+        }
+        (self.root / 'state/components.json').write_text(json.dumps(state))
+        adapter = Mock()
+        adapter.service_pid.return_value = 4321
+        with patch('tap_core.components.hub_health', return_value={'pid': 9876}):
+            observed = status(self.profile, adapter)
+        self.assertTrue(observed['ready'])
+        self.assertTrue(observed['healthy'])
+        self.assertFalse(observed['workloads_healthy'])
+        self.assertEqual(observed['readers']['broken']['phase'], 'failed')
+
     def test_component_identity_ignores_page_only_resource_changes(self):
         from unittest.mock import patch
         self.profile.components = self.binding

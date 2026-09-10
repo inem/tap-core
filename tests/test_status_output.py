@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from tap_core.cli import main
+from tap_core.cli import main, parser
 from tap_core.projection import (Atom, Derivation, Document, ProjectionConflict,
                                  ProjectionError, Slot, document_from_claims,
                                  evaluate_rules, render_terminal,
@@ -174,9 +174,9 @@ class StatusContractTests(unittest.TestCase):
              ("inactive", "controller_observation_absent")),
             (dict(ready, healthy=False, phase="starting"),
              ("starting", "controller_starting")),
-            (ready, ("ready", "controller_and_required_probes_healthy")),
+            (ready, ("ready", "page_control_plane_healthy")),
             (dict(ready, healthy=False),
-             ("degraded", "controller_or_required_probe_unhealthy")),
+             ("degraded", "page_control_plane_unhealthy")),
             (dict(ready, healthy=False, current_process=False),
              ("stale", "controller_state_not_current")),
             (dict(ready, healthy=False, current_process=False, phase="failed",
@@ -192,7 +192,7 @@ class StatusContractTests(unittest.TestCase):
         self.assertEqual(unknown["components"], ("unknown", "inspection_incomplete"))
 
     def test_named_reader_collection_becomes_stable_independent_meanings(self):
-        components = {"configured": True, "healthy": False, "current_process": True,
+        components = {"configured": True, "healthy": True, "current_process": True,
                       "phase": "ready", "hub_pid": 4321, "error": None,
                       "readers": {
                           "zeta": {"healthy": False, "phase": "backoff", "failures": 1,
@@ -450,7 +450,7 @@ class ProjectionKernelTests(unittest.TestCase):
         result = render_terminal_result(projection.document, 24)
         self.assertEqual(result.text,
                          "tap           ● up\nbrowser/apps  ○ direct\ncapture       ● ready\n"
-                         "bridge        ○ absent\ncomponents    ○ absent")
+                         "bridge        ○ absent\ncontrol       ○ absent")
         self.assertEqual([item["slot"] for item in result.omissions],
                          ["runtime-attachment", "routing-attachment", "capture-attachment",
                           "bridge-attachment", "components-attachment"])
@@ -584,6 +584,11 @@ class MaterialCompositionTests(unittest.TestCase):
 
 
 class StatusCliTests(unittest.TestCase):
+    def test_installed_profile_option_is_hidden_from_ordinary_help(self):
+        help_text = parser().format_help()
+        self.assertNotIn('--profile', help_text)
+        self.assertNotIn('profile-scoped', help_text)
+
     def invoke(self, raw, *arguments, tty=False):
         class Output(io.StringIO):
             def isatty(self):
@@ -610,7 +615,7 @@ class StatusCliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(narrow,
                          "tap           ● up\nbrowser/apps  ○ direct\ncapture       ● ready\n"
-                         "bridge        ○ absent\ncomponents    ○ absent\n")
+                         "bridge        ○ absent\ncontrol       ○ absent\n")
         code, colored, _ = self.invoke(raw, "--output", "terminal", "--color", "always")
         self.assertEqual(code, 0)
         self.assertIn("\x1b[32m", colored)

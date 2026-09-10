@@ -133,8 +133,10 @@ def status(profile, adapter):
     if profile.components is None:
         if type(profile.bridge) is dict and profile.bridge.get('enabled'):
             return {'configured': False, 'healthy': False,
+                    'workloads_healthy': True, 'readers': {},
                     'error': 'Enabled bridge requires managed Hub components'}
-        return {'configured': False, 'healthy': True}
+        return {'configured': False, 'healthy': True,
+                'workloads_healthy': True, 'readers': {}}
     import math
     import time
     job = Job(profile)
@@ -165,8 +167,14 @@ def status(profile, adapter):
             except OSError:
                 pass
     ready = bool(current and fresh and live)
+    readers = state.get('readers', {})
+    workloads_healthy = (type(readers) is dict
+                         and all(type(row) is dict and row.get('healthy') is True
+                                 for row in readers.values()))
+    # `healthy` is the control-plane answer. Reader outcomes are workloads and
+    # remain visible without turning a live Hub/controller into a failed Hub.
     return dict(state, configured=True, current_process=current, ready=ready,
-                healthy=bool(ready and state['healthy']))
+                healthy=ready, workloads_healthy=workloads_healthy)
 
 
 def start(profile, adapter):

@@ -1,4 +1,4 @@
-"""Six existing TAP commands, with profile-scoped configuration and diagnostics."""
+"""Local capture, page control, packs and diagnostics for this TAP installation."""
 import argparse
 from contextlib import nullcontext
 import hashlib
@@ -251,13 +251,16 @@ def doctor(profile, adapter):
 
 def parser():
     result = argparse.ArgumentParser(description=__doc__)
-    result.add_argument("--profile", type=Path, required=True, help="Explicit profile directory")
+    # Installed launchers supply their owned profile. Keep the option for
+    # isolated fixtures and advanced multi-instance use without presenting it
+    # as part of the ordinary command surface.
+    result.add_argument("--profile", type=Path, required=True, help=argparse.SUPPRESS)
     commands = result.add_subparsers(dest="command", required=True)
     install = commands.add_parser(
-        "install", help="Install a new profile or repair an existing one; do not arm system proxy")
-    install.add_argument("--backend", type=Path, help="mitmdump 12.2.3 executable (required for a new profile)")
-    install.add_argument("--port", type=int, help="proxy port (required for a new profile)")
-    install.add_argument("--routing", choices=["explicit", "system"], help="routing mode (required for a new profile)")
+        "install", help="Install or repair this TAP instance; do not arm system proxy")
+    install.add_argument("--backend", type=Path, help="mitmdump 12.2.3 executable (required for first setup)")
+    install.add_argument("--port", type=int, help="proxy port (required for first setup)")
+    install.add_argument("--routing", choices=["explicit", "system"], help="routing mode (required for first setup)")
     install.add_argument("--probe-url")
     install.add_argument("--addon", type=Path, action="append", help="Additional trusted addon (optional)")
     install.add_argument("--bridge-config", type=Path, help="Explicit page bridge configuration JSON")
@@ -271,7 +274,7 @@ def parser():
     status_command.add_argument("--color", choices=("auto", "always", "never"), default="auto")
     routing = commands.add_parser(
         "routing",
-        help="Switch this profile's routing (explicit/system) in place; install/uninstall never change routing")
+        help="Switch this installation's routing (explicit/system) in place; install/uninstall never change routing")
     routing_actions = routing.add_subparsers(dest="routing_action", required=True)
     set_routing = routing_actions.add_parser(
         "set",

@@ -26,9 +26,11 @@ def main():
     configuration = identity(profile)
     def report(phase, hub_pid=None, error=None):
         with mutex:
+            workloads_healthy = all(row['healthy'] for row in rows.values())
             state = {'pid': os.getpid(), 'updated_at': time.time(), 'configuration': configuration,
-                     'phase': phase, 'healthy': phase == 'ready' and not error and all(row['healthy'] for row in rows.values()),
-                     'hub_pid': hub_pid, 'error': error, 'readers': dict(rows)}
+                     'phase': phase, 'healthy': phase == 'ready' and not error,
+                     'hub_pid': hub_pid, 'error': error,
+                     'workloads_healthy': workloads_healthy, 'readers': dict(rows)}
         atomic_json(health_path, state)
     def reader_loop(name, spec):
         reader, failures, first = Reader(profile, name), 0, True

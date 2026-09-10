@@ -74,7 +74,7 @@
         ["observation","components","error","known",null],
         ["collection-observation","component_readers","known","$count"]
       ],
-      "emit": [["candidate","components","state","ready",100,"controller_and_required_probes_healthy",[["reader_count","$count"],["hub_pid","$hub"]]]]
+      "emit": [["candidate","components","state","ready",100,"page_control_plane_healthy",[["reader_count","$count"],["hub_pid","$hub"]]]]
     },
     {
       "id": "components-50-degraded",
@@ -87,7 +87,7 @@
         ["observation","components","error","known",null],
         ["collection-observation","component_readers","known","$count"]
       ],
-      "emit": [["candidate","components","state","degraded",100,"controller_or_required_probe_unhealthy",[["reader_count","$count"],["hub_pid","$hub"]]]]
+      "emit": [["candidate","components","state","degraded",100,"page_control_plane_unhealthy",[["reader_count","$count"],["hub_pid","$hub"]]]]
     },
     {
       "id": "components-60-stale",
@@ -191,8 +191,8 @@
         ["appearance","components","absent","○ ","absent","muted","not configured"],
         ["appearance","components","inactive","○ ","inactive","muted","no controller observation"],
         ["appearance","components","starting","○ ","starting","warning","controller starting"],
-        ["appearance","components","ready","● ","ready","positive","owned controller healthy"],
-        ["appearance","components","degraded","✗ ","degraded","negative","controller or required probe unhealthy"],
+        ["appearance","components","ready","● ","ready","positive","page command router healthy"],
+        ["appearance","components","degraded","✗ ","degraded","negative","page command router unhealthy"],
         ["appearance","components","stale","⚠ ","stale","warning","state is not current"],
         ["appearance","components","failed","✗ ","failed","negative","controller reported failure"],
         ["appearance","components","unknown","? ","unknown","warning","inspection incomplete"],
@@ -212,7 +212,7 @@
       "emit": [
         ["slot","components-section","status",4,"group","section",false,"",null,[["meaning","components","state","$state","$reason","$attrs"]]],
         ["slot","components-line","components-section",0,"group","line",false,"",null,[["meaning","components","state","$state","$reason","$attrs"]]],
-        ["slot","components-label","components-line",0,"leaf","label",false,"components    ",null,[["meaning","components","state","$state","$reason","$attrs"]]],
+        ["slot","components-label","components-line",0,"leaf","label",false,"control       ",null,[["meaning","components","state","$state","$reason","$attrs"]]],
         ["slot","components-indicator","components-line",1,"leaf","indicator",false,"$indicator","$style",[["meaning","components","state","$state","$reason","$attrs"]]],
         ["slot","components-value","components-line",2,"leaf","value",false,"$value","$style",[["meaning","components","state","$state","$reason","$attrs"]]],
         ["slot","components-attachment","components-line",3,"group","support",true,"",null,[["meaning","components","state","$state","$reason","$attrs"]]],
