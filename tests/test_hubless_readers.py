@@ -115,17 +115,16 @@ class HublessReaderTests(unittest.TestCase):
                 'echo': {'command': [sys.executable, '-c', 'pass'], 'config': {},
                          'origins': ['https://fixture.example']}}), self.profile)
 
-    def test_enabled_bridge_requires_hub_even_without_handlers(self):
+    def test_enabled_page_bridge_is_hubless_without_handlers(self):
         bridge = config(enabled=True, hub_port=19311, allow_origins=[], exclude_origins=[],
                         page_scripts=[])
         components = dict(version=1, python=sys.executable, bun='/usr/bin/true',
                           readers={}, handlers={})
         profile = Profile(self.root / 'hubful', '/fixture/backend', 19312, 'explicit',
                           'http://fixture.example', [], bridge=bridge, components=components)
-        self.assertTrue(needs_hub(components, bridge))
+        self.assertFalse(needs_hub(components, bridge))
         configuration(components, profile)
-        with self.assertRaisesRegex(TapError, 'when Hub is required'):
-            configuration(dict(components, bun='relative-bun'), profile)
+        configuration(dict(components, bun='relative-bun'), profile)
 
     def test_components_without_bridge_rejected_before_save(self):
         components = dict(version=1, python=sys.executable, bun='/hubless/unused-bun',
@@ -147,13 +146,13 @@ class HublessReaderTests(unittest.TestCase):
         busy = own._profile_processes_busy(adapter, profile)
         self.assertIn('components service', busy)
         self.assertNotIn('hub port', busy)
-        # Enabled bridge still treats Hub port as busy when open.
+        # Page-only bridge remains hubless even when its unused Hub port is open.
         profile.bridge['enabled'] = True
         profile.save()
         adapter.port_open.side_effect = lambda target: isinstance(target, Job)
         busy = own._profile_processes_busy(adapter, Profile.load(self.profile_root))
         self.assertIn('components service', busy)
-        self.assertIn('hub port', busy)
+        self.assertNotIn('hub port', busy)
 
     def test_hubless_on_off_preserves_checkpoint_without_bun(self):
         self.install_reader()

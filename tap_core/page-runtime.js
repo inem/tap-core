@@ -2,13 +2,47 @@
 (() => {
   'use strict';
   if (window.top !== window || window.TapBridge) return;
-  const token = document.currentScript.dataset.tapToken;
+  const bootstrap = document.currentScript;
+  const token = bootstrap.dataset.tapToken;
+  const websocketEnabled = bootstrap.dataset.tapWs !== 'false';
   const version = 'tap.bridge/v1', page = crypto.randomUUID();
+  const planVersion = 'tap.page-plan/v1';
+  let appliedPlan = bootstrap.dataset.tapPlan;
   const pending = new Map();
-  let socket, session, timer, closed = false, attempt = 0, paused = false, state = 'connecting';
+  let socket, session, timer, planTimer, checkingPlan = false, reloading = false, planState = 'current';
+  let closed = false, attempt = 0, paused = !websocketEnabled;
+  let state = websocketEnabled ? 'connecting' : 'disabled';
   const error = code => Object.assign(new Error(code), {code, completion: 'unknown'});
+  function schedulePlan(delay = 2000) {
+    clearTimeout(planTimer);
+    if (!closed && !reloading) planTimer = setTimeout(checkPlan, delay);
+  }
+  async function checkPlan() {
+    if (closed || checkingPlan || reloading) return;
+    checkingPlan = true; planState = 'checking';
+    try {
+      const url = new URL('/__tap/probe/plan.json', location.href);
+      url.searchParams.set('token', token);
+      const response = await fetch(url, {cache: 'no-store', credentials: 'omit'});
+      if (!response.ok) throw new Error('plan_unavailable');
+      const plan = await response.json();
+      if (!plan || plan.version !== planVersion || !/^[a-f0-9]{64}$/.test(plan.revision)
+          || !Array.isArray(plan.scripts) || !['current','revoked'].includes(plan.access)
+          || plan.application !== 'reload') throw new Error('plan_invalid');
+      if (appliedPlan && plan.revision !== appliedPlan) {
+        reloading = true; planState = 'reloading';
+        const target = new URL(location.href);
+        target.searchParams.set('tap-ui', plan.revision.slice(0, 12));
+        location.replace(target.href);
+        return;
+      }
+      appliedPlan = plan.revision; planState = plan.access;
+      schedulePlan();
+    } catch { planState = 'unavailable'; schedulePlan(5000); }
+    finally { checkingPlan = false; }
+  }
   function connect() {
-    if (closed || paused || socket && socket.readyState < 2) return;
+    if (!websocketEnabled || closed || paused || socket && socket.readyState < 2) return;
     clearTimeout(timer); state = 'connecting';
     const url = new URL('/__tap/probe/ws', location.href);
     url.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -21,8 +55,9 @@
       let value;
       try { value = JSON.parse(event.data); } catch { current.close(); return; }
       if (value.version !== version || socket !== current) { current.close(); return; }
-      if (value.kind === 'Welcome' && value.page === page) { session = value.session; attempt = 0; state = 'ready'; return; }
+      if (value.kind === 'Welcome' && value.page === page) { session = value.session; attempt = 0; state = 'ready'; checkPlan(); return; }
       if (value.session !== session) return;
+      if (value.kind === 'PlanChanged') { checkPlan(); return; }
       if (value.kind === 'Result') {
         const task = pending.get(value.id);
         if (task) { pending.delete(value.id); clearTimeout(task.timer); value.ok ? task.resolve(value.value) : task.reject(Object.assign(error(value.error?.code || 'handler_error'), value.error)); }
@@ -46,10 +81,11 @@
   }
   window.TapBridge = Object.freeze({
     status: () => ({state, scope:'document', pending:pending.size,
-      actions: paused ? ['connect'] : state === 'unavailable' ? ['reconnect','disconnect'] : ['disconnect']}),
-    disconnect() { paused = true; stop(); state = 'paused'; },
-    connect() { if (closed) return; paused = false; attempt = 0; connect(); },
-    reconnect() { if (closed) return; paused = false; attempt = 0; stop(); connect(); },
+      plan: appliedPlan, plan_state: planState,
+      actions: !websocketEnabled ? [] : paused ? ['connect'] : state === 'unavailable' ? ['reconnect','disconnect'] : ['disconnect']}),
+    disconnect() { if (!websocketEnabled) return; paused = true; stop(); state = 'paused'; },
+    connect() { if (!websocketEnabled || closed) return; paused = false; attempt = 0; connect(); },
+    reconnect() { if (!websocketEnabled || closed) return; paused = false; attempt = 0; stop(); connect(); },
     isReady: () => !!session && socket?.readyState === WebSocket.OPEN,
     request(handler, args) {
       if (!session || socket?.readyState !== WebSocket.OPEN) return Promise.reject(error('not_connected'));
@@ -63,7 +99,8 @@
       });
     },
   });
-  addEventListener('pagehide', () => { closed = true; stop(); state = paused ? 'paused' : 'suspended'; });
-  addEventListener('pageshow', event => { if (event.persisted) { closed = false; attempt = 0; if (!paused) connect(); } });
+  addEventListener('pagehide', () => { closed = true; clearTimeout(planTimer); stop(); state = websocketEnabled ? (paused ? 'paused' : 'suspended') : 'disabled'; });
+  addEventListener('pageshow', event => { if (event.persisted) { closed = false; attempt = 0; schedulePlan(0); if (!paused) connect(); } });
+  schedulePlan();
   connect();
 })();

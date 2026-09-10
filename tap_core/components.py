@@ -16,9 +16,7 @@ BUN_VERSION = '1.3.11'
 
 
 def needs_hub(components, bridge=None):
-    """Hub/Bun when the page bridge is enabled (runtime.js/WS) or handlers exist."""
-    if bridge and bridge.get('enabled'):
-        return True
+    """Hub/Bun only when a page handler needs the request/result transport."""
     return type(components) is dict and bool(components.get('handlers'))
 
 

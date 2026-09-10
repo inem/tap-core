@@ -15,6 +15,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const VERSION = 'tap.bridge/v1';
 const peers = new Set();
 let active = 0;
+let planRevision = null;
 const equal = (a, b) => typeof a === 'string' && Buffer.byteLength(a) === Buffer.byteLength(b) && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 const allowed = origin => bridge.enabled
   && bridge.allow_origins.includes(origin)
@@ -22,6 +23,20 @@ const allowed = origin => bridge.enabled
 const encode = value => JSON.stringify(value);
 const fail = (code, message) => ({ok: false, error: {code, message, completion: 'unknown'}});
 function send(ws, value) { if (!ws.data.closed) ws.send(encode({version: VERSION, session: ws.data.session, ...value})); }
+function readPlanRevision() {
+  try {
+    const value = JSON.parse(readFileSync(join(root, 'state/bridge.json'), 'utf8'))?.configuration;
+    return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value) ? value : null;
+  } catch { return null; }
+}
+planRevision = readPlanRevision();
+setInterval(() => {
+  const current = readPlanRevision();
+  if (current && planRevision && current !== planRevision) {
+    planRevision = current;
+    for (const ws of peers) if (ws.data.page) send(ws, {kind: 'PlanChanged', revision: current});
+  } else if (current) planRevision = current;
+}, 500);
 function reject(ws, code) { send(ws, {kind: 'Error', ...fail(code, code)}); ws.close(1008, code); }
 async function bounded(stream, limit) {
   let count = 0, chunks = [];
@@ -97,7 +112,7 @@ const server = Bun.serve({
         if (value.kind !== 'Hello' || typeof value.page !== 'string' || !/^[a-f0-9-]{36}$/.test(value.page) || value.origin !== ws.data.origin)
           return reject(ws, 'invalid_hello');
         clearTimeout(ws.data.timer); ws.data.page = value.page;
-        return send(ws, {kind: 'Welcome', page: value.page});
+        return send(ws, {kind: 'Welcome', page: value.page, revision: planRevision});
       }
       if (value.kind !== 'Request' || value.session !== ws.data.session || typeof value.id !== 'string' || !/^[a-f0-9-]{36}$/.test(value.id)
           || typeof value.handler !== 'string' || !Object.hasOwn(value, 'args')) return reject(ws, 'invalid_request');

@@ -6,7 +6,8 @@ stdlib only.
 
 Page assets are content-addressed (`core/<sha256>.js`). The applied pack plan is
 re-read from the profile on a short TTL without restarting the proxy; a failed
-refresh keeps the previous plan. Open-tab adapter hot-swap is a later #10 slice.
+refresh keeps the previous plan. Open pages reconcile an origin-scoped plan over
+the proxy; classic scripts use a page reload as their explicit lifecycle.
 """
 import hashlib
 import hmac
@@ -28,6 +29,9 @@ RESOURCE_VERSION = re.compile(r'(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9]
 RESOURCE_DIGEST = re.compile(r'[0-9a-f]{64}\Z')
 RESOURCE_CONTRACT = 'tap.page-resource/v1'
 ASSET_PATH = re.compile(re.escape(PREFIX) + r'core/([0-9a-f]{64})\.js\Z')
+PLAN_PATH = PREFIX + 'plan.json'
+RUNTIME_PATH = PREFIX + 'runtime.js'
+PLAN_VERSION = 'tap.page-plan/v1'
 
 
 class HTMLScanError(ValueError):
@@ -531,8 +535,13 @@ class Bridge:
         self.script_digests = []
         self.assets = {}
         self.asset_origins = {}
+        self.ws_origins = None
+        self.bootstrap_origins = set()
         self._profile_root = None
         self._plan_checked_at = 0.0
+        if config:
+            self.bootstrap_origins.update(origin for origin in config['allow_origins']
+                                          if origin not in config['exclude_origins'])
         if scripts is not None:
             self._publish_scripts(scripts, self.script_origins)
 
@@ -560,6 +569,40 @@ class Bridge:
         granted = self.asset_origins.get(digest)
         return granted is not None and origin in granted
 
+    def origin_digests(self, origin):
+        seen = set()
+        result = []
+        for index, digest in enumerate(self.script_digests):
+            if self.script_origins is not None and origin not in self.script_origins[index]:
+                continue
+            if digest not in seen:
+                seen.add(digest)
+                result.append(digest)
+        return result
+
+    def page_plan(self, origin):
+        access = 'current' if self.allowed(origin) else 'revoked'
+        scripts = self.origin_digests(origin) if access == 'current' else []
+        revision = hashlib.sha256(json.dumps({'access': access, 'scripts': scripts},
+                                             sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        return {'version': PLAN_VERSION, 'revision': revision, 'scripts': scripts,
+                'access': access, 'application': 'reload'}
+
+    def _read_ws_origins(self, profile):
+        # Unmanaged profiles retain their external Hub contract. Managed profiles
+        # need the Hub only when an installed handler is present.
+        if profile.get('components') is None:
+            return None
+        try:
+            runtime = read_json(self._profile_root / 'state/effective-runtime.json')
+            components = runtime.get('components')
+        except (FileNotFoundError, ValueError):
+            components = profile.get('components')
+        if type(components) is not dict or type(components.get('handlers')) is not dict:
+            return set()
+        return {origin for binding in components['handlers'].values()
+                for origin in binding.get('origins', [])}
+
     def _write_runtime_state(self):
         if self._profile_root is None or self.config is None:
             return
@@ -573,7 +616,12 @@ class Bridge:
 
     def _apply_plan(self, config):
         scripts = read_scripts(config) if config['enabled'] else []
+        if self.config:
+            self.bootstrap_origins.update(origin for origin in self.config['allow_origins']
+                                          if origin not in self.config['exclude_origins'])
         self.config = config
+        self.bootstrap_origins.update(origin for origin in config['allow_origins']
+                                      if origin not in config['exclude_origins'])
         self._publish_scripts(scripts, config.get('page_script_origins'))
         self._write_runtime_state()
 
@@ -593,6 +641,7 @@ class Bridge:
                 self.component_token = read_token(self._profile_root, 'component-token')
             else:
                 self.component_token = None
+            self.ws_origins = self._read_ws_origins(profile)
             self.token = read_token(self._profile_root)
             previous = fingerprint(self.config) if self.config is not None else None
             self._apply_plan(plan)
@@ -609,6 +658,7 @@ class Bridge:
         if profile.get('components') is not None:
             self.component_token = read_token(root, 'component-token')
         self.token = read_token(root)
+        self.ws_origins = self._read_ws_origins(profile)
         self._apply_plan(self.config)
         self._plan_checked_at = time.monotonic()
 
@@ -653,7 +703,8 @@ class Bridge:
         request.path = urlunsplit(('', '', path.path, urlencode([(k, v) for k, v in pairs if k != 'token']), ''))
         for name in ('cookie', 'authorization', 'proxy-authorization'):
             request.headers.pop(name, None)
-        if not allowed or len(supplied) != 1 or not hmac.compare_digest(supplied[0].encode(), self.token.encode()):
+        plan_channel = path.path == PLAN_PATH and origin in self.bootstrap_origins
+        if (not allowed and not plan_channel) or len(supplied) != 1 or not hmac.compare_digest(supplied[0].encode(), self.token.encode()):
             self.reply(flow, 403, b'Bridge access denied')
             return
         ws = request.headers.get('upgrade', '').lower() == 'websocket'
@@ -669,6 +720,18 @@ class Bridge:
             # origins that were granted that digest (now or previously) may fetch it.
             if body is None or not self._asset_allowed(digest, origin):
                 self.reply(flow, 404)
+                return
+            self.reply(flow, 200, body, 'application/javascript; charset=utf-8')
+            return
+        if path.path == PLAN_PATH:
+            self.reply(flow, 200, json.dumps(self.page_plan(origin)).encode(),
+                       'application/json; charset=utf-8')
+            return
+        if path.path == RUNTIME_PATH:
+            try:
+                body = Path(__file__).with_name('page-runtime.js').read_bytes()
+            except OSError:
+                self.reply(flow, 503, b'Page runtime unavailable')
                 return
             self.reply(flow, 200, body, 'application/javascript; charset=utf-8')
             return
@@ -722,17 +785,12 @@ class Bridge:
 
         # Document <base> must never redirect token-bearing bootstrap/assets.
         asset_root = html.escape(self.origin(flow.request) + PREFIX, quote=True)
+        plan = self.page_plan(origin)
+        websocket_enabled = self.ws_origins is None or origin in self.ws_origins
         scripts = [f'<script id="{MARKER}"{nonce_attr} data-tap-token="{self.token}" '
+                   f'data-tap-plan="{plan["revision"]}" data-tap-ws="{str(websocket_enabled).lower()}" '
                    f'src="{asset_root}runtime.js?token={self.token}"></script>']
-        digests = []
-        seen = set()
-        for index, digest in enumerate(self.script_digests):
-            if self.script_origins is not None and origin not in self.script_origins[index]:
-                continue
-            if digest in seen:
-                continue
-            seen.add(digest)
-            digests.append(digest)
+        digests = plan['scripts']
         scripts += [f'<script{nonce_attr} src="{asset_root}core/{digest}.js?token={self.token}"></script>'
                     for digest in digests]
         position = parsed.body_end if parsed.body_end is not None else len(body)
