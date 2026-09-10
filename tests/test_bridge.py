@@ -253,14 +253,17 @@ class BridgeTests(unittest.TestCase):
                            exclude_origins=[], page_scripts=['/one.js', '/two.js'])
         effective['page_script_origins'] = [['https://example.test'], ['https://third.test']]
         effective['page_pack_origins'] = [
-            {'id': 'fixture.first', 'version': '1.2.3', 'origins': ['https://example.test']},
-            {'id': 'fixture.second', 'version': '2.0.0', 'origins': ['https://third.test']},
+            {'id': 'fixture.first', 'version': '1.2.3', 'origins': ['https://example.test'],
+             'features': [{'id': 'copy', 'label': 'Copy', 'value': 'One click'}]},
+            {'id': 'fixture.second', 'version': '2.0.0', 'origins': ['https://third.test'],
+             'features': []},
         ]
         bridge = TestBridge(effective, TOKEN, [b'one', b'two'])
         self.assertEqual(bridge.page_plan('https://example.test')['packs'],
-                         [{'id': 'fixture.first', 'version': '1.2.3'}])
+                         [{'id': 'fixture.first', 'version': '1.2.3',
+                           'features': [{'id': 'copy', 'label': 'Copy', 'value': 'One click'}]}])
         self.assertEqual(bridge.page_plan('https://third.test')['packs'],
-                         [{'id': 'fixture.second', 'version': '2.0.0'}])
+                         [{'id': 'fixture.second', 'version': '2.0.0', 'features': []}])
 
     def test_injected_bootstrap_carries_applied_plan_and_ws_mode(self):
         self.bridge.ws_origins = set()

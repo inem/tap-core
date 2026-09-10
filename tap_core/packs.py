@@ -50,6 +50,22 @@ def strings(value, label):
     require(len(value) == len(set(value)), f"{label}: duplicate values")
 
 
+def validate_features(value):
+    require(type(value) is list and len(value) <= 32,
+            "features: expected at most 32 feature declarations")
+    identifiers = set()
+    for feature in value:
+        fields(feature, ("id", "label", "value"), label="features[]")
+        require(type(feature["id"]) is str and ID.fullmatch(feature["id"]),
+                "features[].id: invalid identifier")
+        require(feature["id"] not in identifiers, "features[].id: duplicate")
+        identifiers.add(feature["id"])
+        require(type(feature["label"]) is str and 1 <= len(feature["label"]) <= 80,
+                "features[].label: expected 1..80 characters")
+        require(type(feature["value"]) is str and 1 <= len(feature["value"]) <= 160,
+                "features[].value: expected 1..160 characters")
+
+
 def exact_origin(value):
     """Canonical http(s) origin only; no wildcard, path, credentials or query."""
     try:
@@ -87,12 +103,13 @@ def validate_manifest(manifest, root, host_api=PACK_API):
     """Validate declarations and packaged files without importing any pack code."""
     root = Path(root).resolve()
     fields(manifest, ("manifest_version", "id", "version", "requires", "files",
-                      "entrypoints", "config", "access"), optional=("resources",))
+                      "entrypoints", "config", "access"), optional=("resources", "features"))
     require(type(manifest["manifest_version"]) is int and manifest["manifest_version"] == 1,
             "manifest_version: supported version is 1")
     require(type(manifest["id"]) is str and ID.fullmatch(manifest["id"]), "id: invalid pack id")
     require(type(manifest["version"]) is str and VERSION.fullmatch(manifest["version"]),
             "version: expected release version MAJOR.MINOR.PATCH")
+    validate_features(manifest.get("features", []))
     requires = manifest["requires"]
     fields(requires, ("pack_api", "dependencies"), label="requires")
     require(type(requires["pack_api"]) is int and requires["pack_api"] == host_api,

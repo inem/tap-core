@@ -31,6 +31,11 @@
           || !Array.isArray(plan.packs) || plan.packs.some((pack, index) => !pack
             || typeof pack.id !== 'string' || !/^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/.test(pack.id)
             || typeof pack.version !== 'string' || !/^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/.test(pack.version)
+            || pack.features !== undefined && (!Array.isArray(pack.features) || pack.features.length > 32
+              || pack.features.some(feature => !feature || typeof feature.id !== 'string'
+                || !/^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/.test(feature.id)
+                || typeof feature.label !== 'string' || !feature.label || feature.label.length > 80
+                || typeof feature.value !== 'string' || !feature.value || feature.value.length > 160))
             || plan.packs.findIndex(other => other.id === pack.id) !== index)
           || plan.application !== 'reload') throw new Error('plan_invalid');
       if (appliedPlan && plan.revision !== appliedPlan) {
@@ -40,7 +45,9 @@
         location.replace(target.href);
         return;
       }
-      appliedPlan = plan.revision; appliedPacks = plan.packs.map(pack => Object.freeze({...pack})); planState = plan.access;
+      appliedPlan = plan.revision; appliedPacks = plan.packs.map(pack => Object.freeze({
+        ...pack, features:Object.freeze((pack.features || []).map(feature => Object.freeze({...feature}))),
+      })); planState = plan.access;
       schedulePlan();
     } catch { planState = 'unavailable'; schedulePlan(5000); }
     finally { checkingPlan = false; }

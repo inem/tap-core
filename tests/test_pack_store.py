@@ -123,7 +123,7 @@ class PackStoreTests(unittest.TestCase):
         self.assertEqual(effective_configuration(self.profile, bridge()), effective)
         self.assertEqual(effective["allow_origins"], ORIGINS)
         self.assertEqual(effective["page_pack_origins"], [
-            {"id": PACK_ID, "version": "0.1.0", "origins": ORIGINS},
+            {"id": PACK_ID, "version": "0.1.0", "origins": ORIGINS, "features": []},
         ])
         self.assertEqual([Path(path).parent.parent.name for path in effective["page_scripts"]],
                          ["fixture.ui", "fixture.feature"])
@@ -374,7 +374,14 @@ class PackStoreTests(unittest.TestCase):
         }
         (self.profile / "profile.json").write_text(json.dumps({
             "bridge": bridge(), "components": components}) + "\n")
-        artifact = self.artifact(reader_src, "reader.tap-pack")
+        reader_features = self.root / "reader-features"
+        shutil.copytree(reader_src, reader_features)
+        reader_manifest = json.loads((reader_features / "pack.json").read_text())
+        reader_manifest["features"] = [
+            {"id": "session.archive", "label": "Session archive", "value": "Versioned JSON"},
+        ]
+        (reader_features / "pack.json").write_text(json.dumps(reader_manifest, indent=2) + "\n")
+        artifact = self.artifact(reader_features, "reader.tap-pack")
         self.store.install(artifact)
         self.store.enable("example.reader", "0.1.0",
                           origins=["https://fixture.example"],
@@ -387,6 +394,13 @@ class PackStoreTests(unittest.TestCase):
         projected = self.store.effective_components(components)
         self.assertIn("example.reader", projected["readers"])
         self.assertEqual(projected["handlers"], {})
+
+        page_artifact = self.artifact(SOURCE, "page.tap-pack")
+        self.store.install(page_artifact)
+        self.store.enable(PACK_ID, "0.1.0", origins=ORIGINS, capabilities=CAPABILITIES)
+        visible = self.store.effective_bridge(bridge())["page_pack_origins"]
+        self.assertEqual([item["id"] for item in visible], ["example.reader", PACK_ID])
+        self.assertEqual(visible[0]["features"], reader_manifest["features"])
 
     def test_pack_update_refuses_incompatible_reader_checkpoint(self):
         import sys
