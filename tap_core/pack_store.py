@@ -24,6 +24,10 @@ REGISTRY_VERSION = 1
 MAX_ARCHIVE_FILES = 257  # pack.json plus the manifest's 256 files
 MAX_ARCHIVE_BYTES = 32 * 1024 * 1024
 HOST_ROLES = frozenset({"page", "reader", "handler", "command"})
+PAGE_APPLIES = ("immediately for new documents; already bootstrapped pages reconcile "
+                "the plan and reload classic scripts; documents loaded before the Core "
+                "bootstrap existed require one reload")
+LIVE_PACK_APPLIES = PAGE_APPLIES + "; reader/handler bindings still require profile on"
 
 
 def _private_directory(path):
@@ -572,15 +576,13 @@ class PackStore:
         if roles & {"reader", "handler"}:
             applies = "next profile on"
         elif "page" in roles:
-            applies = ("immediately for new documents without proxy restart; "
-                       "open pages keep previously injected scripts until reload")
+            applies = PAGE_APPLIES
         elif "command" in roles:
             applies = "immediately for new command invocations"
         else:
             applies = "next profile on"
         if "command" in roles and "page" in roles and not (roles & {"reader", "handler"}):
-            applies = ("immediately for new command invocations and new documents without proxy restart; "
-                       "open pages keep previously injected scripts until reload")
+            applies = "immediately for new command invocations; " + PAGE_APPLIES
         return {"id": pack_id, "version": version, "enabled": True,
                 "code": str(root), "applies": applies}
 
@@ -623,15 +625,13 @@ class PackStore:
         if roles & {"reader", "handler"}:
             applies = "next profile on"
         elif "page" in roles:
-            applies = ("immediately for new documents without proxy restart; "
-                       "open pages keep previously injected scripts until reload")
+            applies = PAGE_APPLIES
         elif "command" in roles:
             applies = "immediately for new command invocations"
         else:
             applies = "next profile on"
         if "command" in roles and "page" in roles and not (roles & {"reader", "handler"}):
-            applies = ("immediately for new command invocations and new documents without proxy restart; "
-                       "open pages keep previously injected scripts until reload")
+            applies = "immediately for new command invocations; " + PAGE_APPLIES
         return {"id": pack_id, "version": version, "enabled": True,
                 "code": str(root), "applies": applies}
 

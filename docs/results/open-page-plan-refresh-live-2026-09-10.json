@@ -1,0 +1,42 @@
+{
+  "contract": "tap.live-evidence/v1",
+  "date": "2026-09-10",
+  "scope": "open page pack-plan reconciliation",
+  "core_revision": "0ec76ac",
+  "environment": {
+    "browser": "Codex in-app Chromium",
+    "origin": "https://x.com",
+    "profile": "/Users/inem/.local/share/tap-core-linkedin/profile",
+    "proxy_pid_before": 26771,
+    "proxy_pid_after": 26771,
+    "websocket_enabled_for_origin": true
+  },
+  "steps": [
+    {
+      "state": "x.ui enabled",
+      "plan_revision": "c3e62a08fff7101edcbdc64784bd245826b7048861c79cfc0cf74ac24dbc9617",
+      "url_cache_buster": "bootstrap-109",
+      "copy_link_buttons": 11,
+      "copy_markdown_buttons": 11
+    },
+    {
+      "action": "tap pack disable x.ui",
+      "wait_seconds": 3.5,
+      "plan_revision": "7f85e35ff393418327069abecd786128f0e3a78f4bb0b2a3dcc4d5cd76f4bd99",
+      "url_cache_buster": "7f85e35ff393",
+      "copy_link_buttons": 0,
+      "copy_markdown_buttons": 0
+    },
+    {
+      "action": "tap pack enable x.ui --version 0.7.0",
+      "wait_seconds": 3.5,
+      "plan_revision": "c3e62a08fff7101edcbdc64784bd245826b7048861c79cfc0cf74ac24dbc9617",
+      "url_cache_buster": "c3e62a08fff7",
+      "copy_link_buttons": 11,
+      "copy_markdown_buttons": 11
+    }
+  ],
+  "oracle": "The same signed-in X tab changed its injected UI after each pack mutation without a user reload, while the proxy PID stayed unchanged.",
+  "boundary": "The first ordinary reload reused HTML cached before the stable Core bootstrap existed. One cache-busted navigation seeded the bootstrap; subsequent plan changes were automatic.",
+  "result": "passed"
+}
