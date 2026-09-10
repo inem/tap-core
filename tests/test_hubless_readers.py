@@ -238,7 +238,7 @@ class HublessReaderTests(unittest.TestCase):
         self.assertIn('"item": 2', output.read_text())
         stop(Profile.load(self.profile_root), adapter)
 
-    def test_retention_gap_does_not_block_component_infrastructure_startup(self):
+    def test_retention_gap_is_skipped_and_reader_keeps_processing(self):
         self.install_reader()
         self.seed_journal('{"item":"retained-before-gap"}')
         profile = Profile.load(self.profile_root)
@@ -246,7 +246,7 @@ class HublessReaderTests(unittest.TestCase):
         Reader(profile, 'example.reader').run(spec, max_records=1, timeout=5)
 
         # Replace the only segment after the acknowledged cursor. The reader
-        # must preserve and report the gap rather than silently skipping it.
+        # records that loss and continues from the earliest retained record.
         self.seed_journal('{"item":"current-after-gap"}')
         adapter = self.start_hubless()
         observed = status(Profile.load(self.profile_root), adapter)
@@ -256,18 +256,19 @@ class HublessReaderTests(unittest.TestCase):
         while time.monotonic() < deadline:
             observed = status(Profile.load(self.profile_root), adapter)
             reader = observed.get('readers', {}).get('example.reader', {})
-            if reader.get('phase') == 'failed':
+            if reader.get('phase') == 'waiting':
                 break
             time.sleep(0.05)
         else:
-            self.fail('reader did not expose the retention gap: ' + repr(observed))
+            self.fail('reader did not continue after the retention gap: ' + repr(observed))
 
         self.assertTrue(observed['ready'], observed)
         self.assertTrue(observed['healthy'], observed)
-        self.assertFalse(observed['workloads_healthy'], observed)
-        self.assertIn('JournalGap', reader['error'])
-        self.assertEqual(reader['failures'], 3)
+        self.assertTrue(observed['workloads_healthy'], observed)
+        self.assertIsNone(reader['error'])
         checkpoint = Reader(profile, 'example.reader').load()
-        self.assertEqual(checkpoint['processed'], 1)
-        self.assertEqual(checkpoint['phase'], 'gap')
+        self.assertEqual(checkpoint['processed'], 2)
+        self.assertEqual(checkpoint['phase'], 'idle')
+        receipt = json.loads(Reader(profile, 'example.reader').last_gap.read_text())
+        self.assertEqual(receipt['recovery'], 'earliest-retained')
         stop(Profile.load(self.profile_root), adapter)

@@ -237,7 +237,7 @@ class ReaderTests(unittest.TestCase):
         self.reader.run(self.spec)
         self.assertEqual(self.outputs(self.reader), ['A', 'B'])
 
-    def test_rotation_resume_and_retention_gap_require_explicit_replay(self):
+    def test_rotation_resume_and_retention_gap_continues_from_earliest_retained(self):
         self.write('A')
         self.reader.run(self.spec)
         self.stream.rename(self.stream.with_name('stream.jsonl.1'))
@@ -246,13 +246,28 @@ class ReaderTests(unittest.TestCase):
         self.assertEqual(self.outputs(self.reader), ['A', 'B'])
         self.stream.unlink()
         self.write('C')
+        self.reader.run(self.spec)
+        self.assertEqual(self.outputs(self.reader), ['A', 'B', 'C'])
+        state = self.reader.load()
+        self.assertEqual(state['generation'], 1)
+        # The missing cursor carries no surviving ordering witness. Recovery
+        # starts at retained history; the already-seen A keeps its stable
+        # delivery ID and the fixture deduplicates its effect.
+        self.assertEqual(state['processed'], 4)
+        self.assertEqual(state['phase'], 'idle')
+        receipt = json.loads(self.reader.last_gap.read_text())
+        self.assertEqual(receipt['recovery'], 'earliest-retained')
+        self.assertIn('unavailable', receipt['error'])
+
+    def test_unrecoverable_ambiguous_retained_history_still_fails(self):
+        self.write('A')
+        self.reader.run(self.spec)
+        duplicate = self.stream.read_bytes()
+        self.stream.rename(self.stream.with_name('stream.jsonl.1'))
+        self.stream.write_bytes(duplicate)
         with self.assertRaises(JournalGap):
             self.reader.run(self.spec)
         self.assertEqual(self.reader.load()['phase'], 'gap')
-        self.reader.replay(self.spec)
-        self.reader.run(self.spec)
-        self.assertEqual(self.outputs(self.reader), ['A', 'B', 'C'])
-        self.assertEqual(self.reader.load()['generation'], 2)
 
     def test_a_b_a_updates_latest_instead_of_deduplicating_by_content(self):
         self.write('A', 'B', 'A')

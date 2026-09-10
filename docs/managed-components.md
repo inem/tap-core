@@ -107,11 +107,11 @@ startup does not call the reader healthy or alter its checkpoint.
 Readers consume an initial one-record batch and subsequently up to 50 records per
 batch, with a 10-second bound per worker,
 then check for new input every 250 ms. A failed batch is retried after 0.5 and
-1 second; after three consecutive failures that reader is parked. `off/on`
-restarts its bounded attempts but cannot repair a persistent failure such as a
-cursor whose capture segment has left retention. Recover that reader explicitly
-with replay or a new reader identity after accounting for the missing input and
-possible duplicate effects.
+1 second; after three consecutive failures that reader is parked. A cursor whose
+capture segment has left retention is handled before that retry policy: the lost
+boundary is recorded and the reader continues at the earliest retained record.
+`off/on` is not required. Other persistent failures still exhaust the bounded
+attempts.
 A successful batch resets its failure counter. External effects may already have
 happened before failure: cursor retention permits retry, it does not undo effects.
 
