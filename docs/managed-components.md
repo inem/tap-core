@@ -95,11 +95,20 @@ Bun Hub and schedules finite `Reader.run` batches over existing #9 checkpoints.
 There is one scheduling thread per declared reader, at most eight readers.
 No second cursor store, capture bus or workflow scheduler is introduced.
 
-A reader must complete its initial one-record batch (or observe an empty journal)
-before startup reports healthy. Startup readiness is bounded to 15 seconds.
-Subsequently readers consume up to 50 records per batch, with a 10-second bound per worker,
+A controller and its required Hub must become live before infrastructure startup
+reports ready. Startup readiness is bounded to 15 seconds. Reader health is a
+separate aggregate: a reader may report backoff or failure while capture and the
+owned Hub continue serving current traffic. `status` and `doctor` retain that
+degraded state; startup does not call the reader healthy or alter its checkpoint.
+
+Readers consume an initial one-record batch and subsequently up to 50 records per
+batch, with a 10-second bound per worker,
 then check for new input every 250 ms. A failed batch is retried after 0.5 and
-1 second; after three consecutive failures that reader is parked until `off/on`.
+1 second; after three consecutive failures that reader is parked. `off/on`
+restarts its bounded attempts but cannot repair a persistent failure such as a
+cursor whose capture segment has left retention. Recover that reader explicitly
+with replay or a new reader identity after accounting for the missing input and
+possible duplicate effects.
 A successful batch resets its failure counter. External effects may already have
 happened before failure: cursor retention permits retry, it does not undo effects.
 

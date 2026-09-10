@@ -145,8 +145,12 @@ def status(profile, adapter):
         raise TapError('Malformed component observation')
     fresh = time.time() - 5 < state['updated_at'] <= time.time() + 1
     current = pid == state['pid'] and state.get('configuration') == identity(profile)
+    # Infrastructure readiness and aggregate component health are deliberately
+    # separate. A reader can preserve an explicit failure (for example a
+    # retention gap) while the owned controller and Hub remain able to serve
+    # current capture/page traffic.
     live = False
-    if current and fresh and state['healthy']:
+    if current and fresh and state.get('phase') == 'ready':
         hub_pid = state.get('hub_pid')
         if hub_pid is None:
             # Reader-only controller: no Hub process to probe.
@@ -156,7 +160,9 @@ def status(profile, adapter):
                 live = hub_health(profile).get('pid') == hub_pid
             except OSError:
                 pass
-    return dict(state, configured=True, current_process=current, healthy=bool(current and fresh and live))
+    ready = bool(current and fresh and live)
+    return dict(state, configured=True, current_process=current, ready=ready,
+                healthy=bool(ready and state['healthy']))
 
 
 def start(profile, adapter):
@@ -173,9 +179,9 @@ def _start(profile, adapter):
         return
     job = Job(profile)
     if adapter.service_pid(job):
-        if status(profile, adapter)['healthy']:
+        if status(profile, adapter).get('ready'):
             return
-        raise StartupError('Profile components are unhealthy; inspect status/logs and use off/on')
+        raise StartupError('Profile component infrastructure is not ready; inspect status/logs and use off/on')
     # Pack enable/disable/update only touch the registry; refresh Hub/reader snapshot here.
     config = prepare(profile)
     hubful = needs_hub(config, profile.bridge)
@@ -203,8 +209,8 @@ def _start(profile, adapter):
     job.plist.chmod(0o600)
     try:
         adapter.run(['/bin/launchctl', 'bootstrap', 'gui/' + str(os.getuid()), job.plist])
-        if not adapter.wait(lambda: status(profile, adapter)['healthy'], seconds=15):
-            raise TapError('Component startup did not become healthy; see components.log')
+        if not adapter.wait(lambda: status(profile, adapter).get('ready', False), seconds=15):
+            raise TapError('Component infrastructure did not become ready; see components.log')
     except (OSError, TapError, ValueError) as error:
         raise StartupError(str(error)) from error
 
