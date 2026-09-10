@@ -404,6 +404,7 @@ class PackStore:
         result = json.loads(json.dumps(base))
         base_origins = list(result["allow_origins"])
         script_origins = [list(base_origins) for _ in result["page_scripts"]]
+        page_pack_origins = []
         for _pack_id, manifest in origin_packs:
             for origin in manifest["access"]["origins"]:
                 if origin not in result["allow_origins"]:
@@ -412,12 +413,15 @@ class PackStore:
             from .bridge import configuration
             configuration(result, script_origins)
             result["page_script_origins"] = script_origins
+            result["page_pack_origins"] = []
             return result
 
         declarations = {}
         use_orders = []
         for pack_id, root, manifest, page, record in page_packs:
             origins = manifest["access"]["origins"]
+            page_pack_origins.append({"id": pack_id, "version": manifest["version"],
+                                      "origins": list(origins)})
             use_orders.append({"pack": pack_id, "origins": tuple(origins),
                                "resources": tuple(use["id"] for use in page["uses"])})
             resources = {(resource["id"], resource["version"]): resource
@@ -457,6 +461,7 @@ class PackStore:
             script_origins.append(origins)
         configuration(result, script_origins)
         result["page_script_origins"] = script_origins
+        result["page_pack_origins"] = page_pack_origins
         return result
 
     def _refuse_incompatible_reader_progress(self, name, spec):

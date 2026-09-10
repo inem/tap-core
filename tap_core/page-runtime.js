@@ -7,7 +7,7 @@
   const websocketEnabled = bootstrap.dataset.tapWs !== 'false';
   const version = 'tap.bridge/v1', page = crypto.randomUUID();
   const planVersion = 'tap.page-plan/v1';
-  let appliedPlan = bootstrap.dataset.tapPlan;
+  let appliedPlan = bootstrap.dataset.tapPlan, appliedPacks = [];
   const pending = new Map();
   let socket, session, timer, planTimer, checkingPlan = false, reloading = false, planState = 'current';
   let closed = false, attempt = 0, paused = !websocketEnabled;
@@ -28,6 +28,10 @@
       const plan = await response.json();
       if (!plan || plan.version !== planVersion || !/^[a-f0-9]{64}$/.test(plan.revision)
           || !Array.isArray(plan.scripts) || !['current','revoked'].includes(plan.access)
+          || !Array.isArray(plan.packs) || plan.packs.some((pack, index) => !pack
+            || typeof pack.id !== 'string' || !/^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/.test(pack.id)
+            || typeof pack.version !== 'string' || !/^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/.test(pack.version)
+            || plan.packs.findIndex(other => other.id === pack.id) !== index)
           || plan.application !== 'reload') throw new Error('plan_invalid');
       if (appliedPlan && plan.revision !== appliedPlan) {
         reloading = true; planState = 'reloading';
@@ -36,7 +40,7 @@
         location.replace(target.href);
         return;
       }
-      appliedPlan = plan.revision; planState = plan.access;
+      appliedPlan = plan.revision; appliedPacks = plan.packs.map(pack => Object.freeze({...pack})); planState = plan.access;
       schedulePlan();
     } catch { planState = 'unavailable'; schedulePlan(5000); }
     finally { checkingPlan = false; }
@@ -81,7 +85,7 @@
   }
   window.TapBridge = Object.freeze({
     status: () => ({state, scope:'document', pending:pending.size,
-      plan: appliedPlan, plan_state: planState,
+      plan: appliedPlan, plan_state: planState, packs: appliedPacks,
       actions: !websocketEnabled ? [] : paused ? ['connect'] : state === 'unavailable' ? ['reconnect','disconnect'] : ['disconnect']}),
     disconnect() { if (!websocketEnabled) return; paused = true; stop(); state = 'paused'; },
     connect() { if (!websocketEnabled || closed) return; paused = false; attempt = 0; connect(); },
@@ -101,6 +105,6 @@
   });
   addEventListener('pagehide', () => { closed = true; clearTimeout(planTimer); stop(); state = websocketEnabled ? (paused ? 'paused' : 'suspended') : 'disabled'; });
   addEventListener('pageshow', event => { if (event.persisted) { closed = false; attempt = 0; schedulePlan(0); if (!paused) connect(); } });
-  schedulePlan();
+  schedulePlan(0);
   connect();
 })();

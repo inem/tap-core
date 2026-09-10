@@ -339,6 +339,7 @@ def effective_configuration(root, base):
     result = json.loads(json.dumps(base))
     base_origins = list(result['allow_origins'])
     script_origins = [list(base_origins) for _ in result['page_scripts']]
+    page_pack_origins = []
     declarations = {}
     use_orders = []
     any_enabled = False
@@ -417,6 +418,8 @@ def effective_configuration(root, base):
                     result['allow_origins'].append(origin)
         if 'page' not in roles:
             continue
+        page_pack_origins.append({'id': pack_id, 'version': version,
+                                  'origins': list(requested_origins)})
         page = manifest['entrypoints']['page']
         resources = manifest.get('resources')
         if (type(page) is not dict or set(page) != {'interface', 'uses'}
@@ -493,6 +496,7 @@ def effective_configuration(root, base):
             script_origins.append(origins)
     configuration(result, script_origins)
     result['page_script_origins'] = script_origins
+    result['page_pack_origins'] = page_pack_origins
     return result
 
 
@@ -531,6 +535,7 @@ class Bridge:
     def __init__(self, config=None, token=None, scripts=None):
         self.config, self.token, self.scripts = config, token, scripts
         self.script_origins = config.get('page_script_origins') if config else None
+        self.page_pack_origins = config.get('page_pack_origins', []) if config else []
         self.component_token = None
         self.script_digests = []
         self.assets = {}
@@ -583,10 +588,13 @@ class Bridge:
     def page_plan(self, origin):
         access = 'current' if self.allowed(origin) else 'revoked'
         scripts = self.origin_digests(origin) if access == 'current' else []
-        revision = hashlib.sha256(json.dumps({'access': access, 'scripts': scripts},
+        packs = ([{'id': item['id'], 'version': item['version']}
+                  for item in self.page_pack_origins if origin in item['origins']]
+                 if access == 'current' else [])
+        revision = hashlib.sha256(json.dumps({'access': access, 'scripts': scripts, 'packs': packs},
                                              sort_keys=True, separators=(',', ':')).encode()).hexdigest()
         return {'version': PLAN_VERSION, 'revision': revision, 'scripts': scripts,
-                'access': access, 'application': 'reload'}
+                'packs': packs, 'access': access, 'application': 'reload'}
 
     def _read_ws_origins(self, profile):
         # Unmanaged profiles retain their external Hub contract. Managed profiles
@@ -620,6 +628,7 @@ class Bridge:
             self.bootstrap_origins.update(origin for origin in self.config['allow_origins']
                                           if origin not in self.config['exclude_origins'])
         self.config = config
+        self.page_pack_origins = config.get('page_pack_origins', [])
         self.bootstrap_origins.update(origin for origin in config['allow_origins']
                                       if origin not in config['exclude_origins'])
         self._publish_scripts(scripts, config.get('page_script_origins'))
