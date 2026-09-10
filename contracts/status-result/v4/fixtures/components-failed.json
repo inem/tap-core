@@ -164,7 +164,7 @@
     }
   },
   "terminal": {
-    "width_80": "tap           ● up · PID 123\nbrowser/apps  ○ direct   (tap on)\ncapture       ● ready · writer healthy\nbridge        ○ absent · not configured\ncomponents    ✗ failed · controller reported failure\n  alpha  ✗ failed · retry budget exhausted",
-    "width_24": "tap           ● up\nbrowser/apps  ○ direct\ncapture       ● ready\nbridge        ○ absent\ncomponents    ✗ failed\n  alpha  ✗ failed"
+    "width_80": "tap           ● up · PID 123\nbrowser/apps  ○ direct   (tap on)\ncapture       ● ready · writer healthy\nbridge        ○ absent · not configured\ncontrol       ✗ failed · controller reported failure\n  alpha  ✗ failed · retry budget exhausted",
+    "width_24": "tap           ● up\nbrowser/apps  ○ direct\ncapture       ● ready\nbridge        ○ absent\ncontrol       ✗ failed\n  alpha  ✗ failed"
   }
 }

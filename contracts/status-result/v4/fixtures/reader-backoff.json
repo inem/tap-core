@@ -20,7 +20,7 @@
     },
     "components": {
       "configured": true,
-      "healthy": false,
+      "healthy": true,
       "current_process": true,
       "phase": "ready",
       "hub_pid": 4321,
@@ -120,7 +120,7 @@
       },
       "healthy": {
         "knowledge": "known",
-        "value": false
+        "value": true
       },
       "current_process": {
         "knowledge": "known",
@@ -203,7 +203,7 @@
     }
   },
   "terminal": {
-    "width_80": "tap           ● up · PID 123\nbrowser/apps  ○ direct   (tap on)\ncapture       ● ready · writer healthy\nbridge        ○ absent · not configured\ncomponents    ✗ degraded · controller or required probe unhealthy\n  alpha  ● waiting · last batch succeeded\n  beta  ⚠ backoff · retry pending",
-    "width_24": "tap           ● up\nbrowser/apps  ○ direct\ncapture       ● ready\nbridge        ○ absent\ncomponents    ✗ degraded\n  alpha  ● waiting\n  beta  ⚠ backoff"
+    "width_80": "tap           ● up · PID 123\nbrowser/apps  ○ direct   (tap on)\ncapture       ● ready · writer healthy\nbridge        ○ absent · not configured\ncontrol       ● ready · page command router healthy\n  alpha  ● waiting · last batch succeeded\n  beta  ⚠ backoff · retry pending",
+    "width_24": "tap           ● up\nbrowser/apps  ○ direct\ncapture       ● ready\nbridge        ○ absent\ncontrol       ● ready\n  alpha  ● waiting\n  beta  ⚠ backoff"
   }
 }

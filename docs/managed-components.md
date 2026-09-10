@@ -82,7 +82,9 @@ under the existing #9 contract; configuring a binding does not reset progress.
 Profiles without `components` keep their previous externally managed Hub behavior.
 
 `status` exposes component PID, observation age/configuration match, Hub PID,
-reader phases/progress/errors and aggregate health. `doctor` checks Hub health
+and reader phases/progress/errors. Its control-plane health covers the owned
+controller and required Hub; reader outcomes are separate workload observations.
+`doctor` checks Hub health
 through its private endpoint as well as the proxy, capture and routing. `where`
 includes both launch agent paths and component/handler logs. An absent, stale,
 failed or hung Hub cannot become healthy just because injection is loaded.
@@ -97,9 +99,10 @@ No second cursor store, capture bus or workflow scheduler is introduced.
 
 A controller and its required Hub must become live before infrastructure startup
 reports ready. Startup readiness is bounded to 15 seconds. Reader health is a
-separate aggregate: a reader may report backoff or failure while capture and the
-owned Hub continue serving current traffic. `status` and `doctor` retain that
-degraded state; startup does not call the reader healthy or alter its checkpoint.
+separate workload aggregate: a reader may report backoff or failure while capture
+and the owned Hub continue serving current traffic. `status` retains each failed
+workload, while `doctor` continues to report the usable control plane as healthy;
+startup does not call the reader healthy or alter its checkpoint.
 
 Readers consume an initial one-record batch and subsequently up to 50 records per
 batch, with a 10-second bound per worker,

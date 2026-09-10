@@ -263,7 +263,8 @@ class HublessReaderTests(unittest.TestCase):
             self.fail('reader did not expose the retention gap: ' + repr(observed))
 
         self.assertTrue(observed['ready'], observed)
-        self.assertFalse(observed['healthy'], observed)
+        self.assertTrue(observed['healthy'], observed)
+        self.assertFalse(observed['workloads_healthy'], observed)
         self.assertIn('JournalGap', reader['error'])
         self.assertEqual(reader['failures'], 3)
         checkpoint = Reader(profile, 'example.reader').load()

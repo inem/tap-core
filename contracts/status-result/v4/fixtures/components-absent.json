@@ -129,7 +129,7 @@
     }
   },
   "terminal": {
-    "width_80": "tap           ✗ down\nbrowser/apps  ○ explicit · clients opt in\ncapture       ○ absent · no health record\nbridge        ○ absent · not configured\ncomponents    ○ absent · not configured",
-    "width_24": "tap           ✗ down\nbrowser/apps  ○ explicit\ncapture       ○ absent\nbridge        ○ absent\ncomponents    ○ absent"
+    "width_80": "tap           ✗ down\nbrowser/apps  ○ explicit · clients opt in\ncapture       ○ absent · no health record\nbridge        ○ absent · not configured\ncontrol       ○ absent · not configured",
+    "width_24": "tap           ✗ down\nbrowser/apps  ○ explicit\ncapture       ○ absent\nbridge        ○ absent\ncontrol       ○ absent"
   }
 }

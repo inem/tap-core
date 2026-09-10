@@ -209,7 +209,7 @@
     }
   },
   "terminal": {
-    "width_80": "tap           ● up · PID 123\nbrowser/apps  ○ direct   (tap on)\ncapture       ● ready · writer healthy\nbridge        ○ absent · not configured\ncomponents    ● ready · owned controller healthy\n  alpha  ● waiting · last batch succeeded\n  beta  ● waiting · last batch succeeded",
-    "width_24": "tap           ● up\nbrowser/apps  ○ direct\ncapture       ● ready\nbridge        ○ absent\ncomponents    ● ready\n  alpha  ● waiting\n  beta  ● waiting"
+    "width_80": "tap           ● up · PID 123\nbrowser/apps  ○ direct   (tap on)\ncapture       ● ready · writer healthy\nbridge        ○ absent · not configured\ncontrol       ● ready · page command router healthy\n  alpha  ● waiting · last batch succeeded\n  beta  ● waiting · last batch succeeded",
+    "width_24": "tap           ● up\nbrowser/apps  ○ direct\ncapture       ● ready\nbridge        ○ absent\ncontrol       ● ready\n  alpha  ● waiting\n  beta  ● waiting"
   }
 }
