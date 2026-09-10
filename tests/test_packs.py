@@ -38,6 +38,16 @@ class PackManifestTests(unittest.TestCase):
         for name in ("reader", "page-bridge"):
             self.assertEqual(load_manifest(FIXTURES / name)["requires"]["pack_api"], 1)
 
+    @unittest.skipUnless(shutil.which("bun"), "Bun required only for the page runtime control fixture")
+    def test_page_runtime_document_controls(self):
+        root = Path(__file__).resolve().parents[1]
+        result = subprocess.run(
+            [shutil.which("bun"), str(root / "tests/page_runtime_controls.cjs"),
+             str(root / "tap_core/page-runtime.js")],
+            text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertIn("PASS connection controls", result.stdout)
+
     def test_versions_and_unknown_fields(self):
         for version in (0, 2, True, "1"):
             self.invalid(lambda m: m.update(manifest_version=version), "manifest_version")
