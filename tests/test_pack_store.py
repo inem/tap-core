@@ -118,6 +118,7 @@ class PackStoreTests(unittest.TestCase):
         result = self.store.enable(PACK_ID, "0.1.0",
                                    origins=ORIGINS, capabilities=CAPABILITIES)
         self.assertTrue(result["enabled"])
+        self.assertIn("already bootstrapped pages reconcile the plan", result["applies"])
         effective = self.store.effective_bridge(bridge())
         self.assertEqual(effective_configuration(self.profile, bridge()), effective)
         self.assertEqual(effective["allow_origins"], ORIGINS)

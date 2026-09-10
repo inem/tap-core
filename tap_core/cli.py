@@ -377,7 +377,7 @@ def main(argv=None):
     try:
         if args.command == 'pack':
             from .components import Job
-            from .pack_store import PackStore, _parse_dependency
+            from .pack_store import LIVE_PACK_APPLIES, PackStore, _parse_dependency
             store = PackStore(root)
             profile = Profile.load(root) if (root / "profile.json").is_file() else None
             if args.pack_action == 'list':
@@ -424,10 +424,7 @@ def main(argv=None):
                         raise TapError(f"Pack state saved, but background registration failed: {error}; retry pack enable/disable to reconcile") from error
                     if isinstance(output, dict) and 'applies' in output and live:
                         output = dict(output)
-                        output['applies'] = (
-                            'immediately for new documents and retained content-addressed assets; '
-                            'open pages keep previously injected scripts until reload; '
-                            'reader/handler bindings still require profile on')
+                        output['applies'] = LIVE_PACK_APPLIES
             print(json.dumps(output, indent=2))
             return 0
         if args.command == "install":
