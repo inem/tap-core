@@ -12,6 +12,7 @@ const headers = {'x-tap-component-token': secret, 'x-tap-probe-token': token, 'x
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 let hub, checks = 0;
 const sockets = [];
+writeFileSync(join(root, 'state/bridge.json'), JSON.stringify({configuration:'a'.repeat(64)}));
 async function start() {
   hub = Bun.spawn([process.execPath, module, root], {stdout: 'ignore', stderr: 'inherit'});
   for (let i=0; i<100; i++) {
@@ -45,7 +46,7 @@ async function connect(page = crypto.randomUUID()) {
     send({version,kind:'Request',session,id,handler,args});
     return {id, result: () => next('Result', id)};
   }
-  return {ws, messages, send, next, session, page, request};
+  return {ws, messages, send, next, session, page, request, welcome};
 }
 try {
   await start();
@@ -58,6 +59,10 @@ try {
   assert.equal((await fetch(base+'/__tap/probe/runtime.js',{headers})).status,200); checks++;
   assert.equal((await fetch(base+'/__tap/probe/runtime.js',{headers,method:'POST'})).status,405); checks++;
   const a = await connect(), b = await connect();
+  assert.equal(a.welcome.revision, 'a'.repeat(64));
+  writeFileSync(join(root, 'state/bridge.json'), JSON.stringify({configuration:'b'.repeat(64)}));
+  assert.equal((await a.next('PlanChanged')).revision, 'b'.repeat(64));
+  assert.equal((await b.next('PlanChanged')).revision, 'b'.repeat(64)); checks++;
   const result = await a.request('echo', {exact:'stdin reaches handler'}).result();
   assert.equal(result.value.args.exact,'stdin reaches handler');
   assert.equal(result.session,a.session); assert.equal(result.value.page,a.page);

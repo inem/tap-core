@@ -12,8 +12,8 @@ import time
 import unittest
 from unittest.mock import Mock, patch
 
-from tap_core.bridge import (Bridge, authorize_script_policy, configuration, decision,
-                             read_json, read_scripts, read_token)
+from tap_core.bridge import (Bridge, PLAN_VERSION, authorize_script_policy, configuration,
+                             decision, read_json, read_scripts, read_token)
 from tap_core.runtime import Profile, MacOS, TapError
 from tap_core.cli import main, bridge_status, doctor
 
@@ -213,6 +213,47 @@ class BridgeTests(unittest.TestCase):
         self.bridge.requestheaders(f)
         self.assertEqual(f.response.content, b'window.fixture = true;')
         self.assertEqual(f.request.host, 'example.test')
+
+    def test_serves_runtime_and_origin_scoped_plan_without_hub(self):
+        effective = config(allow_origins=['https://example.test', 'https://third.test'],
+                           exclude_origins=[], page_scripts=['/one.js', '/two.js'])
+        effective['page_script_origins'] = [['https://example.test'], ['https://third.test']]
+        bridge = TestBridge(effective, TOKEN, [b'one', b'two'])
+        runtime = flow('/__tap/probe/runtime.js?token=' + TOKEN)
+        bridge.requestheaders(runtime)
+        self.assertIn(b'window.TapBridge', runtime.response.content)
+        self.assertEqual(runtime.request.host, 'example.test')
+        first = flow('/__tap/probe/plan.json?token=' + TOKEN)
+        bridge.requestheaders(first)
+        first_plan = json.loads(first.response.content)
+        self.assertEqual(first_plan['version'], PLAN_VERSION)
+        self.assertEqual(first_plan['scripts'], [digest(b'one')])
+        self.assertEqual(first_plan['access'], 'current')
+        self.assertEqual(first_plan['application'], 'reload')
+        third = flow('/__tap/probe/plan.json?token=' + TOKEN, host='third.test')
+        bridge.requestheaders(third)
+        third_plan = json.loads(third.response.content)
+        self.assertEqual(third_plan['scripts'], [digest(b'two')])
+        self.assertNotEqual(first_plan['revision'], third_plan['revision'])
+
+    def test_plan_channel_reports_revocation_without_retaining_pack_authority(self):
+        self.bridge.config = config(enabled=False)
+        plan = flow('/__tap/probe/plan.json?token=' + TOKEN)
+        self.bridge.requestheaders(plan)
+        value = json.loads(plan.response.content)
+        self.assertEqual(value['access'], 'revoked')
+        self.assertEqual(value['scripts'], [])
+        asset = flow('/__tap/probe/core/' + digest(b'window.fixture = true;') + '.js?token=' + TOKEN)
+        self.bridge.requestheaders(asset)
+        self.assertEqual(asset.response.status_code, 403)
+
+    def test_injected_bootstrap_carries_applied_plan_and_ws_mode(self):
+        self.bridge.ws_origins = set()
+        f = flow(response=Response())
+        self.bridge.response(f)
+        plan = self.bridge.page_plan('https://example.test')
+        self.assertIn('data-tap-plan="' + plan['revision'] + '"', f.response.body)
+        self.assertIn('data-tap-ws="false"', f.response.body)
 
     def test_effective_script_plan_is_scoped_per_origin(self):
         effective = config(allow_origins=['https://example.test', 'https://third.test'],

@@ -31,9 +31,9 @@ different evidence and authority:
 5. **Build** — create a deterministic `.tap-pack` containing only `pack.json` and
    its declared files. No source checkout path is retained.
 6. **Install and grant** — copy an immutable version snapshot under the profile,
-   verify every file hash, then record user grants separately. Service/page
-   bindings apply at the next `on`; commands apply to new invocations immediately.
-   Activation cannot hot-patch an already running proxy or executed UI.
+   verify every file hash, then record user grants separately. Page-only changes
+   apply through the running proxy; reader/handler bindings apply at the next
+   `on`; commands apply to new invocations immediately.
 7. **Operate** — update atomically, roll back to a retained verified version,
    disable, and remove code without deleting pack state/data/logs.
 
@@ -97,18 +97,23 @@ rollback and offline startup cannot change when an upstream URL changes. The
 provider publishes the reusable UI/site adapter, each pack declares what it uses,
 and Core implements validation, storage, composition and origin-scoped delivery.
 
-Disable prevents injection into **new** documents after the bridge refreshes its
-pack plan (about once per second while the proxy is running for page-only
-changes). It cannot revoke JavaScript that already ran in an open document;
-reload that page. Installed readers and
+The stable Core bootstrap polls an authenticated, origin-scoped
+`tap.page-plan/v1` document. Enable, update, rollback and disable change its
+revision; classic-script pages then reload themselves once with a revision
+cache-buster. A connected Hub also emits `PlanChanged` to trigger the same HTTP
+reconciliation immediately. Polling remains the recovery path after a missed
+message or reconnect. The plan channel may report `access: revoked` to a page
+that previously received the bootstrap, but it serves no disabled assets or
+handlers. A document loaded before the bootstrap first existed still needs one
+manual reload. Installed readers and
 handlers using `python-jsonl-v1` also bind to the existing managed host. Mutator
 activation and `browser-module-v1` remain unsupported.
 
 Reader/handler packs require an existing components configuration with an
-absolute Python path. Absolute Bun and Hub are required when the page bridge is
-**enabled** (runtime.js / WS) or when handlers are projected. Reader-only packs
-may run with `bridge.enabled=false` and without Bun/Hub: managed `on`/`off`
-starts the component controller and readers only. A components block still
+absolute Python path. Absolute Bun and Hub are required when handlers are
+projected. Page-only and reader-only packs run without Bun/Hub; Core serves the
+bootstrap and plan directly from the proxy and marks WebSocket transport as
+disabled. A components block still
 requires a bridge object (`enabled=false` is the hubless shape; `bridge: null`
 is rejected). On startup, the host refreshes the effective origins and handler
 bindings from enabled immutable pack versions.

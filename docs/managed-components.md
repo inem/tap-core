@@ -52,9 +52,9 @@ to the existing `install` invocation. An illustrative binding is:
 These paths are illustrative and must be supplied explicitly. There are no
 production directories, account credentials, flows, adapters or journal defaults.
 This slice checks Bun **1.3.11** and Python >= 3.9 before component startup
-when the page bridge is enabled or handlers are configured (Hub path).
-Reader-only profiles with `bridge.enabled=false` and no handlers start the
-component controller without Bun/Hub; Bun is not probed in that mode.
+when handlers are configured (Hub path). Page-only and reader-only profiles
+without handlers start the component controller without Bun/Hub; Bun is not
+probed in that mode.
 Handler `TAP_PACK_CONTEXT` includes `profile_root` so an installed pack can
 resolve sibling reader outputs without absolute config paths. This is a local
 filesystem location for trusted same-user handlers, not a new grant or a
@@ -128,7 +128,12 @@ refused and left running. An incomplete cleanup is an error, not successful off.
 
 This is an explicit new `tap.bridge/v1` interface, not compatibility with legacy
 `TapProbe`, Actions, Needs, eval, handles or adapter protocols. Opt-in managed
-profiles serve `page-runtime.js` through their existing reserved proxy routes.
+profiles serve `page-runtime.js` and `tap.page-plan/v1` directly through their
+existing reserved proxy routes. The runtime polls the plan every two seconds
+(five after an unavailable or malformed response). A changed origin-scoped
+revision reloads classic scripts with a `tap-ui` cache-buster. This works without
+Hub/Bun. When handlers require the Hub, `Welcome` and `PlanChanged` also wake the
+same HTTP reconciliation; they do not carry executable code or new authority.
 `window.TapBridge.isReady()` reports a welcomed connection;
 `await TapBridge.request('projection', args)` returns the handler value or rejects
 with an error carrying `code` and `completion: "unknown"`.
@@ -136,7 +141,8 @@ with an error carrying `code` and `completion: "unknown"`.
 | Message | Fields |
 |---|---|
 | Page → Hub Hello | `version`, `kind: "Hello"`, document UUID `page`, exact `origin` |
-| Hub → page Welcome | `version`, `kind: "Welcome"`, same `page`, fresh server UUID `session` |
+| Hub → page Welcome | `version`, `kind: "Welcome"`, same `page`, fresh server UUID `session`, current global plan `revision` |
+| Hub → page PlanChanged | `version`, `kind: "PlanChanged"`, current `session`, new global plan `revision`; page rechecks its origin plan over HTTP |
 | Page → Hub Request | `version`, `kind: "Request"`, current `session`, request UUID `id`, `handler`, JSON `args` |
 | Hub → page Result | `version`, `kind: "Result"`, same `session` and `id`, `ok`, and `value` or typed `error` |
 

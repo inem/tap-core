@@ -74,8 +74,10 @@ digests stay origin-scoped: only origins that were granted that digest (in the
 current or a previous plan) may fetch it. Identical bytes shared by two origins
 are served to each granted origin under the same digest. The bridge re-reads the
 installed PackStore plan about once per second without restarting the proxy; a
-failed refresh keeps the previous plan. Open-tab adapter install/remove without
-page reload is a later #10 slice.
+failed refresh keeps the previous plan. Open documents reconcile an
+origin-scoped plan and reload classic scripts once when its revision changes. A
+future module lifecycle may replace that reload for adapters that explicitly
+implement cleanup.
 It scans script attributes (including whitespace, unquoted values and
 HTML entities) to retain an existing nonce. This is a bounded tag/attribute
 tokenizer, not a browser HTML5 tree builder. Comments and raw-text contexts do
@@ -103,8 +105,10 @@ Python hooks supplied through `--addon`.
 
 Changes to bridge configuration still take effect after stop/configure/start.
 Installed **page-only** pack enable/update/disable may apply while the proxy is
-running: new documents pick up the refreshed plan; already executed page scripts
-are not removed until the page is reloaded. Reader/handler pack changes still
+running: new documents pick up the refreshed plan; the Core bootstrap polls it
+and reloads an open classic-script document on revision change. A Hub
+`PlanChanged` message accelerates that same check when a handler connection
+exists. Reader/handler pack changes still
 require `off`: the candidate component projection is checked **before** the
 active registry is published, so a concurrent bridge refresh cannot observe a
 rejected plan. Stopping the proxy closes existing
