@@ -14,6 +14,7 @@ const pageToken = readFileSync(join(root, 'state/bridge-token'), 'utf8').trim();
 const here = dirname(fileURLToPath(import.meta.url));
 const VERSION = 'tap.bridge/v1';
 const peers = new Set();
+const pages = new Map(), commands = new Map();
 let active = 0;
 let planRevision = null;
 const equal = (a, b) => typeof a === 'string' && Buffer.byteLength(a) === Buffer.byteLength(b) && timingSafeEqual(Buffer.from(a), Buffer.from(b));
@@ -23,6 +24,31 @@ const allowed = origin => bridge.enabled
 const encode = value => JSON.stringify(value);
 const fail = (code, message) => ({ok: false, error: {code, message, completion: 'unknown'}});
 function send(ws, value) { if (!ws.data.closed) ws.send(encode({version: VERSION, session: ws.data.session, ...value})); }
+function controllerAllowed(request) { return equal(request.headers.get('authorization'), 'Bearer ' + secret); }
+function publicPage(ws) { return {page:ws.data.page, origin:ws.data.origin, connected:true}; }
+async function controller(request, url) {
+  if (!controllerAllowed(request)) return new Response('Denied', {status:403});
+  if (request.method === 'GET' && url.pathname === '/v1/pages')
+    return Response.json({version:VERSION, pages:[...pages.values()].map(publicPage)});
+  const match = url.pathname.match(/^\/v1\/pages\/([^/]+)\/commands$/);
+  if (request.method !== 'POST' || !match) return new Response('Not found', {status:404});
+  const ws = pages.get(decodeURIComponent(match[1]));
+  if (!ws || ws.data.closed) return Response.json({ok:false,error:{code:'page_not_found'}},{status:404});
+  if (commands.size >= 8 || [...commands.values()].filter(command => command.ws === ws).length >= 4)
+    return Response.json({ok:false,error:{code:'busy'}},{status:503});
+  let body;
+  try { const text = await request.text(); if (Buffer.byteLength(text) > 65536) throw new Error('input_limit'); body = JSON.parse(text); }
+  catch (cause) { return Response.json({ok:false,error:{code:cause.message === 'input_limit' ? 'input_limit' : 'invalid_json'}},{status:400}); }
+  if (!body || typeof body.operation !== 'string' || !/^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)+$/.test(body.operation) || !Object.hasOwn(body,'args'))
+    return Response.json({ok:false,error:{code:'invalid_command'}},{status:400});
+  const id = crypto.randomUUID();
+  const outcome = await new Promise(resolve => {
+    const timer = setTimeout(() => { commands.delete(id); resolve({ok:false,error:{code:'command_timeout'}}); }, 7000);
+    commands.set(id, {ws, timer, resolve});
+    send(ws, {kind:'Command', id, operation:body.operation, args:body.args});
+  });
+  return Response.json(outcome, {status:outcome.ok ? 200 : 400});
+}
 function readPlanRevision() {
   try {
     const value = JSON.parse(readFileSync(join(root, 'state/bridge.json'), 'utf8'))?.configuration;
@@ -86,9 +112,10 @@ async function invoke(ws, request) {
 }
 const server = Bun.serve({
   hostname: '127.0.0.1', port: bridge.hub_port,
-  fetch(request, server) {
-    if (request.method !== 'GET') return new Response('Method not allowed', {status: 405});
+  async fetch(request, server) {
     const url = new URL(request.url);
+    if (url.pathname.startsWith('/v1/')) return controller(request, url);
+    if (request.method !== 'GET') return new Response('Method not allowed', {status: 405});
     if (url.pathname === '/health') return equal(request.headers.get('authorization'), 'Bearer ' + secret)
       ? Response.json({version: VERSION, pid: process.pid, sessions: peers.size, active_handlers: active}) : new Response('Denied', {status: 403});
     const origin = request.headers.get('x-tap-probe-origin');
@@ -112,7 +139,18 @@ const server = Bun.serve({
         if (value.kind !== 'Hello' || typeof value.page !== 'string' || !/^[a-f0-9-]{36}$/.test(value.page) || value.origin !== ws.data.origin)
           return reject(ws, 'invalid_hello');
         clearTimeout(ws.data.timer); ws.data.page = value.page;
+        const previous = pages.get(value.page);
+        if (previous && previous !== ws) previous.close(1000, 'replaced');
+        pages.set(value.page, ws);
         return send(ws, {kind: 'Welcome', page: value.page, revision: planRevision});
+      }
+      if (value.kind === 'CommandResult' && value.session === ws.data.session && typeof value.id === 'string') {
+        const command = commands.get(value.id);
+        if (!command) return;
+        if (command.ws !== ws || typeof value.ok !== 'boolean') return reject(ws, 'invalid_command_result');
+        commands.delete(value.id); clearTimeout(command.timer);
+        command.resolve(value.ok ? {ok:true,value:value.value ?? null} : {ok:false,error:value.error || {code:'operation_failed'}});
+        return;
       }
       if (value.kind !== 'Request' || value.session !== ws.data.session || typeof value.id !== 'string' || !/^[a-f0-9-]{36}$/.test(value.id)
           || typeof value.handler !== 'string' || !Object.hasOwn(value, 'args')) return reject(ws, 'invalid_request');
@@ -124,6 +162,10 @@ const server = Bun.serve({
     },
     close(ws) {
       clearTimeout(ws.data.timer); ws.data.closed = true; peers.delete(ws);
+      if (ws.data.page && pages.get(ws.data.page) === ws) pages.delete(ws.data.page);
+      for (const [id, command] of commands) if (command.ws === ws) {
+        commands.delete(id); clearTimeout(command.timer); command.resolve({ok:false,error:{code:'disconnected'}});
+      }
       for (const child of ws.data.children) { try { process.kill(-child.pid, 'SIGKILL'); } catch {} }
     },
   },

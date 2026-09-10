@@ -59,6 +59,14 @@ try {
   assert.equal((await fetch(base+'/__tap/probe/runtime.js',{headers})).status,200); checks++;
   assert.equal((await fetch(base+'/__tap/probe/runtime.js',{headers,method:'POST'})).status,405); checks++;
   const a = await connect(), b = await connect();
+  assert.equal((await fetch(base+'/v1/pages')).status,403); checks++;
+  const listed=await (await fetch(base+'/v1/pages',{headers:{authorization:'Bearer '+secret}})).json();
+  assert.equal(listed.pages.length,2); assert(listed.pages.some(page=>page.page===a.page)); checks++;
+  const controlled=fetch(base+'/v1/pages/'+encodeURIComponent(a.page)+'/commands',{method:'POST',headers:{authorization:'Bearer '+secret,'content-type':'application/json'},body:JSON.stringify({operation:'fixture.inspect',args:{selector:'main'}})}).then(response=>response.json());
+  const command=await a.next('Command');
+  assert.equal(command.operation,'fixture.inspect'); assert.deepEqual(command.args,{selector:'main'});
+  a.send({version,kind:'CommandResult',session:a.session,id:command.id,ok:true,value:{matches:1}});
+  assert.deepEqual(await controlled,{ok:true,value:{matches:1}}); checks++;
   assert.equal(a.welcome.revision, 'a'.repeat(64));
   writeFileSync(join(root, 'state/bridge.json'), JSON.stringify({configuration:'b'.repeat(64)}));
   assert.equal((await a.next('PlanChanged')).revision, 'b'.repeat(64));
