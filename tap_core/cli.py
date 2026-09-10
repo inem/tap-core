@@ -253,12 +253,13 @@ def parser():
     result = argparse.ArgumentParser(description=__doc__)
     result.add_argument("--profile", type=Path, required=True, help="Explicit profile directory")
     commands = result.add_subparsers(dest="command", required=True)
-    install = commands.add_parser("install", help="Install and start this profile through launchd; do not arm system proxy")
-    install.add_argument("--backend", type=Path, required=True, help="mitmdump 12.2.3 executable")
-    install.add_argument("--port", type=int, required=True)
-    install.add_argument("--routing", choices=["explicit", "system"], required=True)
-    install.add_argument("--probe-url", default="http://example.com/")
-    install.add_argument("--addon", type=Path, action="append", default=[], help="Additional trusted addon (optional)")
+    install = commands.add_parser(
+        "install", help="Install a new profile or repair an existing one; do not arm system proxy")
+    install.add_argument("--backend", type=Path, help="mitmdump 12.2.3 executable (required for a new profile)")
+    install.add_argument("--port", type=int, help="proxy port (required for a new profile)")
+    install.add_argument("--routing", choices=["explicit", "system"], help="routing mode (required for a new profile)")
+    install.add_argument("--probe-url")
+    install.add_argument("--addon", type=Path, action="append", help="Additional trusted addon (optional)")
     install.add_argument("--bridge-config", type=Path, help="Explicit page bridge configuration JSON")
     install.add_argument("--components-config", type=Path, help="Explicit managed Hub/reader/handler development bindings")
     for name in ("on", "off", "doctor", "where", "uninstall"):
@@ -434,16 +435,30 @@ def main(argv=None):
                         output['applies'] = LIVE_PACK_APPLIES
             print(json.dumps(output, indent=2))
             return 0
+        repair_install = args.command == "install" and (root / "profile.json").is_file()
         if args.command == "install":
-            profile = Profile(root, str(args.backend.expanduser().resolve()), args.port, args.routing,
-                              args.probe_url, [str(p.expanduser().resolve()) for p in args.addon])
-            if args.bridge_config:
-                from .bridge import configuration, read_json
-                profile.bridge = configuration(read_json(args.bridge_config))
-            if args.components_config:
-                from .components import configuration
-                from .bridge import read_json
-                profile.components = configuration(read_json(args.components_config), profile)
+            if repair_install:
+                supplied = [name for name in ("backend", "port", "routing", "probe_url",
+                                               "addon", "bridge_config", "components_config")
+                            if getattr(args, name) not in (None, [])]
+                if supplied:
+                    raise TapError("Existing installation repair uses its saved configuration; "
+                                   "remove install options: " + ", ".join(supplied))
+                profile = Profile.load(root)
+            else:
+                missing = [name for name in ("backend", "port", "routing") if getattr(args, name) is None]
+                if missing:
+                    raise TapError("New profile install requires: " + ", ".join("--" + name for name in missing))
+                profile = Profile(root, str(args.backend.expanduser().resolve()), args.port, args.routing,
+                                  args.probe_url or "http://example.com/",
+                                  [str(p.expanduser().resolve()) for p in (args.addon or [])])
+                if args.bridge_config:
+                    from .bridge import configuration, read_json
+                    profile.bridge = configuration(read_json(args.bridge_config))
+                if args.components_config:
+                    from .components import configuration
+                    from .bridge import read_json
+                    profile.components = configuration(read_json(args.components_config), profile)
         else:
             profile = Profile.load(root)
         if args.command == "pages":
@@ -567,7 +582,10 @@ def main(argv=None):
                 # and keeps its own semantics.
                 profile = Profile.load(root)
             with select_routing(profile, adapter).mutation_lock():
-                output = mutate(args.command, profile, adapter)
+                if args.command == "install":
+                    output = mutate(args.command, profile, adapter, repair_install=repair_install)
+                else:
+                    output = mutate(args.command, profile, adapter)
         print(output)
         if args.command == "on":
             print_finish_setup_next(profile)
@@ -618,15 +636,21 @@ def routing_set(profile, adapter, target):
     return f"Routing set to {target}; profile remains stopped — run on to start it"
 
 
-def mutate(command, profile, adapter):
+def _reconcile_background(root, adapter):
+    """Keep optional scheduled pack commands outside capture recovery."""
+    from .background import reconcile
+    try:
+        reconcile(root, adapter)
+    except (TapError, OSError, ValueError) as error:
+        return f"; background commands unavailable: {error}"
+    return ""
+
+
+def mutate(command, profile, adapter, *, repair_install=False):
     lifecycle = Lifecycle(profile, adapter)
     if command == "install":
-        if (profile.root / "profile.json").exists():
-            raise TapError("Profile already exists; use on, or choose a new directory")
-        result = lifecycle.install()
-        from .background import reconcile
-        reconcile(profile.root, adapter)
-        return result
+        result = lifecycle.install(repair=repair_install)
+        return result + _reconcile_background(profile.root, adapter)
     if command == "uninstall":
         lifecycle.off()
         from .background import reconcile
@@ -635,6 +659,5 @@ def mutate(command, profile, adapter):
         return "Profile service removed; configuration, captured data and certificates retained"
     result = getattr(lifecycle, command)()
     if command == "on":
-        from .background import reconcile
-        reconcile(profile.root, adapter)
+        result += _reconcile_background(profile.root, adapter)
     return result

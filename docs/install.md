@@ -84,6 +84,22 @@ export PATH="$HOME/.local/bin:$PATH"
 tap doctor
 ```
 
+The installed command also keeps the legacy recovery ladder:
+
+```sh
+tap off       # restore direct networking first
+tap install   # reconcile this owned installation from its saved configuration
+tap on        # start capture and verify real traffic
+tap doctor    # inspect the result
+```
+
+Repeated `tap install` does not reinstall dependencies or erase state. It
+rebuilds the owned runtime jobs while preserving captures, certificates, packs,
+grants and reader checkpoints. Internal profiles remain an implementation and
+development mechanism; ordinary recovery does not require selecting one. A
+failure to register optional scheduled pack commands is reported as degraded
+background work and does not turn a successful capture repair into failure.
+
 HTTPS trust for system installs is part of `finish-setup`. Manual fallback:
 
 ```sh

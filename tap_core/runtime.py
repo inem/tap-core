@@ -396,8 +396,17 @@ class Lifecycle:
             routing += "; failed startup job and autoload removed"
         raise TapError(f"{failure}; {routing}")
 
-    def install(self):
+    def install(self, *, repair=False):
         self.routing  # Reject unsupported mode before any service/file mutation.
+        if repair:
+            # Preserve the legacy recovery contract: an owned installation can
+            # always be reconciled with `tap install`. Put networking back on
+            # its direct route before replacing jobs, then rebuild only the
+            # runtime projection. Profile data and consumer progress stay put.
+            self.routing.restore()
+            from .components import stop
+            stop(self.profile, self.os)
+            self.os.stop(self.profile)
         self.os.backend_version(self.profile)
         if self.os.port_open(self.profile):
             raise TapError("Port is occupied; install will not replace its owner")
@@ -408,7 +417,8 @@ class Lifecycle:
             start(self.profile, self.os)
         except (TapError, OSError) as error:
             self.recover(f"Installation failed: {error}", cleanup=isinstance(error, StartupError))
-        return "Installed profile service; use on to verify traffic"
+        verb = "Repaired" if repair else "Installed"
+        return f"{verb} profile service; use on to verify traffic"
 
     def on(self):
         route = self.routing
