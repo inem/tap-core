@@ -147,7 +147,6 @@ PYTHONPATH=/absolute/path/to/tap-core \
 python3 -B -m tap_core.pack_store build /absolute/path/to/tap-pack-youtube-copy-links \
   --output /tmp/example.youtube-copy-links-0.1.0.tap-pack
 
-./tap --profile /absolute/profile off
 ./tap --profile /absolute/profile pack install \
   /tmp/example.youtube-copy-links-0.1.0.tap-pack
 ./tap --profile /absolute/profile pack enable example.youtube-copy-links \
@@ -155,17 +154,22 @@ python3 -B -m tap_core.pack_store build /absolute/path/to/tap-pack-youtube-copy-
   --grant-origin https://www.youtube.com \
   --grant-origin https://youtube.com \
   --grant-capability page.inject
-./tap --profile /absolute/profile on
 ./tap --profile /absolute/profile bridge explain \
   --origin https://www.youtube.com
 ```
+
+This page-only example deliberately does not stop or restart TAP. When the
+profile is already running, install/enable/update/rollback/disable publish a new
+origin-scoped page plan. The stable bootstrap observes its revision and reloads
+an open classic-script page; the capture proxy and system routing keep the same
+lifecycle. Starting a stopped profile is a separate operational action.
 
 The base profile must already have an enabled bridge, but it need not list the
 pack origins or source paths. The enabled installed pack contributes those to the
 effective startup configuration. `pack list` shows installed versions, selected
 version, grants and activation state.
 
-For a compatible new artifact while the profile is stopped:
+For a compatible new page-only artifact while the profile is running:
 
 ```sh
 ./tap --profile /absolute/profile pack update /tmp/example.youtube-copy-links-0.2.0.tap-pack
@@ -173,6 +177,19 @@ For a compatible new artifact while the profile is stopped:
 ./tap --profile /absolute/profile pack disable example.youtube-copy-links
 ./tap --profile /absolute/profile pack uninstall example.youtube-copy-links
 ```
+
+Reader or handler binding changes are different: they currently require a
+stopped profile and take effect on the next `on`. Stop only that lifecycle when
+the candidate version actually changes one of those bindings. A page-only edit
+must never use global `off`/`on` as its development loop.
+
+The installed commands above are still a packaging loop, not source hot reload:
+each update first builds and verifies an immutable version. That is appropriate
+for acceptance, rollback and release checkpoints, but expensive for each CSS or
+DOM-adapter edit. Until a source watcher automates ephemeral build and plan
+publication, iterate through the mutable development bridge or rebuild and
+update the page-only artifact without stopping TAP. Do not manufacture a public
+release for every visual edit.
 
 An update is installed before activation. If its requests, dependencies, config
 or binding are incompatible, the old selected version remains enabled and no
