@@ -16,8 +16,9 @@ BUN_VERSION = '1.3.11'
 
 
 def needs_hub(components, bridge=None):
-    """Hub/Bun only when a page handler needs the request/result transport."""
-    return type(components) is dict and bool(components.get('handlers'))
+    """An enabled browser/control plane always includes its local WS Hub."""
+    return (type(components) is dict
+            and bool(components.get('handlers') or type(bridge) is dict and bridge.get('enabled')))
 
 
 def configuration(value, profile):
@@ -130,6 +131,9 @@ def hub_health(profile):
 
 def status(profile, adapter):
     if profile.components is None:
+        if type(profile.bridge) is dict and profile.bridge.get('enabled'):
+            return {'configured': False, 'healthy': False,
+                    'error': 'Enabled bridge requires managed Hub components'}
         return {'configured': False, 'healthy': True}
     import math
     import time
@@ -176,6 +180,8 @@ def start(profile, adapter):
 
 def _start(profile, adapter):
     if profile.components is None:
+        if type(profile.bridge) is dict and profile.bridge.get('enabled'):
+            raise StartupError('Enabled bridge requires managed Hub components with Bun')
         return
     job = Job(profile)
     if adapter.service_pid(job):

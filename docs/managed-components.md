@@ -52,9 +52,9 @@ to the existing `install` invocation. An illustrative binding is:
 These paths are illustrative and must be supplied explicitly. There are no
 production directories, account credentials, flows, adapters or journal defaults.
 This slice checks Bun **1.3.11** and Python >= 3.9 before component startup
-when handlers are configured (Hub path). Page-only and reader-only profiles
-without handlers start the component controller without Bun/Hub; Bun is not
-probed in that mode.
+whenever the browser/control bridge is enabled. The Hub is that plane's required
+WS and development channel even when no handler is installed. A reader-only
+profile keeps `bridge.enabled=false` and starts without Bun/Hub.
 Handler `TAP_PACK_CONTEXT` includes `profile_root` so an installed pack can
 resolve sibling reader outputs without absolute config paths. This is a local
 filesystem location for trusted same-user handlers, not a new grant or a
@@ -140,9 +140,11 @@ This is an explicit new `tap.bridge/v1` interface, not compatibility with legacy
 profiles serve `page-runtime.js` and `tap.page-plan/v1` directly through their
 existing reserved proxy routes. The runtime polls the plan every two seconds
 (five after an unavailable or malformed response). A changed origin-scoped
-revision reloads classic scripts with a `tap-ui` cache-buster. This works without
-Hub/Bun. When handlers require the Hub, `Welcome` and `PlanChanged` also wake the
-same HTTP reconciliation; they do not carry executable code or new authority.
+revision reloads classic scripts with a `tap-ui` cache-buster. Plan polling stays
+on the HTTP path and does not depend on a WS message. The enabled browser/control
+plane also runs the Hub: `Welcome` establishes its page session and `PlanChanged`
+wakes the same HTTP reconciliation immediately; neither message carries executable
+code or new authority.
 `window.TapBridge.isReady()` reports a welcomed connection;
 `await TapBridge.request('projection', args)` returns the handler value or rejects
 with an error carrying `code` and `completion: "unknown"`.
