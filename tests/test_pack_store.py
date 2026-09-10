@@ -122,6 +122,9 @@ class PackStoreTests(unittest.TestCase):
         effective = self.store.effective_bridge(bridge())
         self.assertEqual(effective_configuration(self.profile, bridge()), effective)
         self.assertEqual(effective["allow_origins"], ORIGINS)
+        self.assertEqual(effective["page_pack_origins"], [
+            {"id": PACK_ID, "version": "0.1.0", "origins": ORIGINS},
+        ])
         self.assertEqual([Path(path).parent.parent.name for path in effective["page_scripts"]],
                          ["fixture.ui", "fixture.feature"])
         self.assertTrue(all(str(self.profile / "resources/page") in path

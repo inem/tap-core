@@ -243,9 +243,24 @@ class BridgeTests(unittest.TestCase):
         value = json.loads(plan.response.content)
         self.assertEqual(value['access'], 'revoked')
         self.assertEqual(value['scripts'], [])
+        self.assertEqual(value['packs'], [])
         asset = flow('/__tap/probe/core/' + digest(b'window.fixture = true;') + '.js?token=' + TOKEN)
         self.bridge.requestheaders(asset)
         self.assertEqual(asset.response.status_code, 403)
+
+    def test_page_plan_exposes_only_origin_scoped_pack_identity(self):
+        effective = config(allow_origins=['https://example.test', 'https://third.test'],
+                           exclude_origins=[], page_scripts=['/one.js', '/two.js'])
+        effective['page_script_origins'] = [['https://example.test'], ['https://third.test']]
+        effective['page_pack_origins'] = [
+            {'id': 'fixture.first', 'version': '1.2.3', 'origins': ['https://example.test']},
+            {'id': 'fixture.second', 'version': '2.0.0', 'origins': ['https://third.test']},
+        ]
+        bridge = TestBridge(effective, TOKEN, [b'one', b'two'])
+        self.assertEqual(bridge.page_plan('https://example.test')['packs'],
+                         [{'id': 'fixture.first', 'version': '1.2.3'}])
+        self.assertEqual(bridge.page_plan('https://third.test')['packs'],
+                         [{'id': 'fixture.second', 'version': '2.0.0'}])
 
     def test_injected_bootstrap_carries_applied_plan_and_ws_mode(self):
         self.bridge.ws_origins = set()
