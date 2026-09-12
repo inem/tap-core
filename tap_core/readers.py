@@ -82,13 +82,14 @@ def record_origin(record):
         return None
     try:
         parts = urlsplit(url)
-        if parts.scheme not in ('http', 'https') or not parts.hostname or parts.username or parts.password:
+        if (parts.scheme not in ('http', 'https') or not parts.hostname
+                or parts.username is not None or parts.password is not None):
             return None
         port = parts.port
     except ValueError:
         return None
     default = {'http': 80, 'https': 443}[parts.scheme]
-    return f'{parts.scheme}://{parts.hostname}' + (f':{port}' if port and port != default else '')
+    return f'{parts.scheme}://{parts.hostname}' + (f':{port}' if port is not None and port != default else '')
 
 
 class Reader:

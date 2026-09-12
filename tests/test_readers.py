@@ -76,8 +76,11 @@ class ReaderTests(unittest.TestCase):
         self.assertEqual(record_origin({'url': 'https://fixture.example:8443/data'}),
                          'https://fixture.example:8443')
         for url in ('not a URL', 'https://name:secret@fixture.example/x',
-                    'https://fixture.example:bad/x', 'file:///tmp/x'):
+                    'https://@fixture.example/x', 'https://fixture.example:bad/x',
+                    'file:///tmp/x'):
             self.assertIsNone(record_origin({'url': url}))
+        self.assertEqual(record_origin({'url': 'https://fixture.example:0/x'}),
+                         'https://fixture.example:0')
 
     def test_new_reader_replays_retained_history_without_resetting_another(self):
         self.write('A', 'B')
