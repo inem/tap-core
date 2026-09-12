@@ -300,7 +300,7 @@ def parser():
     explain.add_argument('--origin', required=True)
     reader = commands.add_parser("reader", help="Run independent readers over retained capture")
     actions = reader.add_subparsers(dest="reader_action", required=True)
-    for action in ("run", "status", "replay"):
+    for action in ("run", "status", "replay", "rebind"):
         command = actions.add_parser(action)
         command.add_argument("name")
         if action != "status":
@@ -308,6 +308,10 @@ def parser():
         if action == "run":
             command.add_argument("--max-records", type=int, default=100)
             command.add_argument("--timeout", type=float, default=30)
+        if action == "rebind":
+            command.add_argument("--expect-hash", required=True,
+                                 help="Current checkpoint definition hash; keep its cursor")
+            command.add_argument("--lane", choices=("replay", "fresh"), default="replay")
     pack = commands.add_parser("pack", help="Install and activate external pack artifacts")
     pack_actions = pack.add_subparsers(dest="pack_action", required=True)
     pack_actions.add_parser("list")
@@ -553,6 +557,12 @@ def main(argv=None):
                 output = reader.status()
             elif args.reader_action == "replay":
                 output = reader.replay(definition(args.definition))
+            elif args.reader_action == "rebind":
+                from .components import Job
+                if adapter.service_loaded(profile) or adapter.service_loaded(Job(profile)):
+                    raise TapError('Stop this profile with off before rebinding reader progress')
+                output = Reader(profile, args.name, lane=args.lane).rebind(
+                    definition(args.definition), args.expect_hash)
             else:
                 output = reader.run(definition(args.definition), args.max_records, args.timeout)
             print(json.dumps(output, indent=2))

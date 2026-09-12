@@ -117,9 +117,11 @@ class Journal:
             raise JournalError("Invalid capture cursor")
         try:
             value = json.loads(base64.b64decode(token, altchars=b'-_', validate=True))
-            if (not isinstance(value, dict) or set(value) != {"v", "scope", "segment", "line", "anchor"}
-                    or type(value["v"]) is not int or value["v"] != 1
-                    or type(value["line"]) is not int or value["line"] < 1
+            if (not isinstance(value, dict) or type(value.get("v")) is not int or value["v"] not in (1, 2)
+                    or set(value) != ({"v", "scope", "segment", "line", "anchor"} if value["v"] == 1
+                                      else {"v", "scope", "segment", "offset", "anchor"})
+                    or (value["v"] == 1 and (type(value["line"]) is not int or value["line"] < 1))
+                    or (value["v"] == 2 and (type(value["offset"]) is not int or value["offset"] < 0))
                     or any(not isinstance(value[key], str) or not re.fullmatch(r"[0-9a-f]{64}", value[key])
                            for key in ("scope", "segment", "anchor"))):
                 raise ValueError()
@@ -129,9 +131,45 @@ class Journal:
             raise JournalGap("Cursor belongs to another capture directory")
         return value
 
-    def cursor(self, segment, index, line):
-        value = {"v": 1, "scope": self.scope, "segment": segment, "line": index, "anchor": digest(line)}
+    def cursor(self, segment, index, line, *, offset=None):
+        value = ({"v": 1, "scope": self.scope, "segment": segment, "line": index, "anchor": digest(line)}
+                 if offset is None else
+                 {"v": 2, "scope": self.scope, "segment": segment, "offset": offset, "anchor": digest(line)})
         return base64.urlsafe_b64encode(json.dumps(value, separators=(",", ":")).encode()).decode()
+
+    def tail(self):
+        """Position after the last complete retained record in a stable snapshot."""
+        with self.snapshot() as selected:
+            for path, handle, stat in reversed(selected):
+                if not stat.st_size:
+                    continue
+                handle.seek(0)
+                first = handle.readline(self.max_record_bytes + 1)
+                if len(first) > self.max_record_bytes:
+                    raise RecordError("Capture record exceeds reader allocation limit")
+                if not first.endswith(b"\n"):
+                    if path.name == "stream.jsonl":
+                        continue
+                    raise RecordError("Unfinished line in an archived capture segment")
+                segment = digest(first)
+                start = max(0, stat.st_size - self.max_record_bytes - 1)
+                handle.seek(start)
+                end = handle.read(stat.st_size - start)
+                complete_end = end.rfind(b"\n")
+                if complete_end < 0:
+                    if path.name == "stream.jsonl":
+                        continue
+                    raise RecordError("Unfinished line in an archived capture segment")
+                if complete_end != len(end) - 1 and path.name != "stream.jsonl":
+                    raise RecordError("Unfinished line in an archived capture segment")
+                previous_end = end.rfind(b"\n", 0, complete_end)
+                if previous_end < 0 and start != 0:
+                    raise RecordError("Capture record exceeds reader allocation limit")
+                offset = start + previous_end + 1 if previous_end >= 0 else 0
+                line = end[previous_end + 1:complete_end + 1]
+                decode_record(line)
+                return self.cursor(segment, 1, line, offset=offset)
+        return None
 
     def scan(self, after=None):
         """Yield complete records after a verified cursor, or all retained records.
@@ -162,6 +200,21 @@ class Journal:
             for segment, path, handle, size in segments:
                 if not found and segment != saved["segment"]:
                     continue
+                if not found and saved["v"] == 2:
+                    if saved["offset"] >= size:
+                        raise JournalGap("Saved capture position was truncated; refusing to advance")
+                    handle.seek(saved["offset"])
+                    anchored_line = next(self.lines(path, handle, size - saved["offset"]), None)
+                    if anchored_line is None or digest(anchored_line) != saved["anchor"]:
+                        raise JournalGap("Saved capture record changed; refusing to advance")
+                    decode_record(anchored_line)
+                    found = True
+                    offset = handle.tell()
+                    for index, line in enumerate(self.lines(path, handle, size - offset), 1):
+                        position = handle.tell() - len(line)
+                        record = decode_record(line)
+                        yield Entry(record, self.cursor(segment, index, line, offset=position))
+                    continue
                 anchored = found
                 for index, line in enumerate(self.lines(path, handle, size), 1):
                     if index == 1 and digest(line) != segment:
@@ -175,6 +228,6 @@ class Journal:
                         anchored = found = True
                         continue
                     record = decode_record(line)
-                    yield Entry(record, self.cursor(segment, index, line))
+                    yield Entry(record, self.cursor(segment, index, line, offset=handle.tell() - len(line)))
                 if not anchored:
                     raise JournalGap("Saved capture position was truncated; refusing to advance")

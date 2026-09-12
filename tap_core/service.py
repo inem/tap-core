@@ -32,8 +32,10 @@ def main():
                      'hub_pid': hub_pid, 'error': error,
                      'workloads_healthy': workloads_healthy, 'readers': dict(rows)}
         atomic_json(health_path, state)
-    def reader_loop(name, spec, allowed_origins):
+    def reader_loop(name, spec, allowed_origins, fresh_enabled):
         reader, failures, first = Reader(profile, name), 0, True
+        if fresh_enabled:
+            return fresh_reader_loop(name, spec, allowed_origins)
         while not stopping.is_set():
             try:
                 reader.run(spec, max_records=1 if first else 50, timeout=10, guard_parent=True,
@@ -49,6 +51,56 @@ def main():
             if failures >= 3:
                 return  # Explicit off/on resumes; no infinite failed replay loop.
             stopping.wait(min(4, 2 ** (failures - 1)) if failures else 0.25)
+
+    def fresh_reader_loop(name, spec, allowed_origins):
+        replay = Reader(profile, name)
+        fresh = Reader(profile, name, lane='fresh')
+        initialized = False
+        replay_failures = fresh_failures = 0
+        replay_error = fresh_error = None
+        while not stopping.is_set():
+            if not initialized:
+                try:
+                    fresh.follow_tail(spec)
+                    initialized = True
+                    fresh_failures = 0
+                except Exception as error:
+                    fresh_failures += 1
+                    fresh_error = type(error).__name__ + ': ' + str(error)
+            if initialized:
+                try:
+                    fresh.run(spec, max_records=5, timeout=10, guard_parent=True,
+                              cancelled=stopping.is_set, allowed_origins=allowed_origins)
+                    fresh_failures = 0
+                    if not any(fresh.state.glob('fresh-failure-*.json')):
+                        fresh_error = None
+                except Exception as error:
+                    fresh_failures += 1
+                    fresh_error = type(error).__name__ + ': ' + str(error)
+                    if fresh_failures >= 3:
+                        try:
+                            fresh.skip_failed_fresh(spec)
+                            fresh_failures = 0
+                        except Exception as skip_error:
+                            fresh_error += '; recovery failed: ' + str(skip_error)
+            if replay_failures < 3:
+                try:
+                    replay.run(spec, max_records=1, timeout=10,
+                               guard_parent=True, cancelled=stopping.is_set,
+                               allowed_origins=allowed_origins)
+                    replay_failures = 0
+                    replay_error = None
+                except Exception as error:
+                    replay_failures += 1
+                    replay_error = type(error).__name__ + ': ' + str(error)
+            error = fresh_error or replay_error
+            row = {'healthy': error is None, 'phase': 'waiting' if error is None else
+                   ('failed' if replay_failures >= 3 else 'backoff'),
+                   'progress': replay.load(), 'fresh_progress': fresh.load(),
+                   'fresh_skipped': len(list(fresh.state.glob('fresh-failure-*.json'))), 'error': error}
+            with mutex:
+                rows[name] = row
+            stopping.wait(0.25 if fresh_failures == 0 else min(4, 2 ** (fresh_failures - 1)))
     with profile_lock(profile.root / 'state/component-service', busy_message='Component controller already running'):
         starts_path = profile.root / 'state/component-starts.json'
         try:
@@ -65,6 +117,7 @@ def main():
         store = PackStore(profile.root)
         components = store.effective_components(profile.components)
         reader_origins = store.reader_origins()
+        fresh_readers = store.fresh_readers()
         hub = None
         hub_pid = None
         try:
@@ -86,7 +139,8 @@ def main():
             for name, spec in components['readers'].items():
                 rows[name] = {'healthy': False, 'phase': 'starting', 'error': None}
                 thread = threading.Thread(target=reader_loop,
-                                          args=(name, spec, reader_origins.get(name)), daemon=True)
+                                          args=(name, spec, reader_origins.get(name), name in fresh_readers),
+                                          daemon=True)
                 threads.append(thread)
                 thread.start()
             while not stopping.is_set():

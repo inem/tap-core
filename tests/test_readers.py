@@ -14,7 +14,7 @@ from unittest.mock import patch
 from tap_core import readers
 from tap_core.journal import JournalGap
 from tap_core.records import RecordError
-from tap_core.readers import Reader, ReaderError, definition, record_origin
+from tap_core.readers import Reader, ReaderError, definition, fingerprint, record_origin
 from tap_core.runtime import Profile, TapError, profile_lock
 from test_records_journal import capture_record, encoded
 
@@ -57,6 +57,47 @@ class ReaderTests(unittest.TestCase):
         self.assertEqual(self.outputs(slow), ['A', 'B', 'C'])
         self.assertEqual(fast.checkpoint.read_bytes(), fast_state)
         self.assertEqual(slow.run(self.spec)['completed_this_run'], 0)
+
+    def test_fresh_lane_does_not_wait_for_recovery_or_reset_its_cursor(self):
+        self.write('old-a', 'old-b')
+        fresh = Reader(self.profile, 'one', lane='fresh')
+        fresh.follow_tail(self.spec)
+        original = self.stream.read_bytes()
+        self.stream.write_bytes(original + encoded(capture_record(body=json.dumps({'value': 'new'}))))
+        fresh.run(self.spec)
+        self.assertEqual(self.outputs(self.reader), ['new'])
+        self.reader.run(self.spec, max_records=2)
+        self.assertEqual(self.outputs(self.reader), ['new', 'old-a', 'old-b'])
+        self.assertEqual(self.reader.load()['processed'], 2)
+        self.assertEqual(fresh.load()['processed'], 1)
+        checkpoint = fresh.load()['cursor']
+        with self.stream.open('ab') as handle:
+            handle.write(encoded(capture_record(body=json.dumps({'value': 'during-restart'}))))
+        fresh.follow_tail(self.spec)
+        self.assertEqual(fresh.load()['cursor'], checkpoint)
+        fresh.run(self.spec)
+        self.assertIn('during-restart', self.outputs(self.reader))
+        changed = dict(self.spec, revision='fixture-2')
+        with self.assertRaisesRegex(ReaderError, 'not reset'):
+            fresh.follow_tail(changed)
+        old = fresh.load()['cursor']
+        fresh.rebind(changed, fingerprint(self.spec))
+        self.assertEqual(fresh.load()['cursor'], old)
+        fresh.follow_tail(changed)
+
+    def test_rebind_preserves_recovery_cursor_and_requires_expected_hash(self):
+        self.write('A', 'B')
+        self.reader.run(self.spec, max_records=1)
+        before = self.reader.load()
+        changed = dict(self.spec, revision='fixture-2')
+        with self.assertRaisesRegex(ReaderError, 'not rebound'):
+            self.reader.rebind(changed, '0' * 64)
+        self.assertEqual(self.reader.load(), before)
+        self.reader.rebind(changed, fingerprint(self.spec))
+        self.assertEqual(self.reader.load()['cursor'], before['cursor'])
+        self.assertEqual(self.reader.load()['generation'], before['generation'] + 1)
+        self.assertEqual(self.reader.run(changed)['completed_this_run'], 1)
+        self.assertEqual(self.outputs(self.reader), ['A', 'B'])
 
     def test_origin_filter_advances_past_unrelated_capture_without_running_child(self):
         records = self.write('A', 'B', 'C')

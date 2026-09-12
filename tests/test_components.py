@@ -11,6 +11,8 @@ import unittest
 from unittest.mock import Mock
 from tap_core.runtime import Profile, MacOS, TapError
 from tap_core.components import _start, configuration, identity, needs_hub, secret, status, stop, Job
+from tap_core.pack_store import PackStore, build_artifact
+from test_records_journal import capture_record, encoded
 from test_bridge import config
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -86,6 +88,62 @@ class ComponentTests(unittest.TestCase):
         self.assertTrue(observed['healthy'])
         self.assertFalse(observed['workloads_healthy'])
         self.assertEqual(observed['readers']['broken']['phase'], 'failed')
+
+    def test_fresh_managed_reader_handles_new_capture_while_replay_has_backlog(self):
+        import sqlite3
+        source = self.root / 'fresh-pack'
+        source.mkdir()
+        reader_source = (ROOT / 'fixtures/readers/sqlite_projection.py').read_text()
+        (source / 'reader.py').write_text(reader_source.replace('    context = json.loads(',
+            '    time.sleep(0.2)\n    context = json.loads(', 1))
+        (source / 'pack.json').write_text(json.dumps({
+            'manifest_version': 1, 'id': 'fixture.fresh', 'version': '0.1.0',
+            'requires': {'pack_api': 1, 'dependencies': []}, 'files': ['reader.py'],
+            'entrypoints': {'reader': {'file': 'reader.py', 'interface': 'python-jsonl-v1',
+                                      'delivery': 'fresh-and-replay-v1'}},
+            'config': {}, 'access': {'origins': ['https://fixture.example'],
+                                     'capabilities': ['capture.read']},
+        }))
+        artifact = self.root / 'fresh.tap-pack'
+        build_artifact(source, artifact)
+        self.profile.bridge = dict(config(), enabled=False)
+        self.profile.components = {'version': 1, 'python': sys.executable, 'bun': '/usr/bin/true',
+                                   'readers': {}, 'handlers': {}}
+        self.profile.save()
+        store = PackStore(self.root)
+        store.install(artifact)
+        store.enable('fixture.fresh', '0.1.0', origins=['https://fixture.example'],
+                     capabilities=['capture.read'])
+        stream = self.root / 'data/stream.jsonl'
+        stream.write_bytes(b''.join(encoded(capture_record(body=json.dumps({'value': f'old-{n}'})))
+                                    for n in range(30)))
+        process = subprocess.Popen([sys.executable, '-B', '-m', 'tap_core.service', str(self.root)],
+                                   cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            fresh = self.root / 'state/readers/fixture.fresh/fresh-checkpoint.json'
+            deadline = time.monotonic() + 12
+            while not fresh.exists() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertTrue(fresh.exists())
+            with stream.open('ab') as handle:
+                handle.write(encoded(capture_record(body=json.dumps({'value': 'new'}))))
+            database = self.root / 'data/readers/fixture.fresh/projection.sqlite3'
+            while time.monotonic() < deadline:
+                if database.exists():
+                    with sqlite3.connect(database) as connection:
+                        rows = [json.loads(row[0])['value'] for row in
+                                connection.execute('SELECT body FROM deliveries ORDER BY rowid')]
+                    if 'new' in rows:
+                        break
+                time.sleep(0.05)
+            else:
+                self.fail('Fresh capture was not materialized')
+            self.assertIn('new', rows[:3])
+            replay = json.loads((self.root / 'state/readers/fixture.fresh/checkpoint.json').read_text())
+            self.assertLess(replay['processed'], 30)
+        finally:
+            process.terminate()
+            process.communicate(timeout=5)
 
     def test_component_identity_ignores_page_only_resource_changes(self):
         from unittest.mock import patch

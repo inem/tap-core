@@ -424,7 +424,7 @@ class PackStoreTests(unittest.TestCase):
 
     def test_pack_update_refuses_incompatible_reader_checkpoint(self):
         import sys
-        from tap_core.readers import fingerprint
+        from tap_core.readers import Reader, fingerprint
         linked = Path(__file__).resolve().parent.parent / "fixtures/packs/installed-linked"
         components = {
             "version": 1, "python": sys.executable, "bun": "/usr/bin/true",
@@ -448,6 +448,7 @@ class PackStoreTests(unittest.TestCase):
         shutil.copytree(linked, linked_v2)
         manifest = json.loads((linked_v2 / "pack.json").read_text())
         manifest["version"] = "0.2.0"
+        manifest["entrypoints"]["reader"]["delivery"] = "fresh-and-replay-v1"
         (linked_v2 / "reader.py").write_text((linked_v2 / "reader.py").read_text() + "\n# bump\n")
         (linked_v2 / "pack.json").write_text(json.dumps(manifest, indent=2) + "\n")
         second = self.artifact(linked_v2, "linked-v2.tap-pack")
@@ -456,6 +457,19 @@ class PackStoreTests(unittest.TestCase):
         selected = self.store.load()["packs"]["fixture.installed-linked"]["selected"]
         self.assertEqual(selected, "0.1.0")
         self.assertIn("0.2.0", self.store.load()["packs"]["fixture.installed-linked"]["versions"])
+        new_spec = dict(old_spec, revision='fixture.installed-linked@0.2.0',
+                        command=[sys.executable, str(self.store.version_root(
+                            'fixture.installed-linked', '0.2.0') / 'reader.py')])
+        reader = Reader(Profile(self.profile, '/fixture/mitmdump', 19001, 'explicit',
+                                'http://example.test', []), 'fixture.installed-linked')
+        previous = reader.load()
+        reader.rebind(new_spec, fingerprint(old_spec))
+        self.store.enable('fixture.installed-linked', '0.2.0',
+                          origins=['https://fixture.example'],
+                          capabilities=['page.inject', 'capture.read', 'bridge.handle'])
+        self.assertEqual(reader.load()['cursor'], previous['cursor'])
+        self.assertEqual(reader.load()['processed'], previous['processed'])
+        self.assertEqual(self.store.fresh_readers(), {'fixture.installed-linked'})
 
     def test_prepare_refreshes_effective_runtime_after_enable_disable(self):
         import sys

@@ -146,6 +146,32 @@ class JournalTests(unittest.TestCase):
         self.assertFalse(writer.thread.is_alive())
         return writer
 
+    def test_tail_and_offset_cursor_follow_only_new_complete_records(self):
+        first, second, third = [capture_record(body=str(n)) for n in range(3)]
+        self.write(first, second)
+        tail = self.journal.tail()
+        self.assertEqual(json.loads(base64.urlsafe_b64decode(tail))["v"], 2)
+        self.assertEqual(list(self.journal.scan(tail)), [])
+        with self.stream.open("ab") as handle:
+            handle.write(encoded(third)[:-1])
+        self.assertEqual(list(self.journal.scan(tail)), [])
+        with self.stream.open("ab") as handle:
+            handle.write(b"\n")
+        entries = list(self.journal.scan(tail))
+        self.assertEqual([entry.record for entry in entries], [third])
+        self.assertEqual(list(self.journal.scan(entries[0].cursor)), [])
+        changed = bytearray(self.stream.read_bytes())
+        changed[len(encoded(first))] = ord("{") if changed[len(encoded(first))] != ord("{") else ord("[")
+        self.stream.write_bytes(changed)
+        with self.assertRaises(JournalGap):
+            list(self.journal.scan(tail))
+
+    def test_legacy_line_cursor_still_resumes(self):
+        first, second = [capture_record(body=str(n)) for n in range(2)]
+        self.write(first, second)
+        token = self.journal.cursor(__import__('hashlib').sha256(encoded(first)).hexdigest(), 1, encoded(first))
+        self.assertEqual([entry.record for entry in self.journal.scan(token)], [second])
+
     def test_resume_after_rotation_and_restart(self):
         first, second, third = [capture_record(body=str(n)) for n in range(3)]
         self.append_with_writer(first)
