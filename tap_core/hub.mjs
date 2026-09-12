@@ -35,6 +35,24 @@ const allowed = origin => {
 };
 const encode = value => JSON.stringify(value);
 const fail = (code, message) => ({ok: false, error: {code, message, completion: 'unknown'}});
+// A handler may finish with a non-zero process status after it has already
+// produced a typed, user-actionable error. Keep only small operational fields;
+// never forward stderr or arbitrary handler payloads to the page.
+function handlerFailure(result) {
+  if (!result || typeof result !== 'object' || result.ok !== false
+      || typeof result.error?.code !== 'string' || typeof result.error?.message !== 'string') return null;
+  const error = {code: result.error.code.slice(0, 64), message: result.error.message.slice(0, 1024), completion: 'unknown'};
+  const details = result.error.details;
+  if (details && typeof details === 'object' && !Array.isArray(details)) {
+    const safe = {};
+    for (const key of ['phase', 'timeout_ms', 'exit_code']) {
+      const value = details[key];
+      if ((typeof value === 'string' && value.length <= 128) || Number.isSafeInteger(value)) safe[key] = value;
+    }
+    if (Object.keys(safe).length) error.details = safe;
+  }
+  return {ok: false, error};
+}
 function send(ws, value) { if (!ws.data.closed) ws.send(encode({version: VERSION, session: ws.data.session, ...value})); }
 function controllerAllowed(request) { return equal(request.headers.get('authorization'), 'Bearer ' + secret); }
 function publicPage(ws) { return {page:ws.data.page, origin:ws.data.origin, connected:true}; }
@@ -89,6 +107,11 @@ async function invoke(ws, request) {
   const binding = Object.hasOwn(components.handlers, request.handler) ? components.handlers[request.handler] : null;
   if (!binding || !binding.origins.includes(ws.data.origin)) return fail('handler_denied', 'Handler is not granted to this origin');
   if (active >= 8 || ws.data.pending >= 4) return fail('busy', 'Handler capacity exceeded');
+  // The original five-second budget remains the default. A pack may explicitly
+  // request a longer, still bounded wait for a user-initiated local operation.
+  const requestedTimeout = binding.config?.['request-timeout-ms'];
+  const timeoutMs = Number.isInteger(requestedTimeout) && requestedTimeout >= 1000 && requestedTimeout <= 60000
+    ? requestedTimeout : 5000;
   active++; ws.data.pending++;
   let child, timer;
   try {
@@ -103,18 +126,20 @@ async function invoke(ws, request) {
     ws.data.children.add(child);
     child.stdin.write(encode({version: 1, request_id: request.id, args: request.args}) + '\n');
     child.stdin.end();
-    const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('handler_timeout')), 5000); });
+    const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('handler_timeout')), timeoutMs); });
     const [output, diagnostic, code] = await Promise.race([Promise.all([bounded(child.stdout, 262144), bounded(child.stderr, 65536), child.exited]), timeout]);
+    let result;
+    try { result = JSON.parse(output); } catch {}
+    const typedFailure = handlerFailure(result);
     if (code !== 0) {
       writeFileSync(join(context.log_dir, 'last-failure.json'), encode({request_id: request.id, exit_code: code, stderr: diagnostic}), {mode: 0o600});
+      if (typedFailure) return typedFailure;
       return fail('handler_failed', 'Handler exited unsuccessfully');
     }
-    let result;
-    try { result = JSON.parse(output); } catch { return fail('handler_protocol', 'Expected JSON handler result'); }
+    if (result === undefined) return fail('handler_protocol', 'Expected JSON handler result');
     if (!result || typeof result !== 'object' || typeof result.ok !== 'boolean') return fail('handler_protocol', 'Expected JSON result with boolean ok');
     if (result.ok) return {ok: true, value: result.value ?? null};
-    if (typeof result.error?.code !== 'string' || typeof result.error?.message !== 'string') return fail('handler_protocol', 'Expected typed handler error');
-    return {ok: false, error: {code: result.error.code.slice(0, 64), message: result.error.message.slice(0, 1024), completion: 'unknown'}};
+    return typedFailure || fail('handler_protocol', 'Expected typed handler error');
   } catch (error) { return fail(error.message === 'handler_timeout' ? 'handler_timeout' : 'handler_failed', 'Handler failed or completion is uncertain'); }
   finally {
     clearTimeout(timer);

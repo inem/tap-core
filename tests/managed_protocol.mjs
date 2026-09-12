@@ -83,12 +83,15 @@ try {
   assert.equal(result.session,a.session); assert.equal(result.value.page,a.page);
   assert.notEqual(a.session,b.session); assert.equal(b.messages.length,0); checks++;
   for (const [name, code] of [['absent','handler_denied'],['__proto__','handler_denied'],['denied','handler_denied'],
-      ['invalid','handler_protocol'],['failed','handler_failed'],['missing','handler_failed'],
+      ['invalid','handler_protocol'],['missing','handler_failed'],
       ['oversize','handler_failed'],['hang','handler_timeout']]) {
     const failure = await a.request(name).result();
     assert.equal(failure.ok,false,name); assert.equal(failure.error.code,code,name);
     assert.equal(failure.error.completion,'unknown'); checks++;
   }
+  const reported = await a.request('failed').result();
+  assert.equal(reported.ok, false); assert.equal(reported.error.code, 'runtime_timeout');
+  assert.deepEqual(reported.error.details, {phase:'base proposal', timeout_ms:60000}); checks++;
   const late = a.request('delayed');
   await sleep(100); a.ws.close();
   const reconnect = await connect(a.page);
