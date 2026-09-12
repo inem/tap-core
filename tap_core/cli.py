@@ -269,7 +269,7 @@ def parser():
         commands.add_parser(name)
     status_command = commands.add_parser("status")
     status_command.add_argument("--output", choices=("raw-json", "semantic-json", "terminal"),
-                                default="raw-json")
+                                default="terminal")
     status_command.add_argument("--width", type=int, default=80)
     status_command.add_argument("--color", choices=("auto", "always", "never"), default="auto")
     routing = commands.add_parser(
