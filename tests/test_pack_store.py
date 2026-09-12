@@ -370,6 +370,8 @@ class PackStoreTests(unittest.TestCase):
         self.assertTrue(any("fixture.ui" in path for path in effective_bridge["page_scripts"]))
         effective = self.store.effective_components(components)
         reader = effective["readers"]["fixture.installed-linked"]
+        self.assertEqual(self.store.reader_origins()["fixture.installed-linked"],
+                         frozenset({"https://fixture.example"}))
         handler = effective["handlers"]["fixture.installed-linked"]
         self.assertEqual(reader["command"][0], sys.executable)
         self.assertTrue(reader["command"][1].endswith("/reader.py"))

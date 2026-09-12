@@ -111,7 +111,11 @@ then check for new input every 250 ms. A failed batch is retried after 0.5 and
 capture segment has left retention is handled before that retry policy: the lost
 boundary is recorded and the reader continues at the earliest retained record.
 `off/on` is not required. Other persistent failures still exhaust the bounded
-attempts.
+attempts. Installed pack readers advance over capture records outside their
+declared exact origins without starting a child process. The origin check is
+transport-level; the pack still selects endpoints and bodies. Development readers
+without a pack origin declaration continue to receive every record. Existing
+checkpoints and reader definitions do not change.
 A successful batch resets its failure counter. External effects may already have
 happened before failure: cursor retention permits retry, it does not undo effects.
 

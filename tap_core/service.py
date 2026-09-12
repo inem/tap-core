@@ -32,11 +32,12 @@ def main():
                      'hub_pid': hub_pid, 'error': error,
                      'workloads_healthy': workloads_healthy, 'readers': dict(rows)}
         atomic_json(health_path, state)
-    def reader_loop(name, spec):
+    def reader_loop(name, spec, allowed_origins):
         reader, failures, first = Reader(profile, name), 0, True
         while not stopping.is_set():
             try:
-                reader.run(spec, max_records=1 if first else 50, timeout=10, guard_parent=True, cancelled=stopping.is_set)
+                reader.run(spec, max_records=1 if first else 50, timeout=10, guard_parent=True,
+                           cancelled=stopping.is_set, allowed_origins=allowed_origins)
                 failures, first = 0, False
                 row = {'healthy': True, 'phase': 'waiting', 'progress': reader.load(), 'error': None}
             except Exception as error:
@@ -63,6 +64,7 @@ def main():
         from tap_core.pack_store import PackStore
         store = PackStore(profile.root)
         components = store.effective_components(profile.components)
+        reader_origins = store.reader_origins()
         hub = None
         hub_pid = None
         try:
@@ -83,7 +85,8 @@ def main():
                     raise RuntimeError('Hub exited before readiness')
             for name, spec in components['readers'].items():
                 rows[name] = {'healthy': False, 'phase': 'starting', 'error': None}
-                thread = threading.Thread(target=reader_loop, args=(name, spec), daemon=True)
+                thread = threading.Thread(target=reader_loop,
+                                          args=(name, spec, reader_origins.get(name)), daemon=True)
                 threads.append(thread)
                 thread.start()
             while not stopping.is_set():

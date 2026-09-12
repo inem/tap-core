@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from urllib.parse import urlsplit
 
 from .journal import Journal, JournalGap
 from .runtime import TapError, profile_lock
@@ -72,6 +73,23 @@ def validate_definition(value):
 
 def fingerprint(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()).hexdigest()
+
+
+def record_origin(record):
+    """Return a captured URL's canonical HTTP origin, without site-specific routing."""
+    url = record.get('url')
+    if not isinstance(url, str):
+        return None
+    try:
+        parts = urlsplit(url)
+        if (parts.scheme not in ('http', 'https') or not parts.hostname
+                or parts.username is not None or parts.password is not None):
+            return None
+        port = parts.port
+    except ValueError:
+        return None
+    default = {'http': 80, 'https': 443}[parts.scheme]
+    return f'{parts.scheme}://{parts.hostname}' + (f':{port}' if port is not None and port != default else '')
 
 
 class Reader:
@@ -140,7 +158,8 @@ class Reader:
             self.store(state)
         return self.status()
 
-    def run(self, spec, max_records=100, timeout=30, *, guard_parent=False, cancelled=None):
+    def run(self, spec, max_records=100, timeout=30, *, guard_parent=False, cancelled=None,
+            allowed_origins=None):
         validate_definition(spec)
         if type(max_records) is not int or max_records < 1 or not 0 < timeout <= 300:
             raise ReaderError('Run requires positive max_records and timeout <= 300 seconds')
@@ -161,6 +180,13 @@ class Reader:
                             for entry in entries:
                                 if cancelled and cancelled():
                                     raise ReaderError('Reader stopped; cursor was not advanced')
+                                if allowed_origins is not None and record_origin(entry.record) not in allowed_origins:
+                                    self.store(state, cursor=entry.cursor, processed=state['processed'] + 1,
+                                               inflight=None, phase='ready', error=None)
+                                    completed += 1
+                                    if completed == max_records:
+                                        break
+                                    continue
                                 delivery_id = hashlib.sha256(entry.cursor.encode()).hexdigest()
                                 invocation_id = fingerprint([self.name, state['generation'], delivery_id])
                                 self.store(state, phase='running', inflight=invocation_id, error=None)
