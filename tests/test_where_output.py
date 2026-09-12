@@ -380,8 +380,14 @@ class WhereCliTests(unittest.TestCase):
             code = main(["--profile", str(self.root), "where", *arguments])
         return code, out.getvalue(), err.getvalue()
 
-    def test_default_raw_output_remains_the_existing_shape(self):
+    def test_default_output_is_terminal(self):
         code, output, error = self.invoke()
+        self.assertEqual((code, error), (0, ""))
+        self.assertEqual(output, self.invoke("--output", "terminal")[1])
+        self.assertIn(str(self.root / "profile.json"), output)
+
+    def test_explicit_raw_output_remains_the_existing_shape(self):
+        code, output, error = self.invoke("--output", "raw-json")
         self.assertEqual((code, error), (0, ""))
         result = json.loads(output)
         self.assertEqual(result["profile"], str(self.root))
@@ -410,8 +416,8 @@ class WhereCliTests(unittest.TestCase):
         self.assertIn("stream.jsonl · absent", terminal)
 
     def test_raw_and_semantic_json_ignore_terminal_options(self):
-        self.assertEqual(self.invoke()[1],
-                         self.invoke("--width", "1", "--color", "always")[1])
+        self.assertEqual(self.invoke("--output", "raw-json")[1],
+                         self.invoke("--output", "raw-json", "--width", "1", "--color", "always")[1])
         baseline = self.invoke("--output", "semantic-json")[1]
         decorated = self.invoke("--output", "semantic-json", "--width", "1",
                                 "--color", "always", tty=True)[1]
@@ -422,7 +428,7 @@ class WhereCliTests(unittest.TestCase):
         code, output, error = self.invoke("--output", "terminal", "--width", "1")
         self.assertEqual((code, output), (1, ""))
         self.assertIn("required content exceeds width 1", error)
-        code, output, error = self.invoke()
+        code, output, error = self.invoke("--output", "raw-json")
         self.assertEqual((code, error), (0, ""))
         self.assertEqual(json.loads(output)["profile"], str(self.root))
 

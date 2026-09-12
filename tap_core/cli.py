@@ -265,8 +265,13 @@ def parser():
     install.add_argument("--addon", type=Path, action="append", help="Additional trusted addon (optional)")
     install.add_argument("--bridge-config", type=Path, help="Explicit page bridge configuration JSON")
     install.add_argument("--components-config", type=Path, help="Explicit managed Hub/reader/handler development bindings")
-    for name in ("on", "off", "doctor", "where", "uninstall"):
+    for name in ("on", "off", "where", "uninstall"):
         commands.add_parser(name)
+    doctor_command = commands.add_parser("doctor")
+    doctor_command.add_argument("--output", choices=("raw-json", "terminal"),
+                                default="terminal")
+    doctor_command.add_argument("--color", choices=("auto", "always", "never"),
+                                default="auto")
     status_command = commands.add_parser("status")
     status_command.add_argument("--output", choices=("raw-json", "semantic-json", "terminal"),
                                 default="terminal")
@@ -570,9 +575,14 @@ def main(argv=None):
             return 0
         if args.command == "doctor":
             result = doctor(profile, adapter)
-            print(json.dumps(result, indent=2))
-            for line in result.get("next") or []:
-                print(f"tap-core: next: {line}", file=sys.stderr)
+            if args.output == "raw-json":
+                print(json.dumps(result, indent=2))
+                for line in result.get("next") or []:
+                    print(f"tap-core: next: {line}", file=sys.stderr)
+            else:
+                from .doctor_view import terminal_doctor
+                color = args.color == "always" or (args.color == "auto" and sys.stdout.isatty())
+                print(terminal_doctor(result, color=color))
             return 1 if not result["healthy"] else 0
         if args.command == "routing":
             with profile_lock(root):
