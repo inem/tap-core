@@ -600,9 +600,16 @@ class StatusCliTests(unittest.TestCase):
             code = main(["--profile", "/fixture/profile", "status", *arguments])
         return code, out.getvalue(), err.getvalue()
 
-    def test_unflagged_output_is_byte_for_byte_the_existing_raw_json(self):
+    def test_unflagged_output_is_terminal(self):
         raw = snapshot()
         code, out, err = self.invoke(raw)
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(out, self.invoke(raw, "--output", "terminal")[1])
+        self.assertIn("tap", out)
+
+    def test_explicit_raw_output_is_byte_for_byte_the_existing_json(self):
+        raw = snapshot()
+        code, out, err = self.invoke(raw, "--output", "raw-json")
         self.assertEqual((code, err), (0, ""))
         self.assertEqual(out, json.dumps(raw, indent=2) + "\n")
 
@@ -622,8 +629,8 @@ class StatusCliTests(unittest.TestCase):
 
     def test_raw_and_semantic_json_ignore_width_color_and_tty(self):
         raw = snapshot()
-        baseline_raw = self.invoke(raw)[1]
-        decorated_raw = self.invoke(raw, "--width", "1", "--color", "always", tty=True)[1]
+        baseline_raw = self.invoke(raw, "--output", "raw-json")[1]
+        decorated_raw = self.invoke(raw, "--output", "raw-json", "--width", "1", "--color", "always", tty=True)[1]
         self.assertEqual(decorated_raw, baseline_raw)
         baseline_semantic = self.invoke(raw, "--output", "semantic-json")[1]
         decorated_semantic = self.invoke(
@@ -644,7 +651,7 @@ class StatusCliTests(unittest.TestCase):
             code, _, err = self.invoke(raw, "--output", "terminal")
         self.assertEqual(code, 1)
         self.assertIn("forced failure", err)
-        code, out, err = self.invoke(raw)
+        code, out, err = self.invoke(raw, "--output", "raw-json")
         self.assertEqual((code, err), (0, ""))
         self.assertEqual(out, json.dumps(raw, indent=2) + "\n")
 

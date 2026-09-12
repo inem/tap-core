@@ -1,9 +1,10 @@
 # Status output
 
-`tap status` keeps its original JSON output by default. Two explicit projections are available:
+`tap status` renders a compact, human-readable terminal summary by default. Explicit output modes are available:
 
+- `--output raw-json` emits the original operational snapshot for existing machine consumers.
 - `--output semantic-json` emits the versioned compact `tap.status-result/v4` contract. The frozen v1–v3 contracts remain under `contracts/status-result/`.
-- `--output terminal` interprets that result and renders runtime, routing, capture-writer, bridge-startup and managed-component sections, followed by a cross-section alert when one is warranted.
+- `--output terminal` explicitly selects the default view: runtime, routing, capture-writer, bridge-startup and managed-component sections, followed by a cross-section alert when one is warranted.
 
 Terminal output accepts `--width N` and `--color auto|always|never`. Optional detail subtrees are omitted as a unit when they do not fit; required content causes an error rather than silent truncation. `auto` emits color only to a terminal.
 
