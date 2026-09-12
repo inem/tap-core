@@ -88,7 +88,7 @@ class CommandHostTests(unittest.TestCase):
         profile = Profile(self.profile, "/fixture/mitmdump", 19001, "explicit",
                           "http://example.test", [])
         profile.save()
-        code, output, error = self.cli("where")
+        code, output, error = self.cli("where", "--output", "raw-json")
         self.assertEqual(code, 0, error)
         result = json.loads(output)
         self.assertEqual(result["profile"], str(self.profile.resolve()))

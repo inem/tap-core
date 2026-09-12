@@ -40,9 +40,10 @@ TAP Core is being extracted from an existing working TAP installation. A first
 [development-checkout runtime](docs/runtime.md) provides isolated macOS profiles
 with the existing `install`, `on`, `off`, `status`, `doctor` and `where` command
 surface. This is not yet a packaged clean-Mac release.
-`tap status` defaults to a readable terminal view. Its original operational JSON
-remains available via `--output raw-json`, alongside the
-[`semantic-json` projection](docs/status-output.md) for machine consumers.
+`tap status`, `tap doctor` and `tap where` default to readable terminal views.
+Each retains its original JSON via `--output raw-json`; `status` and `where` also
+offer versioned `--output semantic-json` projections for machine consumers.
+The [doctor view](docs/doctor-output.md) includes its checks and next actions.
 The same projection kernel now serves [`tap where`](docs/where-output.md), whose
 versioned result and terminal tree describe declared addresses without claiming
 filesystem presence or health.

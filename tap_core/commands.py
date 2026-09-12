@@ -65,7 +65,7 @@ class _CommandParser(argparse.ArgumentParser):
 def _where_options(argv):
     parser = _CommandParser(prog="tap where", add_help=False, allow_abbrev=False)
     parser.add_argument("--output", choices=("raw-json", "semantic-json", "terminal"),
-                        default="raw-json")
+                        default="terminal")
     parser.add_argument("--width", type=int)
     parser.add_argument("--color", choices=("auto", "always", "never"), default="auto")
     return parser.parse_args(argv)

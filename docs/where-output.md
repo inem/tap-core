@@ -1,8 +1,9 @@
 # `tap where` output contracts
 
-`tap where` keeps its existing unflagged JSON as the compatibility output. It
-reports declared addresses from the selected profile and its installed Core
-runtime; it does not inspect the filesystem.
+`tap where` shows the readable terminal tree by default. The original flat JSON
+remains available with `--output raw-json`. It reports declared addresses from
+the selected profile and its installed Core runtime; only the separately stated
+filesystem observations inspect presence or size.
 
 ```bash
 tap --profile PROFILE where
@@ -78,8 +79,8 @@ full. If an explicit width is too narrow, the command fails clearly instead of
 silently dropping or truncating a path. Color affects terminal headings and
 unknown markers only; JSON modes ignore terminal options and TTY state.
 
-Projection remains optional. A projection or rendering failure exits with code
-1 on stderr, and a later raw invocation still returns the machine result. The
+Projection is used by the default terminal view. A projection or rendering failure exits with code
+1 on stderr, and an explicit raw invocation still returns the machine result. The
 command does not emit progress output.
 
 ## Deliberate limits
