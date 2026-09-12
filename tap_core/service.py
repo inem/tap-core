@@ -69,7 +69,7 @@ def main():
                     fresh_error = type(error).__name__ + ': ' + str(error)
             if initialized:
                 try:
-                    fresh.run(spec, max_records=5, timeout=10, guard_parent=True,
+                    fresh.run(spec, max_records=500, max_invocations=5, timeout=10, guard_parent=True,
                               cancelled=stopping.is_set, allowed_origins=allowed_origins)
                     fresh_failures = 0
                     if not any(fresh.state.glob('fresh-failure-*.json')):

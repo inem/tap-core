@@ -111,6 +111,19 @@ class ReaderTests(unittest.TestCase):
         self.assertEqual(self.reader.load()['processed'], 3)
         self.assertEqual(self.reader.run(self.spec, allowed_origins=allowed)['completed_this_run'], 0)
 
+    def test_invocation_limit_does_not_count_filtered_origins(self):
+        records = self.write(*range(20))
+        for record in records[:18]:
+            record['url'] = 'https://unrelated.example/data'
+        self.stream.write_bytes(b''.join(encoded(record) for record in records))
+        allowed = frozenset({'https://fixture.example'})
+        result = self.reader.run(self.spec, max_records=100, max_invocations=1,
+                                 allowed_origins=allowed)
+        self.assertEqual(result['completed_this_run'], 19)
+        self.assertEqual(self.outputs(self.reader), [18])
+        self.reader.run(self.spec, allowed_origins=allowed)
+        self.assertEqual(self.outputs(self.reader), [18, 19])
+
     def test_record_origin_normalizes_default_ports_and_rejects_bad_urls(self):
         self.assertEqual(record_origin({'url': 'https://FiXtUrE.Example:443/data'}),
                          'https://fixture.example')

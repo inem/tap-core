@@ -223,10 +223,12 @@ class Reader:
         return self.status()
 
     def run(self, spec, max_records=100, timeout=30, *, guard_parent=False, cancelled=None,
-            allowed_origins=None):
+            allowed_origins=None, max_invocations=None):
         validate_definition(spec)
         if type(max_records) is not int or max_records < 1 or not 0 < timeout <= 300:
             raise ReaderError('Run requires positive max_records and timeout <= 300 seconds')
+        if max_invocations is not None and (type(max_invocations) is not int or max_invocations < 1):
+            raise ReaderError('Run requires a positive max_invocations when set')
         self.prepare()
         with profile_lock(self.state, busy_message=f"Reader '{self.name}' is busy; another run or replay holds its lock") as lock:
             state = self.load()
@@ -237,7 +239,7 @@ class Reader:
                 self.store(state)
             if state['definition'] != fingerprint(spec):
                 raise ReaderError('Reader definition changed; use a new reader name or explicit replay')
-            completed = 0
+            completed = invoked = 0
             try:
                 recovered_gap = False
                 while True:
@@ -261,7 +263,8 @@ class Reader:
                                 self.store(state, cursor=entry.cursor, processed=state['processed'] + 1,
                                            inflight=None, phase='ready', error=None)
                                 completed += 1
-                                if completed == max_records:
+                                invoked += 1
+                                if completed == max_records or invoked == max_invocations:
                                     break
                         break
                     except JournalGap as gap:
