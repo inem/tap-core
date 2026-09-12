@@ -14,7 +14,7 @@ from unittest.mock import patch
 from tap_core import readers
 from tap_core.journal import JournalGap
 from tap_core.records import RecordError
-from tap_core.readers import Reader, ReaderError, definition
+from tap_core.readers import Reader, ReaderError, definition, record_origin
 from tap_core.runtime import Profile, TapError, profile_lock
 from test_records_journal import capture_record, encoded
 
@@ -57,6 +57,27 @@ class ReaderTests(unittest.TestCase):
         self.assertEqual(self.outputs(slow), ['A', 'B', 'C'])
         self.assertEqual(fast.checkpoint.read_bytes(), fast_state)
         self.assertEqual(slow.run(self.spec)['completed_this_run'], 0)
+
+    def test_origin_filter_advances_past_unrelated_capture_without_running_child(self):
+        records = self.write('A', 'B', 'C')
+        records[0]['url'] = 'https://unrelated.example/data'
+        records[2]['url'] = 'https://unrelated.example/data'
+        self.stream.write_bytes(b''.join(encoded(record) for record in records))
+        allowed = frozenset({'https://fixture.example'})
+        result = self.reader.run(self.spec, allowed_origins=allowed)
+        self.assertEqual(result['completed_this_run'], 3)
+        self.assertEqual(self.outputs(self.reader), ['B'])
+        self.assertEqual(self.reader.load()['processed'], 3)
+        self.assertEqual(self.reader.run(self.spec, allowed_origins=allowed)['completed_this_run'], 0)
+
+    def test_record_origin_normalizes_default_ports_and_rejects_bad_urls(self):
+        self.assertEqual(record_origin({'url': 'https://FiXtUrE.Example:443/data'}),
+                         'https://fixture.example')
+        self.assertEqual(record_origin({'url': 'https://fixture.example:8443/data'}),
+                         'https://fixture.example:8443')
+        for url in ('not a URL', 'https://name:secret@fixture.example/x',
+                    'https://fixture.example:bad/x', 'file:///tmp/x'):
+            self.assertIsNone(record_origin({'url': url}))
 
     def test_new_reader_replays_retained_history_without_resetting_another(self):
         self.write('A', 'B')

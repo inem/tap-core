@@ -696,6 +696,12 @@ class PackStore:
     def effective_components(self, base):
         return self._effective_components(self.load(), base)
 
+    def reader_origins(self):
+        """Origin subscriptions for enabled installed readers; not a reader definition."""
+        return {pack_id: frozenset(manifest['access']['origins'])
+                for pack_id, _root, manifest, _record in self._enabled_packs(self.load())
+                if 'reader' in manifest['entrypoints']}
+
 
 def _parse_dependency(values):
     result = {}
