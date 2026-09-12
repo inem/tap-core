@@ -480,21 +480,24 @@ class PackStore:
         """Refuse pack activation that would strand an existing reader checkpoint."""
         from .readers import fingerprint, validate_definition
         validate_definition(spec)
-        checkpoint = self.root / "state/readers" / name / "checkpoint.json"
-        if not checkpoint.is_file():
-            return
-        require(not checkpoint.is_symlink(), f"reader checkpoint must not be a symlink: {name}")
-        try:
-            state = json.loads(checkpoint.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError) as error:
-            raise PackError(f"reader {name!r} checkpoint unreadable: {error}") from error
-        if state.get("definition") == fingerprint(spec):
-            return
-        raise PackError(
-            f"reader {name!r} has progress under another definition; "
-            f"run `tap reader replay {name}` with the new binding, or remove "
-            f"{checkpoint}, then enable/update again — checkpoint was not reset"
-        )
+        for lane, filename in (("replay", "checkpoint.json"), ("fresh", "fresh-checkpoint.json")):
+            checkpoint = self.root / "state/readers" / name / filename
+            if not checkpoint.exists() and not checkpoint.is_symlink():
+                continue
+            require(not checkpoint.is_symlink(), f"reader checkpoint must not be a symlink: {name}")
+            try:
+                state = json.loads(checkpoint.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, json.JSONDecodeError) as error:
+                raise PackError(f"reader {name!r} checkpoint unreadable: {error}") from error
+            if state.get("definition") == fingerprint(spec):
+                continue
+            raise PackError(
+                f"reader {name!r} has progress under another definition in {lane} lane; "
+                f"if the new reader is compatible, stop TAP and use `tap reader rebind {name}` "
+                f"with its new definition and the current checkpoint hash"
+                f"{' and --lane fresh' if lane == 'fresh' else ''}; otherwise replay "
+                f"or use a new reader name — {checkpoint} was not reset"
+            )
 
     def _effective_components(self, registry, base):
         """Project enabled pack reader/handler entrypoints onto managed components."""
@@ -701,6 +704,11 @@ class PackStore:
         return {pack_id: frozenset(manifest['access']['origins'])
                 for pack_id, _root, manifest, _record in self._enabled_packs(self.load())
                 if 'reader' in manifest['entrypoints']}
+
+    def fresh_readers(self):
+        """Readers that explicitly accept out-of-order, at-least-once delivery."""
+        return {pack_id for pack_id, _root, manifest, _record in self._enabled_packs(self.load())
+                if manifest['entrypoints'].get('reader', {}).get('delivery') == 'fresh-and-replay-v1'}
 
 
 def _parse_dependency(values):

@@ -212,9 +212,13 @@ def validate_manifest(manifest, root, host_api=PACK_API):
                 require(declaration["profile"] == "required",
                         "entrypoints.command.commands[].profile: v1 requires 'required'")
         else:
-            fields(entry, ("file", "interface"), label=f"entrypoints.{role}")
+            fields(entry, ("file", "interface"), optional=("delivery",) if role == "reader" else (),
+                   label=f"entrypoints.{role}")
             require(type(entry["file"]) is str and entry["file"] in manifest["files"],
                     f"entrypoints.{role}: file must be declared in files")
+            if role == "reader" and "delivery" in entry:
+                require(entry["delivery"] == "fresh-and-replay-v1",
+                        "entrypoints.reader.delivery: unsupported mode")
     config = manifest["config"]
     require(type(config) is dict, "config: expected object")
     for name, setting in config.items():

@@ -126,8 +126,12 @@ standalone fixture echo format is not the managed handler protocol.
 
 Updating or rolling back a reader with an incompatible saved definition is
 refused before changing the selected version. Its checkpoint is retained; this
-slice does not implement checkpoint migration or automatic replay. Explicit
-replay remains `tap reader replay`.
+Core never assumes a new pack version is progress-compatible. For a compatible
+upgrade, an operator can stop the profile, install the new artifact and use
+`tap reader rebind` with the old checkpoint hash and exact new definition before
+enabling it. This preserves the recovery cursor and writes a previous-state
+receipt. Incompatible changes still require explicit `tap reader replay` or a
+new reader name.
 
 Command packs use the same installed versions and registry without requiring a
 bridge/components profile. `process-argv-v1` declarations are discovered without

@@ -93,16 +93,19 @@ def record_origin(record):
 
 
 class Reader:
-    def __init__(self, profile, name):
+    def __init__(self, profile, name, *, lane='replay'):
         if not re.fullmatch(r'[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*', name) or len(name) > 100:
             raise ReaderError('Invalid reader name')
-        self.profile, self.name = profile, name
+        if lane not in ('replay', 'fresh'):
+            raise ReaderError('Invalid reader lane')
+        self.profile, self.name, self.lane = profile, name, lane
         self.state = profile.root / 'state/readers' / name
         self.output = profile.root / 'data/readers' / name
         self.logs = profile.root / 'logs/readers' / name
         self.work = self.state / 'work'
-        self.checkpoint = self.state / 'checkpoint.json'
-        self.last_gap = self.state / 'last-gap.json'
+        prefix = 'fresh-' if lane == 'fresh' else ''
+        self.checkpoint = self.state / (prefix + 'checkpoint.json')
+        self.last_gap = self.state / (prefix + 'last-gap.json')
 
     def prepare(self):
         for path in (self.state, self.output, self.logs):
@@ -146,8 +149,49 @@ class Reader:
     def status(self):
         state = self.load()
         # The phase is the last persisted observation, not a claim of liveness.
-        return {'reader': self.name, 'configured': state is not None, 'checkpoint': str(self.checkpoint),
-                'output': str(self.output), 'logs': str(self.logs), 'progress': state}
+        result = {'reader': self.name, 'configured': state is not None, 'checkpoint': str(self.checkpoint),
+                  'output': str(self.output), 'logs': str(self.logs), 'progress': state}
+        if self.lane == 'replay':
+            result['fresh_progress'] = Reader(self.profile, self.name, lane='fresh').load()
+        return result
+
+    def follow_tail(self, spec):
+        """Start once at the tail; resume the saved fresh cursor after restarts."""
+        if self.lane != 'fresh':
+            raise ReaderError('Only a fresh lane can follow the tail')
+        validate_definition(spec)
+        self.prepare()
+        with profile_lock(self.state, busy_message=f"Reader '{self.name}' is busy"):
+            previous = self.load()
+            if previous is not None:
+                if previous['definition'] != fingerprint(spec):
+                    raise ReaderError('Fresh reader definition changed; progress was not reset')
+            else:
+                state = self.initial(spec)
+                state['cursor'] = Journal(self.profile.root / 'data').tail()
+                self.store(state)
+        return self.status()
+
+    def skip_failed_fresh(self, spec):
+        """Keep fresh delivery moving after a poison record; replay still owns it."""
+        if self.lane != 'fresh':
+            raise ReaderError('Only a fresh lane may skip into recovery')
+        validate_definition(spec)
+        with profile_lock(self.state, busy_message=f"Reader '{self.name}' is busy"):
+            state = self.load()
+            if state is None or state['definition'] != fingerprint(spec) or state['phase'] != 'failed':
+                raise ReaderError('No matching failed fresh delivery to skip')
+            with closing(Journal(self.profile.root / 'data').scan(after=state['cursor'])) as entries:
+                entry = next(entries, None)
+            if entry is None:
+                raise ReaderError('Failed fresh record is no longer available')
+            receipt = self.state / ('fresh-failure-' + hashlib.sha256(entry.cursor.encode()).hexdigest() + '.json')
+            save(receipt, {'version': 1, 'cursor': entry.cursor, 'record_id': entry.record.get('record_id'),
+                           'error': state['error'], 'recorded_at': time.time(),
+                           'recovery': 'replay-lane'})
+            self.store(state, cursor=entry.cursor, processed=state['processed'] + 1,
+                       inflight=None, phase='ready', error=None)
+        return str(receipt)
 
     def replay(self, spec):
         validate_definition(spec)
@@ -158,20 +202,44 @@ class Reader:
             self.store(state)
         return self.status()
 
+    def rebind(self, spec, expected_definition):
+        """Explicitly adopt compatible code without discarding recovery progress."""
+        validate_definition(spec)
+        if not isinstance(expected_definition, str) or not re.fullmatch('[0-9a-f]{64}', expected_definition):
+            raise ReaderError('Expected definition must be a SHA-256 fingerprint')
+        self.prepare()
+        with profile_lock(self.state, busy_message=f"Reader '{self.name}' is busy"):
+            previous = self.load()
+            if previous is None or previous['definition'] != expected_definition:
+                raise ReaderError('Reader definition changed; progress was not rebound')
+            target = fingerprint(spec)
+            if target == expected_definition:
+                return self.status()
+            receipt = self.state / f'{self.lane}-rebind-{previous["generation"]}.json'
+            save(receipt, {'version': 1, 'previous': previous, 'target_definition': target,
+                           'rebound_at': time.time()})
+            self.store(previous, definition=target, generation=previous['generation'] + 1,
+                       inflight=None, phase='ready', error=None)
+        return self.status()
+
     def run(self, spec, max_records=100, timeout=30, *, guard_parent=False, cancelled=None,
-            allowed_origins=None):
+            allowed_origins=None, max_invocations=None):
         validate_definition(spec)
         if type(max_records) is not int or max_records < 1 or not 0 < timeout <= 300:
             raise ReaderError('Run requires positive max_records and timeout <= 300 seconds')
+        if max_invocations is not None and (type(max_invocations) is not int or max_invocations < 1):
+            raise ReaderError('Run requires a positive max_invocations when set')
         self.prepare()
         with profile_lock(self.state, busy_message=f"Reader '{self.name}' is busy; another run or replay holds its lock") as lock:
             state = self.load()
             if state is None:
                 state = self.initial(spec)
+                if self.lane == 'fresh':
+                    state['cursor'] = Journal(self.profile.root / 'data').tail()
                 self.store(state)
             if state['definition'] != fingerprint(spec):
                 raise ReaderError('Reader definition changed; use a new reader name or explicit replay')
-            completed = 0
+            completed = invoked = 0
             try:
                 recovered_gap = False
                 while True:
@@ -195,10 +263,18 @@ class Reader:
                                 self.store(state, cursor=entry.cursor, processed=state['processed'] + 1,
                                            inflight=None, phase='ready', error=None)
                                 completed += 1
-                                if completed == max_records:
+                                invoked += 1
+                                if completed == max_records or invoked == max_invocations:
                                     break
                         break
                     except JournalGap as gap:
+                        if self.lane == 'fresh':
+                            save(self.last_gap, {'version': 1, 'cursor': state['cursor'],
+                                                 'error': str(gap), 'recovery': 'replay-lane',
+                                                 'recovered_at': time.time()})
+                            self.store(state, cursor=Journal(self.profile.root / 'data').tail(),
+                                       inflight=None, phase='ready', error='JournalGap: ' + str(gap))
+                            break
                         # Retention has already made the old prefix unavailable.
                         # Preserve a receipt, drop only the unusable position and
                         # continue from the earliest retained record. A fresh scan
@@ -227,6 +303,7 @@ class Reader:
     def execute(self, spec, record, delivery_id, invocation_id, generation, timeout, lock,
                 guard_parent=False, cancelled=None):
         context = {'reader_id': self.name, 'reader_generation': generation,
+                   'reader_lane': self.lane,
                    'config': spec['config'], 'state_dir': str(self.work),
                    'output_dir': str(self.output), 'log_dir': str(self.logs)}
         environment = {**os.environ, 'TAP_PACK_CONTEXT': json.dumps(context, allow_nan=False),

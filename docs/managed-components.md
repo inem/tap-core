@@ -1,5 +1,35 @@
 # Profile-owned Hub, readers and handlers
 
+## Fresh delivery with independent recovery
+
+An installed reader may opt in with `entrypoints.reader.delivery` set to
+`fresh-and-replay-v1`. This is a transport scheduling declaration, not a site
+rule. The pack must tolerate at-least-once and out-of-order records, and must
+prevent an older recovery record from replacing a newer materialized result.
+Readers without the declaration keep their existing sequential behavior.
+
+On its first controller start, the fresh lane starts after the last complete
+retained record. Subsequent controller starts resume its saved cursor, including
+records captured during controller downtime. New records are delivered promptly from a separate
+`fresh-checkpoint.json`; the original `checkpoint.json` continues recovery from
+its saved position. The lanes share one reader lock, so their output writes do
+not overlap. Fresh polling can skip up to 500 unrelated records but invokes at
+most five pack workers per turn. Recovery processes one record per turn, then yields to fresh
+delivery. The child sees `reader_lane` (`fresh` or `replay`) in
+`TAP_PACK_CONTEXT`. The Core passes records and schedules turns; the pack owns
+their meaning and its output ordering rule.
+
+A failed fresh record is retried three times, then the Core writes a
+`fresh-failure-*.json` receipt and moves fresh delivery forward. The recovery
+cursor still owns that record. Recovery failures park recovery after three
+attempts, while the fresh lane continues. Reader status and controller status
+expose both checkpoints and the fresh skip count. Journal retention gaps get a receipt and can only recover surviving
+records. Neither lane guarantees delivery of data already removed by retention.
+
+New journal cursors include a byte position and record digest, so polling a
+large active segment does not rescan it from the beginning. Existing line-based
+cursors continue to resume and convert to byte-position cursors as they advance.
+
 This development slice implements the joint #11 / #32 scenario on top of the
 merged capture, reader and profile-bridge work (#28 / #30 / #31), including the
 routing adapter extraction (#39). `install` / `on` start the components; the test

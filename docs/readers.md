@@ -59,6 +59,20 @@ reader-owned state. Clearing/rebuilding a projection is the reader's own policy.
 No archived material is restored. A new reader starts at available history and
 does not reset any existing reader.
 
+For a pack code update that preserves the same input and output meaning, `rebind`
+is the explicit alternative to replay. Stop the profile, install the new pack,
+construct its exact new reader definition (including the installed code path),
+then run `tap reader rebind NAME --definition NEW.json --expect-hash OLD_HASH`.
+It preserves the cursor and processed count, increments the generation and
+writes a receipt with the previous checkpoint. If this reader also has a fresh
+checkpoint, rebind it with `--lane fresh` and its own expected hash before
+restarting; otherwise the fresh lane refuses a changed definition. An unexpected old hash refuses
+without changing progress. Enable the new pack version before starting the
+profile again. If interrupted between rebind and enable, complete the enable
+while stopped or rebind to the previous definition using the new checkpoint
+hash. The operator and pack author must verify compatibility; Core cannot infer
+it from a version number.
+
 ## Input, output and progress
 
 For each record, the host starts one child, provides one UTF-8 JSONL record on
