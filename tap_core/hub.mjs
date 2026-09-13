@@ -18,6 +18,7 @@ const pages = new Map(), commands = new Map();
 let active = 0;
 let planRevision = null;
 const equal = (a, b) => typeof a === 'string' && Buffer.byteLength(a) === Buffer.byteLength(b) && timingSafeEqual(Buffer.from(a), Buffer.from(b));
+const originAllowed = (origin, origins) => Array.isArray(origins) && (origins.includes('*') || origins.includes(origin));
 function liveBridge() {
   try {
     const value = JSON.parse(readFileSync(join(root, 'state/effective-runtime.json'), 'utf8'))?.bridge;
@@ -30,7 +31,7 @@ function liveBridge() {
 const allowed = origin => {
   const current = liveBridge();
   return current.enabled
-    && current.allow_origins.includes(origin)
+    && originAllowed(origin, current.allow_origins)
     && !current.exclude_origins.includes(origin);
 };
 const encode = value => JSON.stringify(value);
@@ -105,7 +106,7 @@ async function bounded(stream, limit) {
 }
 async function invoke(ws, request) {
   const binding = Object.hasOwn(components.handlers, request.handler) ? components.handlers[request.handler] : null;
-  if (!binding || !binding.origins.includes(ws.data.origin)) return fail('handler_denied', 'Handler is not granted to this origin');
+  if (!binding || !originAllowed(ws.data.origin, binding.origins)) return fail('handler_denied', 'Handler is not granted to this origin');
   if (active >= 8 || ws.data.pending >= 4) return fail('busy', 'Handler capacity exceeded');
   // The original five-second budget remains the default. A pack may explicitly
   // request a longer, still bounded wait for a user-initiated local operation.

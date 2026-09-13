@@ -8,7 +8,7 @@ import secrets
 from urllib.request import ProxyHandler, Request, build_opener
 
 from .runtime import TapError, StartupError, atomic_json
-from .bridge import exact_origin, fingerprint, read_token
+from .bridge import exact_or_all_origin, fingerprint, read_token
 from .readers import Reader, validate_definition
 
 ROOT = Path(__file__).resolve().parent
@@ -50,7 +50,7 @@ def configuration(value, profile):
         if type(spec['origins']) is not list or len(spec['origins']) > 64:
             raise TapError('Handler origins must be a bounded list')
         for origin in spec['origins']:
-            exact_origin(origin)
+            exact_or_all_origin(origin)
     return value
 
 

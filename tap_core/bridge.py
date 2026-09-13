@@ -32,6 +32,7 @@ ASSET_PATH = re.compile(re.escape(PREFIX) + r'core/([0-9a-f]{64})\.js\Z')
 PLAN_PATH = PREFIX + 'plan.json'
 RUNTIME_PATH = PREFIX + 'runtime.js'
 PLAN_VERSION = 'tap.page-plan/v1'
+ALL_ORIGINS = '*'
 
 
 def development_configuration(root):
@@ -235,6 +236,20 @@ def exact_origin(value):
     return value
 
 
+def exact_or_all_origin(value):
+    if value == ALL_ORIGINS:
+        return value
+    return exact_origin(value)
+
+
+def origin_allowed(origin, origins):
+    return ALL_ORIGINS in origins or origin in origins
+
+
+def origin_subset(requested, allowed):
+    return ALL_ORIGINS in allowed or set(requested) <= set(allowed)
+
+
 def configuration(value, script_origins=None):
     if (not isinstance(value, dict)
             or set(value) != {'version', 'enabled', 'hub_port', 'allow_origins', 'exclude_origins', 'page_scripts'}
@@ -249,7 +264,9 @@ def configuration(value, script_origins=None):
                 or (name != 'page_scripts' or script_origins is None)
                 and len(set(items)) != len(items)):
             raise ValueError('Bridge lists must contain at most 64 unique strings')
-    for origin in value['allow_origins'] + value['exclude_origins']:
+    for origin in value['allow_origins']:
+        exact_or_all_origin(origin)
+    for origin in value['exclude_origins']:
         exact_origin(origin)
     for script in value['page_scripts']:
         if not Path(script).is_absolute() or '\0' in script:
@@ -263,13 +280,15 @@ def configuration(value, script_origins=None):
         for script, origins in zip(value['page_scripts'], script_origins):
             if (not isinstance(origins, list) or not origins or len(origins) > 64
                     or not all(isinstance(origin, str) for origin in origins)
-                    or len(set(origins)) != len(origins) or not set(origins) <= allowed):
+                    or len(set(origins)) != len(origins) or not origin_subset(origins, allowed)):
                 raise ValueError('Effective page script origins are malformed')
             for origin in origins:
-                exact_origin(origin)
+                exact_or_all_origin(origin)
             overlap = seen.setdefault(script, set()).intersection(origins)
-            if overlap:
-                raise ValueError(f'Page resource would be injected twice for {sorted(overlap)[0]}')
+            wildcard_overlap = (ALL_ORIGINS in seen[script] and origins) or (ALL_ORIGINS in origins and seen[script])
+            if overlap or wildcard_overlap:
+                duplicate = sorted(overlap)[0] if overlap else ALL_ORIGINS
+                raise ValueError(f'Page resource would be injected twice for {duplicate}')
             seen[script].update(origins)
     return value
 
@@ -331,6 +350,9 @@ def order_page_resources(declarations, use_orders):
     if ordered is not None:
         return [(resource_id, sorted(declarations[resource_id]['origins']))
                 for resource_id in ordered]
+
+    if any(ALL_ORIGINS in item['origins'] for item in use_orders):
+        raise ValueError('Page resource order is cyclic for all-sites origin')
 
     origins = sorted({origin for item in use_orders for origin in item['origins']})
     grouped = {}
@@ -424,7 +446,8 @@ def effective_configuration(root, base):
             raise ValueError(f'Enabled pack access is malformed: {pack_id}@{version}')
         requested_origins = access['origins']
         requested_capabilities = access['capabilities']
-        if (not set(requested_origins) <= set(grants.get('origins', []))
+        granted_origins = set(grants.get('origins', []))
+        if (not origin_subset(requested_origins, granted_origins)
                 or not set(requested_capabilities) <= set(grants.get('capabilities', []))):
             raise ValueError(f'Enabled pack access is not granted: {pack_id}@{version}')
         dependencies = manifest.get('requires', {}).get('dependencies')
@@ -462,7 +485,7 @@ def effective_configuration(root, base):
         if roles & {'page', 'handler'}:
             has_bridge_bindings = True
             for origin in requested_origins:
-                exact_origin(origin)
+                exact_or_all_origin(origin)
                 if origin not in result['allow_origins']:
                     result['allow_origins'].append(origin)
         if 'page' not in roles:
@@ -550,8 +573,9 @@ def effective_configuration(root, base):
 def decision(config, origin):
     exact_origin(origin)
     reason = ('disabled' if not config['enabled'] else 'user_exclusion' if origin in config['exclude_origins']
+              else 'all_sites_allow' if ALL_ORIGINS in config['allow_origins']
               else 'explicit_allow' if origin in config['allow_origins'] else 'not_allowed')
-    return {'origin': origin, 'allowed': reason == 'explicit_allow', 'reason': reason,
+    return {'origin': origin, 'allowed': reason in ('explicit_allow', 'all_sites_allow'), 'reason': reason,
             'scope': 'page injection and reserved local route only',
             'capture_policy': 'unchanged', 'tls_policy': 'unchanged', 'app_scope': 'unsupported'}
 
@@ -594,7 +618,7 @@ class Bridge:
         self.development_origins = set()
         if config:
             self.bootstrap_origins.update(origin for origin in config['allow_origins']
-                                          if origin not in config['exclude_origins'])
+                                          if origin == ALL_ORIGINS or origin not in config['exclude_origins'])
         if scripts is not None:
             self._publish_scripts(scripts, self.script_origins)
 
@@ -620,13 +644,13 @@ class Bridge:
 
     def _asset_allowed(self, digest, origin):
         granted = self.asset_origins.get(digest)
-        return granted is not None and origin in granted
+        return granted is not None and origin_allowed(origin, granted)
 
     def origin_digests(self, origin):
         seen = set()
         result = []
         for index, digest in enumerate(self.script_digests):
-            if self.script_origins is not None and origin not in self.script_origins[index]:
+            if self.script_origins is not None and not origin_allowed(origin, self.script_origins[index]):
                 continue
             if digest not in seen:
                 seen.add(digest)
@@ -639,7 +663,7 @@ class Bridge:
         scripts = self.origin_digests(origin) if access == 'current' else []
         packs = ([{'id': item['id'], 'version': item['version'],
                    'features': item.get('features', [])}
-                  for item in self.page_pack_origins if origin in item['origins']]
+                  for item in self.page_pack_origins if origin_allowed(origin, item['origins'])]
                  if access == 'current' else [])
         revision = hashlib.sha256(json.dumps({'access': access, 'mode': mode, 'scripts': scripts, 'packs': packs},
                                              sort_keys=True, separators=(',', ':')).encode()).hexdigest()
@@ -655,7 +679,8 @@ class Bridge:
         bridge = bridge or self.config
         if type(bridge) is dict and bridge.get('enabled'):
             excluded = set(bridge.get('exclude_origins') or profile.get('bridge', {}).get('exclude_origins') or [])
-            return {origin for origin in bridge.get('allow_origins', []) if origin not in excluded}
+            return {origin for origin in bridge.get('allow_origins', [])
+                    if origin == ALL_ORIGINS or origin not in excluded}
         try:
             runtime = read_json(self._profile_root / 'state/effective-runtime.json')
             components = runtime.get('components')
@@ -681,11 +706,11 @@ class Bridge:
         scripts = read_scripts(config) if config['enabled'] else []
         if self.config:
             self.bootstrap_origins.update(origin for origin in self.config['allow_origins']
-                                          if origin not in self.config['exclude_origins'])
+                                          if origin == ALL_ORIGINS or origin not in self.config['exclude_origins'])
         self.config = config
         self.page_pack_origins = config.get('page_pack_origins', [])
         self.bootstrap_origins.update(origin for origin in config['allow_origins']
-                                      if origin not in config['exclude_origins'])
+                                      if origin == ALL_ORIGINS or origin not in config['exclude_origins'])
         self._publish_scripts(scripts, config.get('page_script_origins'))
         self._write_runtime_state()
 
@@ -769,7 +794,7 @@ class Bridge:
         request.path = urlunsplit(('', '', path.path, urlencode([(k, v) for k, v in pairs if k != 'token']), ''))
         for name in ('cookie', 'authorization', 'proxy-authorization'):
             request.headers.pop(name, None)
-        plan_channel = path.path == PLAN_PATH and origin in self.bootstrap_origins
+        plan_channel = path.path == PLAN_PATH and origin_allowed(origin, self.bootstrap_origins)
         if (not allowed and not plan_channel) or len(supplied) != 1 or not hmac.compare_digest(supplied[0].encode(), self.token.encode()):
             self.reply(flow, 403, b'Bridge access denied')
             return
@@ -852,7 +877,7 @@ class Bridge:
         # Document <base> must never redirect token-bearing bootstrap/assets.
         asset_root = html.escape(self.origin(flow.request) + PREFIX, quote=True)
         plan = self.page_plan(origin)
-        websocket_enabled = self.ws_origins is None or origin in self.ws_origins
+        websocket_enabled = self.ws_origins is None or origin_allowed(origin, self.ws_origins)
         scripts = [f'<script id="{MARKER}"{nonce_attr} data-tap-token="{self.token}" '
                    f'data-tap-plan="{plan["revision"]}" data-tap-ws="{str(websocket_enabled).lower()}" '
                    f'data-tap-mode="{plan["mode"]}" '

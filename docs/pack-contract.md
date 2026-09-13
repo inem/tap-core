@@ -43,7 +43,7 @@ Each pack directory contains UTF-8 `pack.json`, with these required fields:
 | `features` | Optional static user-facing facts `{id, label, value, folder?}` describing what the enabled pack contributes on each granted origin. `folder`, when present, is a canonical path under the profile's `data/` directory and lets a presentation expose the pack-owned output location. At most 32; labels and values are bounded plain text. Core transports these facts without interpreting them. Dynamic page state remains page-owned runtime observation. |
 | `entrypoints` | One or more roles from the table below. File-based roles use `{file, interface}`; `browser-scripts-v1` uses `{interface, uses}`. |
 | `config` | Named settings, each `{type, default}`. Only string, integer and boolean values; unknown overrides and wrong types fail. No expressions or configuration language. |
-| `access.origins` | Nonempty list of exact canonical HTTP(S) origins, including a nondefault port when relevant. No wildcard, credentials, path, query or fragment. ASCII DNS names and IPv4 supported here; IPv6/IDN syntax remains future work. |
+| `access.origins` | Nonempty list of exact canonical HTTP(S) origins, including a nondefault port when relevant, or the single Core-owned all-sites sentinel `*`. No host wildcards such as `*.example.com`, credentials, path, query or fragment. ASCII DNS names and IPv4 supported here; IPv6/IDN syntax remains future work. `session.observe` remains limited to one exact HTTPS origin. |
 | `access.capabilities` | Explicit requests from `capture.read`, `response.mutate`, `page.inject`, `bridge.handle`; every declared role needs its capability. |
 
 Host-provided Python, browser JavaScript and the already selected interception
@@ -146,7 +146,7 @@ call, **not a WebSocket**. The reserved `/__tap/fixture/page.js` URL has no inst
 route; its exported page functions are invoked by the fixture harness explicitly.
 
 The validator tests also cover incompatible versions, typo/duplicate JSON fields,
-missing/undeclared/escaping files, exact origins, typed overrides, independent
+missing/undeclared/escaping files, exact origins/all-sites sentinel, typed overrides, independent
 access grants, fixed dependencies and rejection before code execution.
 
 An external author can copy either fixture directory, change its ID and code,

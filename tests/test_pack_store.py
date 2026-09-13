@@ -10,7 +10,7 @@ from contextlib import redirect_stdout
 from unittest.mock import patch
 
 from tap_core import cli
-from tap_core.bridge import effective_configuration
+from tap_core.bridge import decision, effective_configuration
 from tap_core.pack_store import PackStore, build_artifact
 from tap_core.packs import PackError
 from tap_core.runtime import Profile
@@ -134,6 +134,21 @@ class PackStoreTests(unittest.TestCase):
         Path(effective["page_scripts"][1]).write_text("tampered")
         with self.assertRaisesRegex(PackError, "shared page resource"):
             self.store.effective_bridge(bridge())
+
+    def test_all_sites_pack_projects_wildcard_origin(self):
+        source = self.sibling_source("fixture.all-sites-page", origins=["*"])
+        artifact = self.artifact(source, "all-sites.tap-pack")
+        installed = self.store.install(artifact)
+        self.store.enable(installed["id"], installed["version"],
+                          origins=["*"], capabilities=CAPABILITIES)
+
+        effective = self.store.effective_bridge(bridge())
+        self.assertEqual(effective["allow_origins"], ["*"])
+        self.assertTrue(all(origins == ["*"] for origins in effective["page_script_origins"]))
+        self.assertEqual(effective["page_pack_origins"], [
+            {"id": "fixture.all-sites-page", "version": "0.1.0", "origins": ["*"], "features": []},
+        ])
+        self.assertTrue(decision(effective, "https://arbitrary.example")["allowed"])
 
     def test_development_tool_gets_page_only_binding_on_dev_origin(self):
         artifact = self.artifact(SOURCE, "tool.tap-pack")

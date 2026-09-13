@@ -66,9 +66,11 @@ each resource ID:
 - a missing provider or changed store file fails before page code runs.
 
 Every pack's `uses` order becomes an ordering constraint on each of that pack's
-exact origins. The host computes a deterministic topological order, using sorted
-pack IDs and first declaration as the tie-break. A cycle on one origin rejects
-the candidate activation before the registry changes. Opposite constraints on
+origins; `*` is the Core-owned all-sites sentinel and overlaps every exact
+origin. The host computes a deterministic topological order, using sorted pack
+IDs and first declaration as the tie-break. A cycle on one origin rejects the
+candidate activation before the registry changes; a cycle involving all-sites
+cannot be split by origin and is rejected globally. Opposite constraints on
 disjoint origins are represented as separate origin-scoped asset entries, so
 each document still executes the resource once in its own valid order.
 An authenticated request from another allowed origin cannot fetch a resource

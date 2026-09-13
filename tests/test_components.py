@@ -59,6 +59,10 @@ class ComponentTests(unittest.TestCase):
         with self.assertRaises(TapError):
             configuration(self.binding, self.profile)
 
+    def test_handler_binding_accepts_all_sites_origin(self):
+        self.binding['handlers']['echo']['origins'] = ['*']
+        self.assertEqual(configuration(self.binding, self.profile), self.binding)
+
     def test_enabled_bridge_requires_managed_hub_even_without_handlers(self):
         binding = dict(self.binding, handlers={})
         self.assertTrue(needs_hub(binding, self.profile.bridge))

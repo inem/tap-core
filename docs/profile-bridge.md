@@ -20,10 +20,11 @@ An explicit development configuration contains exactly these fields:
 }
 ```
 
-Origins use the existing fixture contract's exact canonical HTTP(S) shape:
-lowercase ASCII host, optional nondefault port, no path or wildcard. IPv6/IDN
-configuration is not supported; unsupported traffic is not eligible for bridge
-access. Each list has at most 64 unique entries. Page scripts are trusted classic
+Origins in `allow_origins` use the existing fixture contract's exact canonical
+HTTP(S) shape — lowercase ASCII host, optional nondefault port, no path — or the
+Core-owned all-sites sentinel `*`. `exclude_origins` remains exact only. Host
+wildcards such as `*.example.com`, IPv6/IDN configuration and unsupported
+traffic are not eligible for bridge access. Each list has at most 64 unique entries. Page scripts are trusted classic
 browser scripts, read into memory on startup, at most 256 KiB per file. This
 binding is not a replacement for `browser-module-v1` pack entrypoints. There is
 no pack install, module loader, hot upgrade or automatic dependency discovery.

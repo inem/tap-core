@@ -69,6 +69,23 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(decision(config(), 'https://example.test')['reason'], 'explicit_allow')
         self.assertEqual(decision(config(), 'https://other.test')['reason'], 'not_allowed')
 
+    def test_all_sites_allow_preserves_exact_exclusion(self):
+        value = config(allow_origins=['*'], exclude_origins=['https://second.test'],
+                       page_scripts=['/all-sites.js'])
+        script_origins = [['*']]
+        configuration(value, script_origins)
+        value['page_script_origins'] = script_origins
+        value['page_pack_origins'] = [
+            {'id': 'fixture.all-sites', 'version': '1.0.0', 'origins': ['*'], 'features': []},
+        ]
+        bridge = TestBridge(value, TOKEN, [b'window.allSites = true;'])
+        self.assertTrue(decision(value, 'https://random.test')['allowed'])
+        self.assertEqual(decision(value, 'https://random.test')['reason'], 'all_sites_allow')
+        self.assertFalse(decision(value, 'https://second.test')['allowed'])
+        self.assertEqual(bridge.origin_digests('https://random.test'), [digest(b'window.allSites = true;')])
+        self.assertEqual(bridge.page_plan('https://random.test')['packs'][0]['id'], 'fixture.all-sites')
+        self.assertEqual(bridge.page_plan('https://second.test')['access'], 'revoked')
+
     def test_unsupported_authority_passes_ordinary_traffic_but_denies_bridge(self):
         f = flow(host='::1', response=Response())
         before = f.response.body

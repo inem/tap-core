@@ -10,6 +10,7 @@ from .page_resources import ResourceError, validate_resource
 
 
 PACK_API = 1
+ALL_ORIGINS = "*"
 ID = re.compile(r"[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*\Z")
 VERSION = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\Z")
 COMMAND_SEGMENT = re.compile(r"[a-z][a-z0-9-]*\Z")
@@ -94,6 +95,17 @@ def exact_origin(value):
         require(value == expected, "origin must be canonical")
     except (ValueError, TypeError) as error:
         raise PackError(f"access.origins: {value!r}: {error}") from error
+
+
+def exact_or_all_origin(value):
+    if value == ALL_ORIGINS:
+        return value
+    return exact_origin(value)
+
+
+def origin_granted(requested, granted):
+    """Host grants are explicit; '*' means every HTTP(S) origin."""
+    return requested == ALL_ORIGINS and ALL_ORIGINS in granted or requested in granted or ALL_ORIGINS in granted
 
 
 def pack_file(root, name):
@@ -232,7 +244,7 @@ def validate_manifest(manifest, root, host_api=PACK_API):
     fields(access, ("origins", "capabilities"), label="access")
     strings(access["origins"], "access.origins")
     for origin in access["origins"]:
-        exact_origin(origin)
+        exact_or_all_origin(origin)
     strings(access["capabilities"], "access.capabilities")
     if any("schedule" in declaration for declaration in entries.get("command", {}).get("commands", [])):
         require("background.run" in access["capabilities"], "scheduled commands require background.run")
@@ -253,7 +265,7 @@ def validate_manifest(manifest, root, host_api=PACK_API):
     require(set(access["capabilities"]) <= supported, "access.capabilities: unknown capability")
     for role in entries:
         require(ROLES[role][1] in access["capabilities"], f"access: missing capability for {role}")
-    require(bool(access["origins"]), "access.origins: at least one exact origin required")
+    require(bool(access["origins"]), "access.origins: at least one origin required")
     return manifest
 
 
@@ -289,9 +301,11 @@ def resolve_config(manifest, overrides=None):
 
 def check_activation(manifest, granted_origins, granted_capabilities, dependencies):
     """Check a supplied host policy/inventory; never infer grants from requests."""
-    for category, granted in (("origins", granted_origins), ("capabilities", granted_capabilities)):
-        missing = set(manifest["access"][category]) - set(granted)
-        require(not missing, f"access.{category}: not granted: {sorted(missing)}")
+    missing_origins = [origin for origin in manifest["access"]["origins"]
+                       if not origin_granted(origin, set(granted_origins))]
+    require(not missing_origins, f"access.origins: not granted: {sorted(missing_origins)}")
+    missing_capabilities = set(manifest["access"]["capabilities"]) - set(granted_capabilities)
+    require(not missing_capabilities, f"access.capabilities: not granted: {sorted(missing_capabilities)}")
     for dependency in manifest["requires"]["dependencies"]:
         require(dependency["id"] != manifest["id"], "dependency.id: pack cannot depend on itself")
         require(dependencies.get(dependency["id"]) == dependency["version"],

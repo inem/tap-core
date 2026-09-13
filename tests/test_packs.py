@@ -93,9 +93,11 @@ class PackManifestTests(unittest.TestCase):
                        "HTTPS://fixture.example", "https://fixture.example:443", "file://fixture.example",
                        "https://fixture.example:0", "https://fixture.example:", "https://fixture.example:99999"):
             self.invalid(lambda m: m["access"].update(origins=[origin]), "origins")
-        self.invalid(lambda m: m["access"].update(origins=[]), "exact origin")
+        self.invalid(lambda m: m["access"].update(origins=[]), "origin required")
         manifest = copy.deepcopy(self.manifest)
         manifest["access"]["origins"] = ["http://127.0.0.1:18080"]
+        validate_manifest(manifest, self.root)
+        manifest["access"]["origins"] = ["*"]
         validate_manifest(manifest, self.root)
 
     def test_entrypoint_and_capability_consistency(self):
@@ -161,6 +163,12 @@ class PackManifestTests(unittest.TestCase):
         with self.assertRaisesRegex(PackError, "not granted"):
             check_activation(self.manifest, ["https://fixture.example:8443"], ["capture.read"], {})
         check_activation(self.manifest, ["https://fixture.example"], ["capture.read"], {})
+        check_activation(self.manifest, ["*"], ["capture.read"], {})
+        manifest = copy.deepcopy(self.manifest)
+        manifest["access"]["origins"] = ["*"]
+        with self.assertRaisesRegex(PackError, "not granted"):
+            check_activation(manifest, ["https://fixture.example"], ["capture.read"], {})
+        check_activation(manifest, ["*"], ["capture.read"], {})
 
     def test_dependencies_pinned_and_checked_against_host_inventory(self):
         self.invalid(lambda m: m["requires"].update(dependencies=[{"id": "helper", "version": "latest"}]), "exact")
