@@ -214,7 +214,7 @@ python3 -B -m tap_core.pack_store build /absolute/path/to/tap-pack-example \
 ```
 
 The background controller picks a declared schedule up on its next tick; no
-profile restart and no page origin is required. Iterate by bumping the version,
+profile restart is required, and a command-only pack needs no page origin. Iterate by bumping the version,
 rebuilding the artifact and running `pack update`. A mutation waits only when
 the same pack's scheduled command is currently running: the execution lease is
 scoped per pack id and the busy message names the pack, so iterating on one
