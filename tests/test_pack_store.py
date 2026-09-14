@@ -59,6 +59,13 @@ class PackStoreTests(unittest.TestCase):
         build_artifact(source, output)
         return output
 
+    def test_artifact_pack_id_reads_manifest_without_extraction(self):
+        from tap_core.pack_store import artifact_pack_id
+        artifact = self.artifact(self.source_version("1.0.0"), "id-peek.tap-pack")
+        self.assertEqual(artifact_pack_id(artifact), PACK_ID)
+        with self.assertRaises(PackError):
+            artifact_pack_id(self.root / "missing.tap-pack")
+
     def sibling_source(self, pack_id="fixture.installed-page-second", *, shared_version="1.0.0",
                        shared_suffix="", origins=None, feature_first=False):
         source = self.root / pack_id

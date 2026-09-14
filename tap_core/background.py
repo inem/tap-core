@@ -72,15 +72,17 @@ def run_once(root):
             now = time.time()
             if previous.get('fingerprint') == fingerprint and previous.get('next_at', 0) > now:
                 continue
-            due.append((key, fingerprint))
+            due.append((key, fingerprint, command.provider_id))
         atomic_json(root / 'state/background.json', state)
 
-    for key, expected_fingerprint in due:
+    for key, expected_fingerprint, provider_id in due:
         # A command lease prevents pack disable/update/uninstall from invalidating
-        # files or authority while the provider runs. Re-read the profile under
-        # its short lease after acquiring execution authority so a stale
-        # scheduler snapshot can never resurrect a changed selection.
-        with command_execution_lock(root) as lease:
+        # files or authority while the provider runs. The lease is scoped to this
+        # provider: operations on unrelated packs proceed without waiting.
+        # Re-read the profile under its short lease after acquiring execution
+        # authority so a stale scheduler snapshot can never resurrect a changed selection.
+        with command_execution_lock(root, key=provider_id,
+                                    busy_message=f"A command from pack '{provider_id}' is still running") as lease:
             with profile_lock(root):
                 current = {task_key(command): (command, schedule)
                            for command, schedule in tasks(root)}.get(key)

@@ -74,6 +74,17 @@ def _tree_hashes(root, manifest):
     return {name: _digest(root / name) for name in sorted(expected)}
 
 
+def artifact_pack_id(artifact):
+    """Read the pack id from an artifact manifest without extracting it."""
+    try:
+        with tarfile.open(Path(artifact), mode="r:*") as archive:
+            member = archive.extractfile("pack.json")
+            require(member is not None, "artifact: missing pack.json")
+            return json.loads(member.read().decode("utf-8"))["id"]
+    except (OSError, tarfile.TarError, KeyError, ValueError, TypeError) as error:
+        raise PackError(f"artifact: cannot read pack id: {error}") from error
+
+
 def build_artifact(source, output):
     """Build a deterministic gzip-compressed tar artifact from declared files."""
     source, output = Path(source).resolve(), Path(output).resolve()
