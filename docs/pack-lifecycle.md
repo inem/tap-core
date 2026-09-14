@@ -195,6 +195,31 @@ publication, iterate through the mutable development bridge or rebuild and
 update the page-only artifact without stopping TAP. Do not manufacture a public
 release for every visual edit.
 
+### Command packs with scheduled commands
+
+The same loop serves command packs non-interactively and without a consent
+prompt (unlike `pack add`, which resolves a public release and asks first):
+
+```sh
+PYTHONPATH=/absolute/path/to/tap-core \
+python3 -B -m tap_core.pack_store build /absolute/path/to/tap-pack-example \
+  --output /tmp/example.refresh-0.1.0.tap-pack
+
+./tap --profile /absolute/profile pack install \
+  /tmp/example.refresh-0.1.0.tap-pack
+./tap --profile /absolute/profile pack enable example.refresh \
+  --version 0.1.0 \
+  --grant-capability command.execute \
+  --grant-capability background.run
+```
+
+The background controller picks a declared schedule up on its next tick; no
+profile restart is required, and a command-only pack needs no page origin. Iterate by bumping the version,
+rebuilding the artifact and running `pack update`. A mutation waits only when
+the same pack's scheduled command is currently running: the execution lease is
+scoped per pack id and the busy message names the pack, so iterating on one
+command pack never waits for an unrelated pack's long command.
+
 An update is installed before activation. If its requests, dependencies, config
 or binding are incompatible, the old selected version remains enabled and no
 mixed version is loaded. Rollback selects the previous verified snapshot.
