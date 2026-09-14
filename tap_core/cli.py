@@ -417,15 +417,37 @@ def main(argv=None):
             if args.pack_action == 'list':
                 output = store.status()
             else:
-                # Do not change or remove a selected pack while its immutable
-                # command snapshot is executing. This execution lease is
-                # independent of capture/network lifecycle.
-                with command_execution_lock(
-                        root,
-                        busy_message="A command from this profile is still running; "
-                                     "wait before changing packs"), profile_lock(root):
-                    # Reader/handler projection is refused before registry publish so a
-                    # concurrent bridge refresh cannot observe a rejected plan.
+                # A running command's immutable snapshot must not be mutated or
+                # re-authoritied mid-run, but only that pack's mutation waits:
+                # the execution lease is scoped per pack id. install of a new
+                # pack cannot collide with any running command and takes no
+                # execution lease; add keeps the global lease because the pack
+                # id is unknown until the release is downloaded. Every mutation
+                # still holds the short profile lease for registry writes.
+                from contextlib import ExitStack
+                from .pack_store import artifact_pack_id
+                pack_keys = {
+                    'update': lambda: artifact_pack_id(args.artifact),
+                    'enable': lambda: args.id,
+                    'rollback': lambda: args.id,
+                    'disable': lambda: args.id,
+                    'uninstall': lambda: args.id,
+                }
+                key = pack_keys[args.pack_action]() if args.pack_action in pack_keys else None
+                # Reader/handler projection is refused before registry publish so a
+                # concurrent bridge refresh cannot observe a rejected plan.
+                with ExitStack() as locks:
+                    if args.pack_action == 'add':
+                        locks.enter_context(command_execution_lock(
+                            root,
+                            busy_message="A command from this profile is still running; "
+                                         "wait before changing packs"))
+                    elif args.pack_action != 'install':
+                        locks.enter_context(command_execution_lock(
+                            root, key=key,
+                            busy_message=f"A command from pack '{key}' is still running; "
+                                         f"wait before changing it"))
+                    locks.enter_context(profile_lock(root))
                     live = (
                         profile is not None
                         and (adapter.service_loaded(profile)

@@ -86,14 +86,27 @@ class BackgroundTests(unittest.TestCase):
             with profile_lock(self.profile):
                 pass
             # Pack mutation still cannot invalidate the selected provider.
-            with self.assertRaisesRegex(TapError, 'still running'):
-                with command_execution_lock(self.profile):
+            # The execution lease is scoped to the provider id: the same pack
+            # conflicts, and the lease name identifies it.
+            with self.assertRaisesRegex(TapError, "still running"):
+                with command_execution_lock(self.profile, key='fixture.command'):
                     pass
+            # A different pack's lease is unaffected by this run.
+            with command_execution_lock(self.profile, key='other.pack'):
+                pass
             release.set()
             worker.join(3)
 
         self.assertFalse(worker.is_alive())
         self.assertEqual(errors, [])
+
+    def test_execution_lease_scoped_per_pack(self):
+        with command_execution_lock(self.profile, key='pack.a'):
+            with command_execution_lock(self.profile, key='pack.b'):
+                pass  # unrelated packs do not wait on each other
+            with self.assertRaisesRegex(TapError, 'still running'):
+                with command_execution_lock(self.profile, key='pack.a'):
+                    pass
 
     def test_schedule_requires_permission_and_finite_bounds(self):
         bad = copy.deepcopy(self.manifest)
