@@ -26,7 +26,8 @@ separates its connection mechanism so native activation does not block it.
 - `SystemProxyRouting` preserves recovery snapshot format, foreign-proxy refusal,
   saved bypass restoration on `off`, partial rollback handling and the common
   per-user network lock. While TAP is on, saved domain bypasses are not reused as
-  active capture exclusions; only local loopback bypasses stay active.
+  active capture exclusions; the active system route clears bypasses so local
+  development pages can be captured and injected too.
   `ExplicitProxyRouting` owns no system settings and takes no shared network lock.
   Both still take the existing per-profile command lock through CLI coordination.
 

@@ -56,7 +56,7 @@ It does not install a global command or modify an existing `tap` symlink.
 | Start → arm → real proxy request | Preserved for system routing. Explicit routing performs start → proxy request. |
 | Disarm before stopping capture | Preserved for system routing; failed recovery prevents stop. |
 | Port liveness and service identity matter | Both verified, including listener PID matching this exact launchd job. |
-| Operate across network services and preserve recovery state | Both HTTP and HTTPS verified on every enabled service, including inactive adapters. Existing bypass entries are saved for recovery and restored on off; the active TAP route keeps only local loopback bypasses so historical domain exceptions do not silently disable capture/injection. |
+| Operate across network services and preserve recovery state | Both HTTP and HTTPS verified on every enabled service, including inactive adapters. Existing bypass entries are saved for recovery and restored on off; the active TAP route does not keep domain bypasses, so historical exceptions and local development hosts do not silently disable capture/injection. |
 | `install` can swallow startup/plist errors | Errors return nonzero. Failed startup restores routing before removing its job and plist; cleanup failures remain explicit. |
 | Failed arm/rollback can claim safety | Arm failure attempts recovery; failed recovery retains the snapshot and reports failure without stopping capture. |
 | Broad process-pattern termination | Removed; only the exact profile job is booted out. An occupied foreign port is an error. |
@@ -109,10 +109,12 @@ permission failure, and does not modify sudoers. Permission provisioning and
 the packaged installer remain #7 work.
 
 Before arming, the runtime saves both proxy settings and bypasses for all enabled
-services. The active TAP route uses only local loopback bypasses (`localhost`,
-`127.0.0.1`, `*.local`); pre-existing domain bypasses remain recovery state, not
-active capture exclusions. This prevents an old system exception such as
-`github.com` from making a site invisible to page injection while TAP is on.
+services. The active TAP route clears domain bypasses; pre-existing bypasses
+remain recovery state, not active capture exclusions. This prevents an old system
+exception such as `github.com` or a blanket loopback exception such as
+`localhost` from making a page invisible to injection while TAP is on. Protection
+against routing back into TAP's own listener belongs at the profile route
+boundary, not in a host-wide proxy bypass.
 It refuses to replace an already enabled system proxy, including an existing TAP
 installation. `off` is the network escape hatch: it restores and verifies the
 saved routing state before waiting for an ordinary profile command to drain, then

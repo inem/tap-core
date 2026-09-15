@@ -89,7 +89,7 @@ class RuntimeTests(unittest.TestCase):
 
     def assertActiveBypass(self):
         for service in self.os.services():
-            self.assertEqual(self.os.network[service]["bypass"], ["localhost", "127.0.0.1", "*.local"])
+            self.assertEqual(self.os.network[service]["bypass"], [])
 
     def test_disable_does_not_reenable_a_previous_endpoint(self):
         adapter = MacOS()
@@ -256,7 +256,7 @@ class RuntimeTests(unittest.TestCase):
 
     def test_repeat_on_verifies_all_saved_bypass_lists(self):
         self.runtime.on()
-        self.os.network["USB Ethernet"]["bypass"] = ["localhost", "127.0.0.1", "*.local", "unexpected.example"]
+        self.os.network["USB Ethernet"]["bypass"] = ["unexpected.example"]
         with self.assertRaisesRegex(TapError, "needs recovery"):
             self.runtime.on()
         self.assertEqual(self.os.events.count("probe"), 1)

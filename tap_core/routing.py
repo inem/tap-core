@@ -56,7 +56,7 @@ class SystemProxyRouting(ExplicitProxyRouting):
     manages_system_settings = True
     recovered_message = "previous proxy routing restored"
     off_message = "OFF — previous proxy routing restored, profile service stopped"
-    local_bypass = ["localhost", "127.0.0.1", "*.local"]
+    legacy_local_bypass = ["localhost", "127.0.0.1", "*.local"]
 
     def mutation_lock(self):
         shared = Path.home() / "Library/Application Support/TAP Core/network-control"
@@ -78,10 +78,10 @@ class SystemProxyRouting(ExplicitProxyRouting):
                    for service in self.os.services() for secure in (False, True))
 
     def active_bypass(self):
-        return list(self.local_bypass)
+        return []
 
     def legacy_active_bypass(self, state):
-        return list(dict.fromkeys([*state["bypass"], *self.local_bypass]))
+        return list(dict.fromkeys([*state["bypass"], *self.legacy_local_bypass]))
 
     def bypasses_match(self, before):
         if set(self.os.services()) != set(before):
