@@ -87,6 +87,10 @@ class RuntimeTests(unittest.TestCase):
             for kind in ("http", "https"):
                 self.assertEqual(self.os.network[service][kind]["enabled"], state[kind]["enabled"])
 
+    def assertActiveBypass(self):
+        for service in self.os.services():
+            self.assertEqual(self.os.network[service]["bypass"], ["localhost", "127.0.0.1", "*.local"])
+
     def test_disable_does_not_reenable_a_previous_endpoint(self):
         adapter = MacOS()
         with patch.object(adapter, "run") as run:
@@ -96,6 +100,7 @@ class RuntimeTests(unittest.TestCase):
     def test_system_on_off_restores_all_services_and_bypass_before_stop(self):
         self.runtime.on()
         self.assertTrue(select_routing(self.profile, self.os).verified())
+        self.assertActiveBypass()
         self.assertTrue(self.profile.snapshot.exists())
         self.assertEqual(self.os.events[0], "start")
         self.assertEqual(self.os.events[-1], "probe")
@@ -245,15 +250,27 @@ class RuntimeTests(unittest.TestCase):
         before = self.profile.snapshot.read_bytes()
         self.runtime.on()
         self.assertEqual(self.profile.snapshot.read_bytes(), before)
+        self.assertActiveBypass()
         self.runtime.off()
         self.assertRestored()
 
     def test_repeat_on_verifies_all_saved_bypass_lists(self):
         self.runtime.on()
-        self.os.network["USB Ethernet"]["bypass"] = ["*.internal"]
+        self.os.network["USB Ethernet"]["bypass"] = ["localhost", "127.0.0.1", "*.local", "unexpected.example"]
         with self.assertRaisesRegex(TapError, "needs recovery"):
             self.runtime.on()
         self.assertEqual(self.os.events.count("probe"), 1)
+        self.assertRestored()
+
+    def test_repeat_on_tightens_legacy_saved_bypass_lists(self):
+        self.runtime.on()
+        before = self.profile.snapshot.read_bytes()
+        for service, state in self.before.items():
+            self.os.network[service]["bypass"] = [*state["bypass"], "localhost", "127.0.0.1", "*.local"]
+        self.runtime.on()
+        self.assertEqual(self.profile.snapshot.read_bytes(), before)
+        self.assertActiveBypass()
+        self.runtime.off()
         self.assertRestored()
 
     def test_save_tightens_existing_profile_directories(self):

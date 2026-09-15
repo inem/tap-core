@@ -56,6 +56,7 @@ class SystemProxyRouting(ExplicitProxyRouting):
     manages_system_settings = True
     recovered_message = "previous proxy routing restored"
     off_message = "OFF — previous proxy routing restored, profile service stopped"
+    local_bypass = ["localhost", "127.0.0.1", "*.local"]
 
     def mutation_lock(self):
         shared = Path.home() / "Library/Application Support/TAP Core/network-control"
@@ -76,11 +77,35 @@ class SystemProxyRouting(ExplicitProxyRouting):
         return all(self.matches(self.os.proxy(service, secure), expected)
                    for service in self.os.services() for secure in (False, True))
 
+    def active_bypass(self):
+        return list(self.local_bypass)
+
+    def legacy_active_bypass(self, state):
+        return list(dict.fromkeys([*state["bypass"], *self.local_bypass]))
+
     def bypasses_match(self, before):
         if set(self.os.services()) != set(before):
             return False
-        return all(self.os.bypass(service) == list(dict.fromkeys([*state["bypass"], "localhost", "127.0.0.1", "*.local"]))
-                   for service, state in before.items())
+        expected = self.active_bypass()
+        return all(self.os.bypass(service) == expected for service in before)
+
+    def bypasses_are_tightenable(self, before):
+        if set(self.os.services()) != set(before):
+            return False
+        expected = set(self.active_bypass())
+        for service, state in before.items():
+            current = self.os.bypass(service)
+            legacy = set(self.legacy_active_bypass(state))
+            if set(current) - legacy:
+                return False
+            if not expected.issubset(set(current)):
+                return False
+        return True
+
+    def tighten_bypasses(self, before):
+        expected = self.active_bypass()
+        for service in before:
+            self.os.set_bypass(service, expected)
 
     def enable(self):
         profile = self.profile
@@ -88,6 +113,10 @@ class SystemProxyRouting(ExplicitProxyRouting):
             before = json.loads(profile.snapshot.read_text())
             if self.verified() and self.bypasses_match(before):
                 return
+            if self.verified() and self.bypasses_are_tightenable(before):
+                self.tighten_bypasses(before)
+                if self.bypasses_match(before):
+                    return
             raise TapError("Saved network state needs recovery; run off before enabling again")
         before = self.os.network_state()
         if any(state[kind]["enabled"] for state in before.values() for kind in ("http", "https")):
@@ -97,7 +126,7 @@ class SystemProxyRouting(ExplicitProxyRouting):
         for service, state in before.items():
             self.os.set_proxy(service, False, expected)
             self.os.set_proxy(service, True, expected)
-            self.os.set_bypass(service, list(dict.fromkeys([*state["bypass"], "localhost", "127.0.0.1", "*.local"])))
+            self.os.set_bypass(service, self.active_bypass())
         if not self.verified():
             raise TapError("Could not verify both proxies on every network service")
         if not self.bypasses_match(before):

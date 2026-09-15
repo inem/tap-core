@@ -56,7 +56,7 @@ It does not install a global command or modify an existing `tap` symlink.
 | Start → arm → real proxy request | Preserved for system routing. Explicit routing performs start → proxy request. |
 | Disarm before stopping capture | Preserved for system routing; failed recovery prevents stop. |
 | Port liveness and service identity matter | Both verified, including listener PID matching this exact launchd job. |
-| Operate across network services and preserve bypasses | Both HTTP and HTTPS verified on every enabled service, including inactive adapters. Existing bypass entries are combined with local bypasses and restored on off. |
+| Operate across network services and preserve recovery state | Both HTTP and HTTPS verified on every enabled service, including inactive adapters. Existing bypass entries are saved for recovery and restored on off; the active TAP route keeps only local loopback bypasses so historical domain exceptions do not silently disable capture/injection. |
 | `install` can swallow startup/plist errors | Errors return nonzero. Failed startup restores routing before removing its job and plist; cleanup failures remain explicit. |
 | Failed arm/rollback can claim safety | Arm failure attempts recovery; failed recovery retains the snapshot and reports failure without stopping capture. |
 | Broad process-pattern termination | Removed; only the exact profile job is booted out. An occupied foreign port is an error. |
@@ -109,12 +109,16 @@ permission failure, and does not modify sudoers. Permission provisioning and
 the packaged installer remain #7 work.
 
 Before arming, the runtime saves both proxy settings and bypasses for all enabled
-services. It refuses to replace an already enabled system proxy, including an
-existing TAP installation. `off` is the network escape hatch: it restores and
-verifies the saved routing state before waiting for an ordinary profile command
-to drain, then repeats the idempotent recovery under the normal lifecycle locks
-before stopping the job. If bounded cleanup cannot obtain the profile lease, the
-command reports that networking was restored and cleanup remains pending.
+services. The active TAP route uses only local loopback bypasses (`localhost`,
+`127.0.0.1`, `*.local`); pre-existing domain bypasses remain recovery state, not
+active capture exclusions. This prevents an old system exception such as
+`github.com` from making a site invisible to page injection while TAP is on.
+It refuses to replace an already enabled system proxy, including an existing TAP
+installation. `off` is the network escape hatch: it restores and verifies the
+saved routing state before waiting for an ordinary profile command to drain, then
+repeats the idempotent recovery under the normal lifecycle locks before stopping
+the job. If bounded cleanup cannot obtain the profile lease, the command reports
+that networking was restored and cleanup remains pending.
 Recovery failure leaves the snapshot and service available;
 after correcting the OS/permission problem, run `off` again. It refuses to
 overwrite an unrelated proxy enabled after its snapshot was created.
