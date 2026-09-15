@@ -5,7 +5,26 @@ class WS {static OPEN=1;constructor(){this.readyState=0;this.messages=[];sockets
 const location={href:'https://fixture.test/path?q=1',origin:'https://fixture.test',protocol:'https:',replace:value=>{replaced=value;}};
 const fixtureNode={tagName:'MAIN',id:'content',classList:['wide'],innerText:'Visible content',outerHTML:'<main id="content" class="wide">Visible content</main>',getAttribute:name=>name==='role'?'main':null,getBoundingClientRect:()=>({x:1,y:2,width:300,height:200})};
 let context;
-const document={currentScript:{dataset:{tapToken:'synthetic',tapPlan:currentPlan,tapWs:'true',tapMode:'development'},nonce:'fixture-nonce'},title:'Fixture page',querySelectorAll:selector=>selector==='main'?[fixtureNode]:[],createElement:()=>({textContent:'',nonce:'',remove(){}}),documentElement:{appendChild:script=>vm.runInContext(script.textContent,context)}};
+const appended=[];
+function element(tagName){
+ const node={tagName:tagName.toUpperCase(),attrs:{},dataset:{},style:{cssText:''},textContent:'',nonce:'',setAttribute(name,value){this.attrs[name]=String(value);},remove(){}};
+ if(tagName==='div') node.attachShadow=()=>{
+  const nodes={
+   '.lamp':{attrs:{},setAttribute(name,value){this.attrs[name]=String(value);},focus(){},onclick:null},
+   '.dot':{className:''},
+   '#panel':{hidden:true},
+   '.status-dot':{className:''},
+   '.status strong':{textContent:''},
+   '.hostname':{textContent:''},
+   '.packs ul':{innerHTML:'',replaceChildren(){}},
+   '.close':{onclick:null},
+  };
+  const root={html:'',nodes,set innerHTML(value){this.html=String(value);},get innerHTML(){return this.html;},querySelector(selector){return nodes[selector]||null;}};
+  node.shadowRoot=root;return root;
+ };
+ return node;
+}
+const document={currentScript:{dataset:{tapToken:'synthetic',tapPlan:currentPlan,tapWs:'true',tapMode:'development'},nonce:'fixture-nonce'},title:'Fixture page',querySelector:()=>null,querySelectorAll:selector=>selector==='main'?[fixtureNode]:[],createElement:element,body:{appendChild:node=>appended.push(node)},documentElement:{appendChild:script=>vm.runInContext(script.textContent,context)}};
 const scope={WebSocket:WS,URL,TextEncoder,crypto:{randomUUID:()=>String(++n)},fetch:async()=>({ok:fetchOk,json:async()=>({version:'tap.page-plan/v1',revision:currentPlan,scripts:[],packs:currentPacks,access:'current',mode:'development',application:'reload'})}),document,getComputedStyle:()=>({display:'block',visibility:'visible'}),location,addEventListener:(name,f)=>events[name]=f,setTimeout:(f,delay)=>{timers.set(++n,{f,delay});return n;},clearTimeout:id=>timers.delete(id)};
 scope.window=scope;scope.top=scope;context=vm.createContext(scope);vm.runInContext(fs.readFileSync(process.argv[2],'utf8'),context);
 const b=scope.TapBridge;
@@ -13,9 +32,13 @@ function welcome(s){s.readyState=1;s.onopen();s.onmessage({data:JSON.stringify({
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
 async function runDelay(delay){const item=[...timers].find(([,v])=>v.delay===delay);assert(item);timers.delete(item[0]);await item[1].f();await flush();}
 (async()=>{
+ const indicator=appended.find(node=>node.attrs['data-tap-core-indicator']==='');
+ assert(indicator);assert.equal(indicator.dataset.tapState,'connecting');assert.equal(indicator.shadowRoot.nodes['.lamp'].attrs['aria-label'],'Open TAP page context');
  await runDelay(0);assert.equal(b.status().mode,'development');assert.equal(b.status().packs[0].id,'fixture.page');assert.equal(b.status().packs[0].features[0].folder,'data/readers/fixture.page');
  assert.equal(sockets.length,1);b.connect();assert.equal(sockets.length,1);
  welcome(sockets[0]);await flush();assert(b.isReady());
+ assert.equal(indicator.dataset.tapState,'ready');assert.equal(indicator.shadowRoot.nodes['.status strong'].textContent,'Development');
+ indicator.shadowRoot.nodes['.lamp'].onclick();assert.equal(indicator.shadowRoot.nodes['#panel'].hidden,false);assert(indicator.shadowRoot.nodes['.packs ul'].innerHTML.includes('fixture.page'));
  sockets[0].onmessage({data:JSON.stringify({version:'tap.bridge/v1',kind:'Command',session:'fixture',id:'dev-inspect',operation:'tap.dev.inspect',args:{selector:'main',limit:20}})});
  await flush();assert.equal(sockets[0].sent.ok,true);assert.equal(sockets[0].sent.value.total,1);assert.equal(sockets[0].sent.value.nodes[0].role,'main');
  sockets[0].onmessage({data:JSON.stringify({version:'tap.bridge/v1',kind:'Command',session:'fixture',id:'dev-execute',operation:'tap.dev.execute',args:{source:'return {answer: 6 * 7};'}})});
