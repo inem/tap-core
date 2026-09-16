@@ -130,3 +130,20 @@ class BackgroundTests(unittest.TestCase):
             background.reconcile(self.profile, adapter)
             self.assertFalse(plist.exists())
             self.assertTrue(any('bootout' in call.args[0] for call in adapter.run.call_args_list))
+
+    def test_pack_integrity_failure_is_isolated_not_crashing(self):
+        # A single installed pack whose on-disk content drifted from its
+        # registry hashes must not take down the whole scheduler. (#137)
+        self.install()
+        registry = self.store.load()
+        hashes = registry['packs']['fixture.command']['versions']['0.1.0']['hashes']
+        victim_name = next(name for name in hashes if name != 'pack.json')
+        victim = self.store.version_root('fixture.command', '0.1.0') / victim_name
+        victim.write_bytes(victim.read_bytes() + b'\n# tampered\n')
+        # verify() itself still reports the integrity failure...
+        with self.assertRaises(PackError):
+            self.store.verify(self.store.load(), 'fixture.command', '0.1.0')
+        # ...but tasks() isolates it: the bad pack is skipped, no exception.
+        self.assertEqual(background.tasks(self.profile), [])
+        # ...and run_once completes instead of crash-looping.
+        background.run_once(self.profile)

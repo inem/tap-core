@@ -12,6 +12,7 @@ import time
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tap_core.runtime import TapError, atomic_json, command_execution_lock, profile_lock
 from tap_core.pack_store import PackStore
+from tap_core.packs import PackError
 from tap_core.commands import discover, _run_pack
 
 
@@ -29,7 +30,14 @@ def tasks(root):
     for pack_id, record in sorted(registry['packs'].items()):
         if not record['enabled']:
             continue
-        _, manifest = store.verify(registry, pack_id, record['selected'])
+        try:
+            _, manifest = store.verify(registry, pack_id, record['selected'])
+        except PackError as exc:
+            # One pack failing integrity must not crash the whole scheduler.
+            # Skip it and keep scheduling the rest; the next tick retries. (#137)
+            print('background: skipping %s@%s: %s' % (
+                pack_id, record['selected'], exc), file=sys.stderr)
+            continue
         for declaration in manifest['entrypoints'].get('command', {}).get('commands', []):
             schedule = declaration.get('schedule')
             command = commands.get(tuple(declaration['path']))
