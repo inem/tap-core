@@ -150,6 +150,9 @@ architecture by default.
 
 Read [TECHNOLOGY.md](TECHNOLOGY.md) for release requirements, working stack choices
 and unresolved packaging decisions before starting an implementation task.
+The [components map](docs/components.md) lists every repository, the installed
+instance layout, which command exercises which component, the pack roles and a
+terminal-only live check recipe over the WebSocket bridge.
 Use the [review lenses](docs/review-planes.md) to check the affected responsibility,
 state, access and delivery boundaries and the evidence behind each claim.
 The [development views](docs/development-views.md) show useful cycles, their
