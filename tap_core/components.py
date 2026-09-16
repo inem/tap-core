@@ -22,9 +22,10 @@ def needs_hub(components, bridge=None):
 
 
 def configuration(value, profile):
-    if (type(value) is not dict or set(value) != {'version', 'python', 'bun', 'readers', 'handlers'}
+    if (type(value) is not dict or set(value) not in ({'version', 'python', 'bun', 'readers', 'handlers'},
+                                                       {'version', 'python', 'bun', 'readers', 'handlers', 'services'})
             or type(value['version']) is not int or value['version'] != 1):
-        raise TapError('Components require version 1, python, bun, readers and handlers')
+        raise TapError('Components require version 1, python, bun, readers, handlers and services')
     if profile.bridge is None:
         raise TapError('Components require a bridge configuration; use enabled=false for reader-only')
     if not isinstance(value['python'], str) or not Path(value['python']).is_absolute():
@@ -38,7 +39,9 @@ def configuration(value, profile):
             raise TapError('Component bun requires an explicit absolute path when Hub is required')
     for name in ('readers', 'handlers'):
         if type(value[name]) is not dict or len(value[name]) > 8:
-            raise TapError('At most eight named readers/handlers per development profile')
+            raise TapError('At most eight named readers/handlers/services per development profile')
+    if type(value.get('services', {})) is not dict or len(value.get('services', {})) > 8:
+        raise TapError('At most eight named readers/handlers/services per development profile')
     for name, spec in value['readers'].items():
         Reader(profile, name)
         validate_definition(spec)
@@ -51,6 +54,19 @@ def configuration(value, profile):
             raise TapError('Handler origins must be a bounded list')
         for origin in spec['origins']:
             exact_or_all_origin(origin)
+    for name, spec in value.get('services', {}).items():
+        Reader(profile, name)  # Reuse the bounded component identifier grammar.
+        if type(spec) is not dict or set(spec) != {'command', 'port'}:
+            raise TapError('Service requires command and explicit loopback port')
+        command, port = spec['command'], spec['port']
+        if (type(command) is not list or not command or len(command) > 16
+                or not all(type(item) is str and item for item in command)
+                or not Path(command[0]).is_absolute()):
+            raise TapError('Service command requires a bounded argv with an absolute executable')
+        if type(port) is not int or not 1024 <= port <= 65535:
+            raise TapError('Service port must be an unprivileged integer')
+        if port in {profile.port, profile.bridge['hub_port']}:
+            raise TapError('Service port conflicts with the managed profile')
     return value
 
 
@@ -96,6 +112,10 @@ def prepare(profile):
         for parent in ('state', 'data', 'logs'):
             private_dir(profile.root / parent / 'handlers')
             private_dir(profile.root / parent / 'handlers' / name)
+    for name in effective_components.get('services', {}):
+        for parent in ('state', 'data', 'logs'):
+            private_dir(profile.root / parent / 'services')
+            private_dir(profile.root / parent / 'services' / name)
     return effective_components
 
 
@@ -168,9 +188,10 @@ def status(profile, adapter):
                 pass
     ready = bool(current and fresh and live)
     readers = state.get('readers', {})
-    workloads_healthy = (type(readers) is dict
+    services = state.get('services', {})
+    workloads_healthy = (type(readers) is dict and type(services) is dict
                          and all(type(row) is dict and row.get('healthy') is True
-                                 for row in readers.values()))
+                                 for row in [*readers.values(), *services.values()]))
     # `healthy` is the control-plane answer. Reader outcomes are workloads and
     # remain visible without turning a live Hub/controller into a failed Hub.
     return dict(state, configured=True, current_process=current, ready=ready,

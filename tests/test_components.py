@@ -23,7 +23,7 @@ class ComponentTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.profile = Profile(self.root, '/fixture/backend', 19000, 'explicit', 'http://fixture.test', [], bridge=config())
-        self.binding = {'version': 1, 'python': sys.executable, 'bun': '/fixture/bun', 'readers': {},
+        self.binding = {'version': 1, 'python': sys.executable, 'bun': '/fixture/bun', 'readers': {}, 'services': {},
                         'handlers': {'echo': {'command': [sys.executable, '-c', 'pass'], 'config': {}, 'origins': ['https://example.test']}}}
 
     def test_private_authority_is_distinct_and_stable_and_configuration_roundtrips(self):
@@ -62,6 +62,12 @@ class ComponentTests(unittest.TestCase):
     def test_handler_binding_accepts_all_sites_origin(self):
         self.binding['handlers']['echo']['origins'] = ['*']
         self.assertEqual(configuration(self.binding, self.profile), self.binding)
+
+    def test_service_requires_explicit_loopback_port_and_absolute_command(self):
+        binding = dict(self.binding, services={'active-chat': {'command': [sys.executable, '-c', 'pass'], 'port': 17883}})
+        self.assertEqual(configuration(binding, self.profile), binding)
+        with self.assertRaises(TapError):
+            configuration(dict(self.binding, services={'bad': {'command': ['python', '-c', 'pass'], 'port': 17883}}), self.profile)
 
     def test_enabled_bridge_requires_managed_hub_even_without_handlers(self):
         binding = dict(self.binding, handlers={})
