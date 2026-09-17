@@ -251,12 +251,20 @@ def origin_subset(requested, allowed):
 
 
 def configuration(value, script_origins=None):
+    required = {'version', 'enabled', 'hub_port', 'allow_origins', 'exclude_origins', 'page_scripts'}
+    # exclude_user_agents is an optional per-app injection gate; keep it optional so
+    # existing profiles and fixtures (six keys) validate unchanged.
     if (not isinstance(value, dict)
-            or set(value) != {'version', 'enabled', 'hub_port', 'allow_origins', 'exclude_origins', 'page_scripts'}
+            or not required <= set(value) <= required | {'exclude_user_agents'}
             or type(value['version']) is not int or value['version'] != 1
             or type(value['enabled']) is not bool
             or type(value['hub_port']) is not int or not 1024 <= value['hub_port'] <= 65535):
         raise ValueError('Invalid bridge configuration version/fields/enabled/hub_port')
+    agents = value.get('exclude_user_agents', [])
+    if (not isinstance(agents, list) or len(agents) > 64
+            or not all(isinstance(item, str) and item for item in agents)
+            or len(set(agents)) != len(agents)):
+        raise ValueError('Bridge exclude_user_agents must be at most 64 unique non-empty strings')
     for name in ('allow_origins', 'exclude_origins', 'page_scripts'):
         items = value[name]
         if (not isinstance(items, list) or len(items) > 64
@@ -847,6 +855,15 @@ class Bridge:
         origin = self.origin(flow.request)
         if not self.allowed(origin):
             return
+        # Per-app injection gate: skip pages whose client identifies itself as an
+        # excluded application (e.g. TAP's own desktop tooling), so injection stays
+        # in real browsers on the same origin. User-Agent is a client-controlled
+        # heuristic, not attribution; it never widens injection, only narrows it.
+        agents = self.config.get('exclude_user_agents', []) if self.config else []
+        if agents:
+            user_agent = flow.request.headers.get('user-agent', '')
+            if any(pattern in user_agent for pattern in agents):
+                return
         body = response.get_text(strict=False)
         if body is None:
             print('[tap bridge] HTML unavailable; injection skipped', flush=True)
