@@ -21,6 +21,15 @@ ownership = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ownership)
 
 
+def free_port():
+    """A currently-free localhost port, so the hermetic suite never collides
+    with a real TAP profile already listening on the default 18999 (#143)."""
+    import socket
+    with socket.socket() as probe:
+        probe.bind(('127.0.0.1', 0))
+        return probe.getsockname()[1]
+
+
 class InstallerTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory(prefix='tap-installer-')
@@ -321,7 +330,11 @@ class InstallerTests(unittest.TestCase):
                 },
             },
         }
-        Profile(self.root / 'profile', str(backend), 18999, 'explicit',
+        # A free port, not the well-known 18999: the update path's stop-check
+        # inspects this port, and the hermetic suite must not mistake a real TAP
+        # profile already listening on 18999 for this test's profile (#143).
+        proxy_port = free_port()
+        Profile(self.root / 'profile', str(backend), proxy_port, 'explicit',
                 'http://fixture.test', [], bridge=bridge, components=components).save()
         retained = self.root / 'profile/data/retained.txt'
         retained.parent.mkdir(parents=True, exist_ok=True)
@@ -353,7 +366,7 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(leftovers, [], leftovers)
         profile = json.loads((self.root / 'profile/profile.json').read_text())
         self.assertEqual(profile['backend'], str(backend))
-        self.assertEqual(profile['port'], 18999)
+        self.assertEqual(profile['port'], proxy_port)
         self.assertEqual(profile['bridge']['hub_port'], 19111)
         self.assertEqual(profile['bridge']['exclude_origins'], ['https://keep.example'])
         self.assertIn('custom', profile['components']['readers'])
