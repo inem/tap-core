@@ -1,10 +1,14 @@
+import io
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
+from urllib.error import HTTPError
 
 from tap_core.cli import parser
-from tap_core.page_control import allow
+from tap_core import page_control
+from tap_core.page_control import allow, call
 from tap_core.runtime import Profile, TapError
 
 
@@ -56,6 +60,32 @@ class DevelopmentOriginTests(unittest.TestCase):
         self.profile.bridge["enabled"] = False
         with self.assertRaisesRegex(TapError, "enabled bridge"):
             allow(self.profile, "https://example.test")
+
+    def _http_error(self, payload):
+        body = json.dumps(payload).encode()
+        return HTTPError("http://127.0.0.1:19002/v1/pages/p/commands", 400,
+                         "Bad Request", {}, io.BytesIO(body))
+
+    def test_failed_page_command_surfaces_the_page_side_message(self):
+        # A Trusted Types refusal (or any page-side throw) must reach the CLI, not
+        # be flattened to a bare error code.
+        error = self._http_error({"ok": False, "error": {
+            "code": "operation_failed",
+            "message": "This document requires 'TrustedScript' assignment."}})
+        with patch.object(page_control, "_runtime", return_value=("http://127.0.0.1:19002", "tok")), \
+                patch.object(page_control, "urlopen", side_effect=error):
+            with self.assertRaises(TapError) as caught:
+                call(self.root, "page-id", "tap.dev.execute", {"source": "return 1"})
+        text = str(caught.exception)
+        self.assertIn("operation_failed", text)
+        self.assertIn("TrustedScript", text)
+
+    def test_failed_page_command_without_message_uses_the_code(self):
+        error = self._http_error({"ok": False, "error": {"code": "page_not_found"}})
+        with patch.object(page_control, "_runtime", return_value=("http://127.0.0.1:19002", "tok")), \
+                patch.object(page_control, "urlopen", side_effect=error):
+            with self.assertRaisesRegex(TapError, "Page command failed: page_not_found"):
+                call(self.root, "page-id", "tap.dev.inspect", {"selector": "main", "limit": 1})
 
 
 if __name__ == "__main__":

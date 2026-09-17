@@ -19,6 +19,17 @@ The page bootstrap exposes two Core-owned development operations:
   bridge-injected CSP nonce authorizes the temporary script element; completion
   or failure returns through the existing command/result WS envelope.
 
+  On a page that enforces `require-trusted-types-for 'script'`, assigning a
+  plain string to the script element is refused. The runtime mints a
+  `TrustedScript` through its own `tap-dev-execute` policy (created once and
+  reused) so execution works there too. If the page's CSP does not permit
+  creating that policy — a restrictive `trusted-types` allowlist, or a locked
+  default policy — creation is skipped and the raw string is used; the page's
+  own refusal then surfaces through the command result with its message, rather
+  than a bare `operation_failed`. This is the script-sink counterpart to a pack
+  building DOM through `createElement` to survive a default innerHTML-sanitizing
+  policy; the two solve different Trusted Types sinks.
+
 The installed CLI gives these operations a development vocabulary:
 
 ```sh

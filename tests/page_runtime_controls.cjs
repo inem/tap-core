@@ -43,10 +43,17 @@ async function runDelay(delay){const item=[...timers].find(([,v])=>v.delay===del
  await flush();assert.equal(sockets[0].sent.ok,true);assert.equal(sockets[0].sent.value.total,1);assert.equal(sockets[0].sent.value.nodes[0].role,'main');
  sockets[0].onmessage({data:JSON.stringify({version:'tap.bridge/v1',kind:'Command',session:'fixture',id:'dev-execute',operation:'tap.dev.execute',args:{source:'return {answer: 6 * 7};'}})});
  await flush();await flush();assert.equal(sockets[0].sent.ok,true);assert.equal(sockets[0].sent.value.answer,42);
+ // Trusted Types: a page enforcing require-trusted-types-for 'script' → mint a TrustedScript through our policy (created once and reused).
+ let createdScripts=0,policies=0;scope.trustedTypes={createPolicy(name,rules){policies++;assert.equal(name,'tap-dev-execute');return {createScript:source=>{createdScripts++;return rules.createScript(source);}};}};
+ sockets[0].onmessage({data:JSON.stringify({version:'tap.bridge/v1',kind:'Command',session:'fixture',id:'dev-execute-tt',operation:'tap.dev.execute',args:{source:'return {answer: 7 * 6};'}})});
+ await flush();await flush();assert.equal(sockets[0].sent.ok,true);assert.equal(sockets[0].sent.value.answer,42);assert.equal(createdScripts,1);
+ sockets[0].onmessage({data:JSON.stringify({version:'tap.bridge/v1',kind:'Command',session:'fixture',id:'dev-execute-tt2',operation:'tap.dev.execute',args:{source:'return {answer: 40 + 2};'}})});
+ await flush();await flush();assert.equal(sockets[0].sent.value.answer,42);assert.equal(policies,1);assert.equal(createdScripts,2);
+ delete scope.trustedTypes;
  let finish;
  const dispose=b.expose('fixture.inspect',args=>new Promise(resolve=>{finish=()=>resolve({seen:args});}));
  sockets[0].onmessage({data:JSON.stringify({version:'tap.bridge/v1',kind:'Command',session:'fixture',id:'command-1',operation:'fixture.inspect',args:{value:7}})});
- await flush();assert.equal(b.status().activity.inbound,1);assert.equal(b.status().activity.sequence,3);
+ await flush();assert.equal(b.status().activity.inbound,1);assert.equal(b.status().activity.sequence,5);
  finish();await flush();assert.equal(b.status().activity.inbound,0);
  assert.deepEqual(sockets[0].sent.value.seen,{value:7});assert.equal(sockets[0].sent.kind,'CommandResult');dispose();
  const pending=b.request('fixture',{}).catch(e=>e);b.disconnect();assert.equal(b.status().state,'paused');assert(!b.isReady());assert.equal((await pending).completion,'unknown');assert.equal([...timers.values()].filter(v=>v.delay===2000).length,1);
@@ -60,5 +67,5 @@ async function runDelay(delay){const item=[...timers].find(([,v])=>v.delay===del
  await flush();assert.equal(b.status().plan_state,'unavailable');assert.equal(replaced,null);
  fetchOk=true;await runDelay(5000);
  assert.equal(replaced,'https://fixture.test/path?q=1&tap-ui='+currentPlan.slice(0,12));
- console.log('PASS connection controls, development inspect/execute, pending unknown/no replay, stale sockets, BFCache pause, retry cancellation, plan refresh');
+ console.log('PASS connection controls, development inspect/execute, Trusted Types script policy, pending unknown/no replay, stale sockets, BFCache pause, retry cancellation, plan refresh');
 })().catch(e=>{console.error(e);process.exitCode=1;});
