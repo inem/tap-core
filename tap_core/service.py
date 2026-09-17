@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -20,17 +21,18 @@ def main():
     stopping = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stopping.set())
     signal.signal(signal.SIGINT, lambda *_: stopping.set())
-    rows, threads = {}, []
+    rows, services, threads = {}, {}, []
     mutex = threading.Lock()
     health_path = profile.root / 'state/components.json'
     configuration = identity(profile)
     def report(phase, hub_pid=None, error=None):
         with mutex:
-            workloads_healthy = all(row['healthy'] for row in rows.values())
+            workloads_healthy = all(row['healthy'] for row in [*rows.values(), *services.values()])
             state = {'pid': os.getpid(), 'updated_at': time.time(), 'configuration': configuration,
                      'phase': phase, 'healthy': phase == 'ready' and not error,
                      'hub_pid': hub_pid, 'error': error,
-                     'workloads_healthy': workloads_healthy, 'readers': dict(rows)}
+                     'workloads_healthy': workloads_healthy, 'readers': dict(rows),
+                     'services': dict(services)}
         atomic_json(health_path, state)
     def reader_loop(name, spec, allowed_origins, fresh_enabled):
         reader, failures, first = Reader(profile, name), 0, True
@@ -119,6 +121,7 @@ def main():
         reader_origins = store.reader_origins()
         fresh_readers = store.fresh_readers()
         hub = None
+        service_processes = {}
         hub_pid = None
         try:
             if needs_hub(components, profile.bridge):
@@ -136,6 +139,28 @@ def main():
                         stopping.wait(0.1)
                 if hub_pid is None:
                     raise RuntimeError('Hub exited before readiness')
+            for name, spec in components.get('services', {}).items():
+                command = [components['python'], '-B', str(ROOT / 'guardian.py'), str(os.getpid()), *spec['command']]
+                process = subprocess.Popen(command, start_new_session=True)
+                service_processes[name] = (process, spec['port'])
+                services[name] = {'healthy': False, 'phase': 'starting', 'port': spec['port'], 'error': None}
+            for name, (process, port) in service_processes.items():
+                deadline = time.monotonic() + 10
+                while not stopping.is_set() and process.poll() is None:
+                    try:
+                        with socket.create_connection(('127.0.0.1', port), timeout=1.0):
+                            services[name] = {'healthy': True, 'phase': 'ready', 'port': port, 'error': None}
+                            break
+                    except OSError:
+                        if time.monotonic() >= deadline:
+                            break
+                        stopping.wait(0.1)
+                if not services[name]['healthy']:
+                    # A managed service that is not ready at startup is left
+                    # unhealthy for the steady-state loop to restart; a service
+                    # must never tear down the Hub or its peers.
+                    services[name] = {'healthy': False, 'phase': 'backoff', 'port': port,
+                                      'error': 'not ready at startup'}
             for name, spec in components['readers'].items():
                 rows[name] = {'healthy': False, 'phase': 'starting', 'error': None}
                 thread = threading.Thread(target=reader_loop,
@@ -143,15 +168,65 @@ def main():
                                           daemon=True)
                 threads.append(thread)
                 thread.start()
+            hub_failures = 0
+            service_failures = {name: 0 for name in service_processes}
+            service_starts = {name: [time.monotonic()] for name in service_processes}
+
+            def within_restart_budget(name):
+                return len([t for t in service_starts[name] if time.monotonic() - 120 < t]) < 5
+
+            def restart_service(name):
+                old, port = service_processes[name]
+                try:
+                    os.killpg(old.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                spec = components['services'][name]
+                command = [components['python'], '-B', str(ROOT / 'guardian.py'),
+                           str(os.getpid()), *spec['command']]
+                service_processes[name] = (subprocess.Popen(command, start_new_session=True), port)
+                service_starts[name] = ([t for t in service_starts[name]
+                                         if time.monotonic() - 120 < t] + [time.monotonic()])
+
             while not stopping.is_set():
+                # The Hub is core infrastructure: only its own process exit tears
+                # the controller down. Transient health-probe failures are
+                # tolerated (5 in a row) so a busy machine or a heavy managed
+                # service never kills page injection for every site.
                 if hub is not None:
                     if hub.poll() is not None:
                         raise RuntimeError('Hub exited; inspect components.log and use off/on')
                     try:
                         if hub_health(profile)['pid'] != hub_pid:
                             raise RuntimeError('Hub identity changed')
+                        hub_failures = 0
                     except OSError as error:
-                        raise RuntimeError('Hub unavailable or hung') from error
+                        hub_failures += 1
+                        if hub_failures >= 5:
+                            raise RuntimeError('Hub unavailable or hung') from error
+                # Managed services are isolated from the Hub and from each other:
+                # a service that exits or stays unhealthy is restarted on its own
+                # with a bounded budget, never tearing down the Hub or its peers.
+                for name in list(service_processes):
+                    process, port = service_processes[name]
+                    if process.poll() is not None:
+                        if within_restart_budget(name):
+                            services[name] = {'healthy': False, 'phase': 'restarting', 'port': port, 'error': 'exited'}
+                            restart_service(name)
+                        else:
+                            services[name] = {'healthy': False, 'phase': 'failed', 'port': port,
+                                              'error': 'restart budget exhausted; use off/on'}
+                        continue
+                    try:
+                        with socket.create_connection(('127.0.0.1', port), timeout=1.0):
+                            service_failures[name] = 0
+                            services[name] = {'healthy': True, 'phase': 'ready', 'port': port, 'error': None}
+                    except OSError as error:
+                        service_failures[name] += 1
+                        services[name] = {'healthy': False, 'phase': 'backoff', 'port': port, 'error': str(error)}
+                        if service_failures[name] >= 5 and within_restart_budget(name):
+                            service_failures[name] = 0
+                            restart_service(name)
                 report('ready', hub_pid)
                 stopping.wait(0.5)
         except Exception as error:
@@ -167,6 +242,15 @@ def main():
                 except ProcessLookupError:
                     pass
                 hub.wait(timeout=3)
+            for process, _ in service_processes.values():
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    pass
         return 0
 
 
