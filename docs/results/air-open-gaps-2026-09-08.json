@@ -1,0 +1,50 @@
+{
+  "scope": "Air #7/#15 open gaps after update/lifecycle slice",
+  "host": {
+    "hostname": "Air-Natala",
+    "architecture": "x86_64",
+    "macos": "14.8.5"
+  },
+  "install_ref": "b7c3cdd6d6a135f1e6aee440014b6f9c6e01fe1e",
+  "routing": "system",
+  "purge_blocked": {
+    "status": true,
+    "reason": "interactive sudo required to revoke System keychain CA and/or leftover sudoers drop-ins; TAP_PURGE uninstall refuses until grants clear",
+    "leftover_sudoers": [
+      "/etc/sudoers.d/tap-core"
+    ],
+    "recovery": [
+      "sudo -v",
+      "sudo rm -f /etc/sudoers.d/tap-core",
+      "TAP_PURGE=1 bash \"$HOME/.tap-core/checkout/instll/uninstall\""
+    ]
+  },
+  "https_trust": {
+    "doctor_ca_trust": "not_verified; HTTPS clients must trust this profile CA explicitly",
+    "status": "not_verified",
+    "meaning": "profile CA is not proven in System keychain; clients fail TLS unless given --cacert or -k",
+    "checked": {
+      "curl_proxy_https_without_cacert_without_k": {
+        "http_code": "000",
+        "ok": true,
+        "expect": "TLS fail"
+      },
+      "curl_proxy_https_with_cacert_without_k": {
+        "http_code": "200",
+        "ok": true,
+        "expect": "200"
+      }
+    },
+    "still_needed": "bash \"$HOME/.tap-core/checkout/instll/finish-setup\" (GUI/sudo) then bare curl without --cacert/-k"
+  },
+  "doctor": {
+    "healthy": true,
+    "service_loaded": true,
+    "system_proxy_verified": true,
+    "sudoers": {
+      "ready": true,
+      "fix": null
+    }
+  },
+  "ok_for_release": false
+}

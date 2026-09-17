@@ -1,0 +1,27 @@
+{
+  "scope": "Air HTTPS-without-k slice: curl via system proxy; System keychain trust still needs finish-setup (GUI/sudo)",
+  "host": {
+    "architecture": "x86_64",
+    "macos": "14.8.5"
+  },
+  "install_ref": "b7c3cdd6d6a135f1e6aee440014b6f9c6e01fe1e",
+  "routing": "system",
+  "doctor": {
+    "healthy": true,
+    "ca_trust": "not_verified; HTTPS clients must trust this profile CA explicitly",
+    "system_proxy_verified": true
+  },
+  "curl_via_proxy_https_example_com": {
+    "without_cacert_without_k": {
+      "http_code": "000",
+      "stderr_tail": "ed to verify the legitimacy of the server and therefore could not\nestablish a secure connection to it. To learn more about this situation and\nhow to fix it, please visit the web page mentioned above.\n",
+      "expect": "TLS fail"
+    },
+    "with_cacert_without_k": {
+      "http_code": "200",
+      "expect": "200"
+    }
+  },
+  "system_keychain_trust": "not_done; security add-trusted-cert needs user interaction / finish-setup",
+  "ok_partial": true
+}
