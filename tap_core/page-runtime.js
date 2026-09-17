@@ -17,6 +17,10 @@
   let closed = false, attempt = 0, paused = !websocketEnabled;
   let state = websocketEnabled ? 'connecting' : 'disabled';
   const error = code => Object.assign(new Error(code), {code, completion: 'unknown'});
+  // Visible confirmation in the page console that TAP attached and connected.
+  let loggedPlan;
+  const log = (message, ...rest) => { try { console.info('[tap] ' + message, ...rest); } catch {} };
+  const warn = (message, ...rest) => { try { console.warn('[tap] ' + message, ...rest); } catch {} };
   function send(value) {
     if (session && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({version, session, ...value}));
   }
@@ -149,6 +153,10 @@
       appliedPlan = plan.revision; appliedMode = plan.mode; appliedPacks = plan.packs.map(pack => Object.freeze({
         ...pack, features:Object.freeze((pack.features || []).map(feature => Object.freeze({...feature}))),
       })); planState = plan.access;
+      if (appliedPlan !== loggedPlan) {
+        loggedPlan = appliedPlan;
+        log('packs: ' + (appliedPacks.map(pack => pack.id).join(', ') || 'none'));
+      }
       schedulePlan();
     } catch { planState = 'unavailable'; schedulePlan(5000); }
     finally { checkingPlan = false; }
@@ -167,7 +175,7 @@
       let value;
       try { value = JSON.parse(event.data); } catch { current.close(); return; }
       if (value.version !== version || socket !== current) { current.close(); return; }
-      if (value.kind === 'Welcome' && value.page === page) { session = value.session; attempt = 0; state = 'ready'; updateIndicator(); checkPlan(); return; }
+      if (value.kind === 'Welcome' && value.page === page) { session = value.session; attempt = 0; state = 'ready'; updateIndicator(); log('connected · ' + appliedMode + ' · ' + location.origin); checkPlan(); return; }
       if (value.session !== session) return;
       if (value.kind === 'PlanChanged') { checkPlan(); return; }
       if (value.kind === 'Command' && typeof value.id === 'string' && typeof value.operation === 'string') {
@@ -184,8 +192,8 @@
       for (const task of pending.values()) { clearTimeout(task.timer); task.reject(error('disconnected')); }
       pending.clear();
       socket = null;
-      if (!closed && !paused && attempt < 8) { state = 'retrying'; updateIndicator(); timer = setTimeout(connect, Math.min(5000, 200 * 2 ** attempt++)); }
-      else { state = paused ? 'paused' : closed ? 'suspended' : 'unavailable'; updateIndicator(); }
+      if (!closed && !paused && attempt < 8) { if (attempt === 0) warn('disconnected · retrying'); state = 'retrying'; updateIndicator(); timer = setTimeout(connect, Math.min(5000, 200 * 2 ** attempt++)); }
+      else { state = paused ? 'paused' : closed ? 'suspended' : 'unavailable'; updateIndicator(); if (state === 'unavailable') warn('disconnected · giving up'); }
     };
   }
   function stop() {
@@ -327,6 +335,7 @@
   addEventListener('pagehide', () => { closed = true; clearTimeout(planTimer); indicatorObserver?.disconnect(); stop(); state = websocketEnabled ? (paused ? 'paused' : 'suspended') : 'disabled'; updateIndicator(); });
   addEventListener('pageshow', event => { if (event.persisted) { closed = false; attempt = 0; schedulePlan(0); if (!paused) connect(); } });
   renderIndicator();
+  log('page runtime ' + version + ' attached · ' + location.origin + (websocketEnabled ? '' : ' · bridge disabled'));
   schedulePlan(0);
   connect();
 })();

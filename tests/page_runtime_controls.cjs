@@ -1,5 +1,5 @@
 const vm=require('node:vm'),fs=require('node:fs'),assert=require('node:assert/strict');
-const sockets=[],events={},timers=new Map();let n=0,replaced=null,fetchOk=true;
+const sockets=[],events={},timers=new Map(),logs=[];let n=0,replaced=null,fetchOk=true;
 let currentPlan='a'.repeat(64),currentPacks=[{id:'fixture.page',version:'1.2.3',features:[{id:'archive',label:'Archive',value:'Local',folder:'data/readers/fixture.page'}]}];
 class WS {static OPEN=1;constructor(){this.readyState=0;this.messages=[];sockets.push(this);}send(s){this.sent=JSON.parse(s);this.messages.push(this.sent);}close(){this.readyState=3;this.onclose?.();}}
 const location={href:'https://fixture.test/path?q=1',origin:'https://fixture.test',protocol:'https:',replace:value=>{replaced=value;}};
@@ -25,7 +25,7 @@ function element(tagName){
  return node;
 }
 const document={currentScript:{dataset:{tapToken:'synthetic',tapPlan:currentPlan,tapWs:'true',tapMode:'development'},nonce:'fixture-nonce'},title:'Fixture page',querySelector:()=>null,querySelectorAll:selector=>selector==='main'?[fixtureNode]:[],createElement:element,body:{appendChild:node=>appended.push(node)},documentElement:{appendChild:script=>vm.runInContext(script.textContent,context)}};
-const scope={WebSocket:WS,URL,TextEncoder,crypto:{randomUUID:()=>String(++n)},fetch:async()=>({ok:fetchOk,json:async()=>({version:'tap.page-plan/v1',revision:currentPlan,scripts:[],packs:currentPacks,access:'current',mode:'development',application:'reload'})}),document,getComputedStyle:()=>({display:'block',visibility:'visible'}),location,addEventListener:(name,f)=>events[name]=f,setTimeout:(f,delay)=>{timers.set(++n,{f,delay});return n;},clearTimeout:id=>timers.delete(id)};
+const scope={WebSocket:WS,URL,TextEncoder,crypto:{randomUUID:()=>String(++n)},fetch:async()=>({ok:fetchOk,json:async()=>({version:'tap.page-plan/v1',revision:currentPlan,scripts:[],packs:currentPacks,access:'current',mode:'development',application:'reload'})}),document,getComputedStyle:()=>({display:'block',visibility:'visible'}),location,addEventListener:(name,f)=>events[name]=f,setTimeout:(f,delay)=>{timers.set(++n,{f,delay});return n;},clearTimeout:id=>timers.delete(id),console:{info:(...a)=>logs.push(['info',a.join(' ')]),warn:(...a)=>logs.push(['warn',a.join(' ')]),log:(...a)=>logs.push(['log',a.join(' ')]),error:(...a)=>logs.push(['error',a.join(' ')])}};
 scope.window=scope;scope.top=scope;context=vm.createContext(scope);vm.runInContext(fs.readFileSync(process.argv[2],'utf8'),context);
 const b=scope.TapBridge;
 function welcome(s){s.readyState=1;s.onopen();s.onmessage({data:JSON.stringify({version:'tap.bridge/v1',kind:'Welcome',page:s.sent.page,session:'fixture'})});}
@@ -37,6 +37,10 @@ async function runDelay(delay){const item=[...timers].find(([,v])=>v.delay===del
  await runDelay(0);assert.equal(b.status().mode,'development');assert.equal(b.status().packs[0].id,'fixture.page');assert.equal(b.status().packs[0].features[0].folder,'data/readers/fixture.page');
  assert.equal(sockets.length,1);b.connect();assert.equal(sockets.length,1);
  welcome(sockets[0]);await flush();assert(b.isReady());
+ // Console visibility (#): attach at load, connected on Welcome, packs on plan apply.
+ assert(logs.some(([l,m])=>l==='info'&&m.startsWith('[tap] page runtime')&&m.includes('attached')),'attach log missing: '+JSON.stringify(logs));
+ assert(logs.some(([l,m])=>l==='info'&&m.startsWith('[tap] connected')),'connected log missing: '+JSON.stringify(logs));
+ assert(logs.some(([l,m])=>l==='info'&&m.startsWith('[tap] packs:')),'packs log missing: '+JSON.stringify(logs));
  assert.equal(indicator.dataset.tapState,'ready');assert.equal(indicator.shadowRoot.nodes['.status strong'].textContent,'Development');
  indicator.shadowRoot.nodes['.lamp'].onclick();assert.equal(indicator.shadowRoot.nodes['#panel'].hidden,false);assert(indicator.shadowRoot.nodes['.packs ul'].innerHTML.includes('fixture.page'));
  sockets[0].onmessage({data:JSON.stringify({version:'tap.bridge/v1',kind:'Command',session:'fixture',id:'dev-inspect',operation:'tap.dev.inspect',args:{selector:'main',limit:20}})});
@@ -67,5 +71,5 @@ async function runDelay(delay){const item=[...timers].find(([,v])=>v.delay===del
  await flush();assert.equal(b.status().plan_state,'unavailable');assert.equal(replaced,null);
  fetchOk=true;await runDelay(5000);
  assert.equal(replaced,'https://fixture.test/path?q=1&tap-ui='+currentPlan.slice(0,12));
- console.log('PASS connection controls, development inspect/execute, Trusted Types script policy, pending unknown/no replay, stale sockets, BFCache pause, retry cancellation, plan refresh');
+ console.log('PASS connection controls, console attach/connected/packs logs, development inspect/execute, Trusted Types script policy, pending unknown/no replay, stale sockets, BFCache pause, retry cancellation, plan refresh');
 })().catch(e=>{console.error(e);process.exitCode=1;});
