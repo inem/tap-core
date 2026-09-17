@@ -77,12 +77,20 @@ def request(root: Path, method: str, path: str, body=None):
         with urlopen(call, timeout=9) as response:
             return json.loads(response.read())
     except HTTPError as error:
+        code = message = None
         try:
             payload = json.loads(error.read())
-            code = payload.get("error", {}).get("code")
+            problem = payload.get("error", {}) if isinstance(payload, dict) else {}
+            code = problem.get("code")
+            message = problem.get("message")
         except (ValueError, AttributeError):
-            code = None
-        raise TapError(f"Page command failed: {code or error.code}") from error
+            pass
+        detail = code or error.code
+        # Surface the page-side exception message (e.g. a Trusted Types refusal
+        # on tap.dev.execute) instead of only the generic error code.
+        if isinstance(message, str) and message:
+            detail = f"{detail}: {message}"
+        raise TapError(f"Page command failed: {detail}") from error
     except (URLError, OSError, ValueError) as error:
         raise TapError(f"Page controller is unavailable: {error}") from error
 

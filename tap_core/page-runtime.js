@@ -58,6 +58,25 @@
       clearTimeout(task.timer); devExecutions.delete(id);
     });
   }});
+  // Pages that enforce `require-trusted-types-for 'script'` reject assigning a
+  // plain string to script.textContent. Mint a TrustedScript through our own
+  // policy so the development channel works there too. If the page's CSP does
+  // not allow creating this policy (a `trusted-types` allowlist, or a locked
+  // default policy), createPolicy throws; fall back to the raw string and let
+  // the resulting page-side error surface with its message instead of a bare
+  // operation_failed. (This is the script-sink counterpart to packs building
+  // DOM via createElement to survive a default innerHTML-sanitizing policy.)
+  let devScriptPolicy, devScriptPolicyTried = false;
+  function developmentScript(source) {
+    const trusted = window.trustedTypes;
+    if (!trusted || typeof trusted.createPolicy !== 'function') return source;
+    if (!devScriptPolicyTried) {
+      devScriptPolicyTried = true;
+      try { devScriptPolicy = trusted.createPolicy('tap-dev-execute', {createScript: value => value}); }
+      catch { devScriptPolicy = null; }
+    }
+    return devScriptPolicy ? devScriptPolicy.createScript(source) : source;
+  }
   function executeDevelopmentSource(args) {
     if (!args || typeof args.source !== 'string' || !args.source
         || new TextEncoder().encode(args.source).length > 65536)
@@ -71,9 +90,11 @@
       devExecutions.set(id, {resolve, reject, timer});
       const script = document.createElement('script');
       if (bootstrap.nonce) script.nonce = bootstrap.nonce;
-      script.textContent = `window[${JSON.stringify(devCallback)}](${JSON.stringify(id)},(async()=>{\n${args.source}\n})())`;
-      try { (document.head || document.documentElement).appendChild(script); }
-      catch (cause) {
+      const source = `window[${JSON.stringify(devCallback)}](${JSON.stringify(id)},(async()=>{\n${args.source}\n})())`;
+      try {
+        script.textContent = developmentScript(source);
+        (document.head || document.documentElement).appendChild(script);
+      } catch (cause) {
         clearTimeout(timer); devExecutions.delete(id); reject(cause);
       } finally { script.remove(); }
     });
