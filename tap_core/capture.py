@@ -4,6 +4,7 @@ No readers, site declarations, global paths or consumer offset mutations.
 Loaded by mitmdump with explicit TAP_CORE_DATA and TAP_CORE_STATE directories.
 Optional TAP_CORE_CAPTURE JSON supplies profile storage limits (#8).
 """
+import base64
 import json
 import os
 from pathlib import Path
@@ -35,6 +36,28 @@ MAX_BYTES = DEFAULT_CAPTURE["segment_bytes"]
 KEEP_ROLLS = DEFAULT_CAPTURE["keep_rolls"]
 QUEUE_BYTES = DEFAULT_CAPTURE["queue_bytes"]
 _DECISION = "_tap_body_decision"
+_BINARY = "_tap_body_binary"
+
+# Response bodies whose media type we normally drop (e.g. protobuf/Connect) but
+# which carry small, useful payloads we want readable from the stream — currently
+# the Cursor usage/limits dashboard (#171). Retained as base64 with
+# body_encoding="base64". Override with TAP_CAPTURE_BINARY_PATHS (comma-separated
+# URL substrings); the match is a plain substring of the request URL.
+_DEFAULT_BINARY_PATHS = (
+    "cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage",
+    "cursor.sh/aiserver.v1.DashboardService/GetUsageLimitStatusAndActiveGrants",
+)
+
+
+def binary_retain_patterns():
+    raw = os.environ.get("TAP_CAPTURE_BINARY_PATHS")
+    if raw is None:
+        return _DEFAULT_BINARY_PATHS
+    return tuple(p for p in (s.strip() for s in raw.split(",")) if p)
+
+
+def wants_binary(url):
+    return any(pattern in url for pattern in binary_retain_patterns())
 
 
 def mitm_size(nbytes):
@@ -425,9 +448,14 @@ class Capture:
             return
         limits = self.limits or limits_from_env()
         keep, reason, force_stream, size = decide_body(response, limits["max_body_bytes"])
+        # Allowlisted binary bodies (#171): keep them bufferable (do not stream)
+        # so response() can retain the raw bytes as base64.
+        binary = (not keep and reason == "media_type" and 0 <= size <= limits["max_body_bytes"]
+                  and wants_binary(flow.request.url))
+        setattr(response, _BINARY, binary)
         setattr(response, _DECISION, {"keep": keep, "reason": reason,
                                       "force_stream": force_stream, "size": size})
-        if not keep and (force_stream or reason == "media_type"):
+        if not keep and (force_stream or reason == "media_type") and not binary:
             response.stream = True
 
     def response(self, flow):
@@ -449,10 +477,26 @@ class Capture:
             keep, reason, size = False, prior["reason"], prior["size"]
         elif prior and size <= 0 < prior["size"]:
             size = prior["size"]
+        binary = getattr(response, _BINARY, False)
         if streamed and reason == "retained":
             keep, reason = False, "streamed"
         body = None
-        if keep:
+        body_encoding = None
+        if binary and not streamed and reason == "media_type":
+            # Allowlisted binary body (#171): retain raw bytes as base64 rather
+            # than dropping on media type. get_content decodes content-encoding.
+            getter = getattr(response, "get_content", None)
+            raw = getter(strict=False) if getter else getattr(response, "raw_content", None)
+            if raw is None:
+                keep, reason = False, "unavailable"
+            elif len(raw) > limits["max_body_bytes"]:
+                keep, reason, size = False, "oversize", len(raw)
+            else:
+                # body_reason stays "retained" (validator contract); body_encoding
+                # carries that the text is base64-encoded raw bytes, not UTF-8.
+                body = base64.b64encode(raw).decode("ascii")
+                body_encoding, keep, reason, size = "base64", True, "retained", len(raw)
+        elif keep:
             body = response.get_text(strict=False)
             if body is None:
                 keep, reason = False, "unavailable"
@@ -469,16 +513,25 @@ class Capture:
                   "size": max(0, size), "body_kept": keep, "body_reason": reason, "streamed": streamed,
                   "req_body_kept": False, "req_body_reason": "response_not_retained",
                   "ua": flow.request.headers.get("user-agent", "")}
+        if body_encoding:
+            record["body_encoding"] = body_encoding
         if keep:
-            request_streamed = bool(flow.request.stream)
-            request_body = None if request_streamed else flow.request.get_text(strict=False)
-            request_kept = request_body is not None
-            request_reason = "streamed" if request_streamed else "retained" if request_kept else "unavailable"
-            if request_kept and len(request_body.encode("utf-8")) > limits["max_body_bytes"]:
-                request_kept, request_reason, request_body = False, "oversize_decoded", None
-            record.update(body=body, req_body_kept=request_kept, req_body_reason=request_reason)
-            if request_kept:
-                record["req_body"] = request_body
+            record["body"] = body
+            if body_encoding:
+                # Proto request body isn't decoded; a kept response forbids the
+                # "response_not_retained" default, so mark it unavailable.
+                record["req_body_reason"] = "unavailable"
+            else:
+                request_streamed = bool(flow.request.stream)
+                request_body = None if request_streamed else flow.request.get_text(strict=False)
+                request_kept = request_body is not None
+                request_reason = "streamed" if request_streamed else "retained" if request_kept else "unavailable"
+                if request_kept and len(request_body.encode("utf-8")) > limits["max_body_bytes"]:
+                    request_kept, request_reason, request_body = False, "oversize_decoded", None
+                record["req_body_kept"] = request_kept
+                record["req_body_reason"] = request_reason
+                if request_kept:
+                    record["req_body"] = request_body
         self.writer.submit(record)
 
     def done(self):

@@ -77,6 +77,11 @@ def validate_record(record, allow_legacy=True):
         raise RecordError("Request capture requires a retained response")
     if record["body_kept"] and record["req_body_reason"] == "response_not_retained":
         raise RecordError("Inconsistent request body reason")
+    if "body_encoding" in record:
+        if record["body_encoding"] not in ("base64",):
+            raise RecordError("Invalid body_encoding")
+        if not record["body_kept"]:
+            raise RecordError("body_encoding requires a retained body")
     return record
 
 
