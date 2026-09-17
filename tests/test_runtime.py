@@ -89,7 +89,7 @@ class RuntimeTests(unittest.TestCase):
 
     def assertActiveBypass(self):
         for service in self.os.services():
-            self.assertEqual(self.os.network[service]["bypass"], [])
+            self.assertEqual(self.os.network[service]["bypass"], list(self.profile.passthrough))
 
     def test_disable_does_not_reenable_a_previous_endpoint(self):
         adapter = MacOS()
@@ -262,6 +262,19 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(self.os.events.count("probe"), 1)
         self.assertRestored()
 
+    def test_repeat_on_adds_declared_passthrough_to_a_previously_cleared_bypass(self):
+        # A Core that cleared the active bypass entirely (e7e67ec) left pinning
+        # clients such as cloudd failing TLS through the proxy; repeating on
+        # reconciles to the declared list without a recovery round trip.
+        self.runtime.on()
+        for service in self.os.services():
+            self.os.network[service]["bypass"] = []
+        self.runtime.on()
+        self.assertActiveBypass()
+        self.assertEqual(self.os.events.count("probe"), 2)
+        self.runtime.off()
+        self.assertRestored()
+
     def test_repeat_on_tightens_legacy_saved_bypass_lists(self):
         self.runtime.on()
         before = self.profile.snapshot.read_bytes()
@@ -345,6 +358,9 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(argv[0], self.profile.backend)
         self.assertIn("confdir=" + str(self.profile.root / "certificates"), argv)
         self.assertIn("127.0.0.1", argv)
+        self.assertIn("--ignore-hosts", argv)
+        self.assertIn(r"^(.+\.)?icloud\.com:\d+$", argv)
+        self.assertNotIn("17.0.0.0/8", argv)  # CIDR ranges are bypass-only
         env = plist["EnvironmentVariables"]
         self.assertEqual(env["TAP_CORE_DATA"], str(self.profile.root / "data"))
         self.assertEqual(env["TAP_CORE_STATE"], str(self.profile.root / "state"))

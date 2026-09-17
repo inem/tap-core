@@ -51,6 +51,7 @@ class Profile:
     bridge: dict = None
     components: dict = None
     capture: dict = None
+    passthrough: list = None
 
     def __post_init__(self):
         self.root = self.root.expanduser().resolve()
@@ -80,6 +81,11 @@ class Profile:
                 self.capture = capture_limits(self.capture)
             except ValueError as error:
                 raise TapError(str(error)) from error
+        from .passthrough import configuration as passthrough_configuration
+        try:
+            self.passthrough = passthrough_configuration(self.passthrough)
+        except ValueError as error:
+            raise TapError(str(error)) from error
 
     @property
     def label(self):

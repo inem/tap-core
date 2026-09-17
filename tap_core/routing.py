@@ -20,7 +20,13 @@ class ExplicitProxyRouting:
         self.profile, self.os = profile, os_adapter
 
     def backend_args(self):
-        return ["--listen-host", "127.0.0.1", "-p", str(self.profile.port)]
+        from .passthrough import ignore_host_patterns
+        args = ["--listen-host", "127.0.0.1", "-p", str(self.profile.port)]
+        # Pinning clients are tunnelled untouched under both routings; the same
+        # declared list becomes the system proxy bypass in SystemProxyRouting.
+        for pattern in ignore_host_patterns(self.profile.passthrough):
+            args.extend(["--ignore-hosts", pattern])
+        return args
 
     def capabilities(self):
         # Describes implemented capabilities, not observed permissions/readiness.
@@ -78,7 +84,10 @@ class SystemProxyRouting(ExplicitProxyRouting):
                    for service in self.os.services() for secure in (False, True))
 
     def active_bypass(self):
-        return []
+        # Only the declared passthrough list is exempt while TAP is on. Saved
+        # domain bypasses stay recovery state and local development hosts stay
+        # capturable (see docs/proxy-routing.md).
+        return list(self.profile.passthrough)
 
     def legacy_active_bypass(self, state):
         return list(dict.fromkeys([*state["bypass"], *self.legacy_local_bypass]))
@@ -90,15 +99,19 @@ class SystemProxyRouting(ExplicitProxyRouting):
         return all(self.os.bypass(service) == expected for service in before)
 
     def bypasses_are_tightenable(self, before):
+        """True when every current entry is a saved/legacy bypass or a declared passthrough.
+
+        Anything else was set outside this profile and needs explicit recovery.
+        A list that only lacks declared entries (an older Core cleared it) is
+        reconciled to the declared list rather than refused.
+        """
         if set(self.os.services()) != set(before):
             return False
         expected = set(self.active_bypass())
         for service, state in before.items():
-            current = self.os.bypass(service)
+            current = set(self.os.bypass(service))
             legacy = set(self.legacy_active_bypass(state))
-            if set(current) - legacy:
-                return False
-            if not expected.issubset(set(current)):
+            if current - (legacy | expected):
                 return False
         return True
 
