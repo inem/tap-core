@@ -40,6 +40,15 @@ it is not a claim that the process is currently running. Per-command private log
 are under `logs/background/`; logs larger than 1 MiB are removed between runs,
 not limited while a command is writing.
 
+A pack whose integrity `verify()` fails — a drifted hash, or an OS error reading
+its installed code — is skipped, never crashing the scheduler; the rest keep
+running. Consecutive failures at one selected version are counted in background
+state, and after a bounded threshold the pack is **quarantined**: it is no longer
+verified, retried or logged each tick, so one broken pack cannot spam the host
+log forever. `status` lists quarantined packs and keeps each one's failure count
+and last error. Selecting a different version (reinstall/enable) or disabling the
+pack clears the record and lets it be retried.
+
 Validation: isolated installed commands exercise due time, version change,
 disable/uninstall, timeout and registration removal. A separate macOS check
 exercises actual launchd on a temporary bare profile.

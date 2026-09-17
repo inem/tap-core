@@ -22,27 +22,63 @@ def paths(root):
     return label, Path.home() / 'Library/LaunchAgents' / (label + '.plist')
 
 
-def tasks(root):
+VERIFY_QUARANTINE_THRESHOLD = 5
+
+
+def tasks(root, *, account=None):
+    """Schedulable (command, schedule) pairs for enabled, verifiable packs.
+
+    A pack whose integrity verify fails is skipped, never crashing the whole
+    scheduler (#137). When `account` is the caller's mutable background state,
+    consecutive failures are counted there; after VERIFY_QUARANTINE_THRESHOLD the
+    pack is quarantined so it is neither verified, retried nor log-spammed every
+    tick until its selected version changes or it is disabled (#139). A read-only
+    caller (`account is None`, e.g. reconcile) honours an existing quarantine and
+    otherwise skips a failing pack silently, without counting or logging.
+    """
     store = PackStore(root)
     registry = store.load()
     commands = discover(root).commands
+    failures = account.setdefault('verify_failures', {}) if account is not None \
+        else read_state(root).get('verify_failures', {})
     result = []
     for pack_id, record in sorted(registry['packs'].items()):
         if not record['enabled']:
+            failures.pop(pack_id, None)  # a disabled pack carries no quarantine
             continue
+        version = record['selected']
+        prior = failures.get(pack_id)
+        if prior and prior.get('quarantined') and prior.get('version') == version:
+            continue  # already quarantined at this version: no verify, no log
         try:
-            _, manifest = store.verify(registry, pack_id, record['selected'])
-        except PackError as exc:
-            # One pack failing integrity must not crash the whole scheduler.
-            # Skip it and keep scheduling the rest; the next tick retries. (#137)
-            print(stamped('background: skipping %s@%s: %s' % (
-                pack_id, record['selected'], exc)), file=sys.stderr, flush=True)
+            _, manifest = store.verify(registry, pack_id, version)
+        except (PackError, OSError) as exc:
+            # Integrity failure, or an OS error reading installed pack code, must
+            # not crash the scheduler (#137/#139).
+            if account is None:
+                continue
+            count = prior['count'] + 1 if prior and prior.get('version') == version else 1
+            quarantined = count >= VERIFY_QUARANTINE_THRESHOLD
+            failures[pack_id] = {'version': version, 'count': count, 'error': str(exc),
+                                 'at': time.time(), 'quarantined': quarantined}
+            if quarantined:
+                print(stamped('background: quarantined %s@%s after %d verify failures; '
+                              'reinstall or re-enable to clear: %s' % (pack_id, version, count, exc)),
+                      file=sys.stderr, flush=True)
+            else:
+                print(stamped('background: skipping %s@%s (verify failure %d/%d): %s' % (
+                    pack_id, version, count, VERIFY_QUARANTINE_THRESHOLD, exc)), file=sys.stderr, flush=True)
             continue
+        if account is not None:
+            failures.pop(pack_id, None)  # verified: clear any prior failure/quarantine
         for declaration in manifest['entrypoints'].get('command', {}).get('commands', []):
             schedule = declaration.get('schedule')
             command = commands.get(tuple(declaration['path']))
             if schedule and command and command.provider_id == pack_id:
                 result.append((command, schedule))
+    if account is not None:
+        for pack_id in [p for p in failures if p not in registry['packs']]:
+            del failures[pack_id]  # forget uninstalled packs
     return result
 
 
@@ -69,7 +105,7 @@ def run_once(root):
     # available while a network-bound periodic command is running.
     with profile_lock(root):
         state = read_state(root)
-        active = tasks(root)
+        active = tasks(root, account=state)
         keys = {task_key(command) for command, _ in active}
         state['jobs'] = {k: v for k, v in state['jobs'].items() if k in keys}
         due = []
@@ -179,7 +215,10 @@ def reconcile(root, adapter, remove=False):
 
 def status(root):
     label, plist = paths(root)
-    return {'registered': plist.exists(), 'label': label, **read_state(root)}
+    state = read_state(root)
+    quarantined = sorted(pid for pid, rec in state.get('verify_failures', {}).items()
+                         if rec.get('quarantined'))
+    return {'registered': plist.exists(), 'label': label, 'quarantined': quarantined, **state}
 
 
 if __name__ == '__main__':
