@@ -292,6 +292,25 @@ class BridgeTests(unittest.TestCase):
         self.assertIn('data-tap-plan="' + plan['revision'] + '"', f.response.body)
         self.assertIn('data-tap-ws="false"', f.response.body)
 
+    def test_injection_skipped_for_excluded_user_agent(self):
+        bridge = TestBridge(config(exclude_user_agents=['Claude-Desktop']), TOKEN,
+                            [b'window.fixture = true;'])
+        browser = flow(headers={'user-agent': 'Mozilla/5.0 (Macintosh) Safari/605'}, response=Response())
+        bridge.response(browser)
+        self.assertIn('id="tap-probe-bootstrap"', browser.response.body)
+        app = flow(headers={'user-agent': 'Claude-Desktop/2.110.0'}, response=Response())
+        bridge.response(app)
+        self.assertNotIn('tap-probe-bootstrap', app.response.body)
+        self.assertEqual(app.response.body, '<html><body>sample</body></html>')
+
+    def test_exclude_user_agents_is_optional_and_validated(self):
+        self.assertNotIn('exclude_user_agents', configuration(config()))
+        self.assertEqual(configuration(config(exclude_user_agents=['Claude-Desktop', 'claude-code']))
+                         ['exclude_user_agents'], ['Claude-Desktop', 'claude-code'])
+        for bad in ('notalist', [''], ['dup', 'dup'], [5], ['x'] * 65):
+            with self.assertRaises(ValueError):
+                configuration(config(exclude_user_agents=bad))
+
     def test_effective_script_plan_is_scoped_per_origin(self):
         effective = config(allow_origins=['https://example.test', 'https://third.test'],
                            exclude_origins=[], page_scripts=['/installed/one.js',
