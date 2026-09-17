@@ -131,6 +131,13 @@ class DocumentScripts:
                 return position + 1, values
             if body.startswith('/>', position):
                 return position + 2, values
+            if body.startswith('/', position):
+                # A solidus that is not part of '/>' is a stray self-closing
+                # slash, e.g. ASP.NET MVC's `<input ... value="x" / disabled>`.
+                # HTML5 treats it as a parse error and keeps reading attributes;
+                # rejecting the whole document here would silently skip injection.
+                position += 1
+                continue
             attribute = cls.ATTRIBUTE.match(body, position)
             if attribute is None:
                 raise HTMLScanError('Incomplete or unsupported tag')

@@ -384,6 +384,20 @@ class BridgeTests(unittest.TestCase):
                 self.assertIn('id="tap-probe-bootstrap" nonce="' + value + '"', f.response.body)
                 self.assertNotIn('nonce="wrong" data-tap-token', f.response.body)
 
+    def test_stray_solidus_in_a_tag_does_not_skip_injection(self):
+        # ASP.NET MVC renders `<input ... value="x" / disabled="disabled">` — a
+        # solidus that is not part of '/>'. HTML5 ignores it; the scanner must
+        # too, or the whole document silently loses injection. This is exactly
+        # the sessionize.com Call-for-Speakers form that showed no lamp.
+        f = flow(response=Response(
+            '<!doctype html><html><body>'
+            '<input aria-label="First" value="Ivan" / disabled="disabled">'
+            '</body></html>'))
+        self.bridge.response(f)
+        self.assertIn('id="tap-probe-bootstrap" data-tap-token', f.response.body)
+        # The site's original markup, stray solidus included, is preserved.
+        self.assertIn('value="Ivan" / disabled="disabled">', f.response.body)
+
     def test_addon_import_and_injection_without_html_parser(self):
         import builtins
         original = builtins.__import__
