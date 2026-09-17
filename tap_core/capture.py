@@ -39,25 +39,21 @@ _DECISION = "_tap_body_decision"
 _BINARY = "_tap_body_binary"
 
 # Response bodies whose media type we normally drop (e.g. protobuf/Connect) but
-# which carry small, useful payloads we want readable from the stream — currently
-# the Cursor usage/limits dashboard (#171). Retained as base64 with
-# body_encoding="base64". Override with TAP_CAPTURE_BINARY_PATHS (comma-separated
-# URL substrings); the match is a plain substring of the request URL.
-_DEFAULT_BINARY_PATHS = (
-    "cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage",
-    "cursor.sh/aiserver.v1.DashboardService/GetUsageLimitStatusAndActiveGrants",
-)
-
-
-def binary_retain_patterns():
+# which carry small, useful payloads someone wants readable from the stream
+# (#171). Retained as base64 with body_encoding="base64". The core ships no
+# vendor paths: the allowlist comes from profile capture.binary_paths (flows to
+# the proxy via TAP_CORE_CAPTURE) or, for debugging, TAP_CAPTURE_BINARY_PATHS
+# (comma-separated URL substrings, overrides the profile). The match is a plain
+# substring of the request URL.
+def binary_retain_patterns(limits):
     raw = os.environ.get("TAP_CAPTURE_BINARY_PATHS")
-    if raw is None:
-        return _DEFAULT_BINARY_PATHS
-    return tuple(p for p in (s.strip() for s in raw.split(",")) if p)
+    if raw is not None:
+        return tuple(p for p in (s.strip() for s in raw.split(",")) if p)
+    return tuple((limits or {}).get("binary_paths") or ())
 
 
-def wants_binary(url):
-    return any(pattern in url for pattern in binary_retain_patterns())
+def wants_binary(url, patterns):
+    return any(pattern in url for pattern in patterns)
 
 
 def mitm_size(nbytes):
@@ -72,20 +68,32 @@ def mitm_size(nbytes):
 
 
 def capture_limits(value=None):
-    """Validate profile capture limits; None → defaults."""
+    """Validate profile capture limits; None → defaults.
+
+    `binary_paths` is optional (default empty): URL substrings whose binary
+    (non-JSON/text) response bodies are retained as base64 (#171). Optional so
+    existing profiles keep validating unchanged.
+    """
     if value is None:
-        return dict(DEFAULT_CAPTURE)
+        return dict(DEFAULT_CAPTURE, binary_paths=())
     if type(value) is not dict or value.get("version") != 1:
         raise ValueError("capture limits require version 1 object")
     required = set(DEFAULT_CAPTURE)
-    if set(value) != required:
-        raise ValueError("capture limits keys must be exactly: " + ", ".join(sorted(required)))
+    if not required <= set(value) or not set(value) <= required | {"binary_paths"}:
+        raise ValueError("capture limits keys must be exactly: " + ", ".join(sorted(required))
+                         + " (optional: binary_paths)")
     for name in ("stream_large_bodies", "segment_bytes", "queue_slots", "queue_bytes", "max_body_bytes"):
         number = value[name]
         if type(number) is not int or number < 1:
             raise ValueError(f"capture.{name} must be a positive int")
     if type(value["keep_rolls"]) is not int or value["keep_rolls"] < 0:
         raise ValueError("capture.keep_rolls must be a nonnegative int")
+    binary_paths = value.get("binary_paths", [])
+    # Accept tuple too: capture_limits output must stay re-validatable
+    # (write_plist re-validates the already-validated profile capture).
+    if not isinstance(binary_paths, (list, tuple)) or len(binary_paths) > 64 \
+            or any(type(p) is not str or not p.strip() or len(p) > 512 for p in binary_paths):
+        raise ValueError("capture.binary_paths must be a list of up to 64 non-empty URL substrings")
     if value["stream_large_bodies"] > 64 * 1024 * 1024:
         raise ValueError("capture.stream_large_bodies exceeds supported maximum (64 MiB)")
     if value["segment_bytes"] > 512 * 1024 * 1024:
@@ -100,7 +108,7 @@ def capture_limits(value=None):
         raise ValueError("capture.max_body_bytes exceeds supported maximum (12 MiB)")
     if 2 * value["max_body_bytes"] + 1024 * 1024 > MAX_RECORD_BYTES:
         raise ValueError("capture.max_body_bytes cannot fit request+response under journal record limit")
-    return dict(value)
+    return dict(value, binary_paths=tuple(p.strip() for p in binary_paths))
 
 
 def limits_from_env():
@@ -451,7 +459,7 @@ class Capture:
         # Allowlisted binary bodies (#171): keep them bufferable (do not stream)
         # so response() can retain the raw bytes as base64.
         binary = (not keep and reason == "media_type" and 0 <= size <= limits["max_body_bytes"]
-                  and wants_binary(flow.request.url))
+                  and wants_binary(flow.request.url, binary_retain_patterns(limits)))
         setattr(response, _BINARY, binary)
         setattr(response, _DECISION, {"keep": keep, "reason": reason,
                                       "force_stream": force_stream, "size": size})
