@@ -26,8 +26,9 @@ separates its connection mechanism so native activation does not block it.
 - `SystemProxyRouting` preserves recovery snapshot format, foreign-proxy refusal,
   saved bypass restoration on `off`, partial rollback handling and the common
   per-user network lock. While TAP is on, saved domain bypasses are not reused as
-  active capture exclusions; the active system route clears bypasses so local
-  development pages can be captured and injected too.
+  active capture exclusions; the active system route keeps only the profile's
+  declared passthrough list (below) so local development pages can be captured
+  and injected too.
   `ExplicitProxyRouting` owns no system settings and takes no shared network lock.
   Both still take the existing per-profile command lock through CLI coordination.
 
@@ -35,6 +36,33 @@ Python internals moved: callers of `MacOS.arm/disarm/armed` use
 `select_routing(profile, os_adapter).enable/restore/verified`. Repository call
 sites/tests were migrated. This is not a stable installed-pack interface or an
 invitation for packs to replace host routing code. No new package dependencies.
+
+## Pinned clients (passthrough)
+
+Some clients pin their own certificate authority and will never accept the
+profile CA: Apple's system daemons (`cloudd`/`bird` for iCloud Drive, Contacts,
+Calendar, Find My, the App Store, Siri, CloudKit) abort the handshake as soon as
+the proxy answers and retry several times per second. Left routed through TAP
+they lose their service while TAP is on and fill `capture.log` with
+"Client TLS handshake failed" lines (#147). Nothing is captured from them either
+way, so the profile declares them as passthrough:
+
+```json
+"passthrough": ["*.icloud.com", "*.icloud-content.com", "*.apple.com", "*.push.apple.com",
+                "*.apple-cloudkit.com", "*.mzstatic.com", "*.cdn-apple.com", "17.0.0.0/8"]
+```
+
+That is the Core default when `profile.json` has no `passthrough` key. The list
+is applied in both places at once: `SystemProxyRouting` sets it as the active
+bypass domains on every service (and `on` reconciles an older cleared list to
+it), and both routings pass each host entry to mitmproxy as an `--ignore-hosts`
+pattern (`*.icloud.com` → `^(.+\.)?icloud\.com:\d+$`), so explicit clients
+are tunnelled untouched too. CIDR entries are bypass-only. Entries are host
+names, `*.suffix` patterns or CIDR ranges, at most 64; set `"passthrough": []`
+to capture everything. Changing the list requires `off` → `on` (the mitmproxy
+arguments live in the launchd job). Historical bypasses in the recovery
+snapshot are still not reused: a passthrough is a declared decision, not an
+inherited one.
 
 ## Diagnostics
 
