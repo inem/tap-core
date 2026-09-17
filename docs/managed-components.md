@@ -119,6 +119,16 @@ through its private endpoint as well as the proxy, capture and routing. `where`
 includes both launch agent paths and component/handler logs. An absent, stale,
 failed or hung Hub cannot become healthy just because injection is loaded.
 
+The controller's own lines in `components.log` and the background host's in
+`background-host.log` carry an ISO-8601 UTC prefix (millisecond precision), so
+the log answers *when* on its own: the controller stamps Hub readiness (with
+PID), each managed service becoming ready or failing to at startup, a service
+restart, a service's restart budget being exhausted, controller readiness, and
+any teardown error; the background host stamps each task's run outcome
+(`<pack>:<path> exit=<code> <phase>`) and any skipped-pack line. Raw stdout that
+child processes (the Bun Hub, managed services, reader subprocesses) write into
+the same file is theirs and is not reformatted.
+
 ## Ownership and execution
 
 The existing proxy job is unchanged in responsibility. One additional launchd job,

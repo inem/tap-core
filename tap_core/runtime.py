@@ -24,6 +24,18 @@ ADDON = Path(__file__).with_name("capture.py").resolve()
 NS = "/usr/sbin/networksetup"
 
 
+def stamped(message):
+    """Prefix a log line with an ISO-8601 UTC timestamp (millisecond precision).
+
+    The controller and background host inherit their launchd log fd, so their
+    own lines carry no time. This makes "when did the Hub restart / this task
+    run" answerable from the log alone (see docs/managed-components.md).
+    """
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    return f"{now.strftime('%Y-%m-%dT%H:%M:%S')}.{now.microsecond // 1000:03d}Z {message}"
+
+
 class TapError(Exception):
     pass
 

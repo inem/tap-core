@@ -1,6 +1,9 @@
+import contextlib
 import copy
+import io
 import json
 from pathlib import Path
+import re
 import shutil
 import tempfile
 import threading
@@ -9,7 +12,9 @@ from unittest.mock import patch, Mock
 from tap_core import background
 from tap_core.pack_store import PackStore, build_artifact
 from tap_core.packs import validate_manifest, PackError
-from tap_core.runtime import TapError, command_execution_lock, profile_lock
+from tap_core.runtime import TapError, command_execution_lock, profile_lock, stamped
+
+STAMP = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z ")
 
 class BackgroundTests(unittest.TestCase):
     def setUp(self):
@@ -147,3 +152,21 @@ class BackgroundTests(unittest.TestCase):
         self.assertEqual(background.tasks(self.profile), [])
         # ...and run_once completes instead of crash-looping.
         background.run_once(self.profile)
+
+    def test_stamped_prefixes_an_iso8601_utc_timestamp(self):
+        line = stamped("hub ready pid=42")
+        self.assertRegex(line, STAMP)
+        self.assertTrue(line.endswith(" hub ready pid=42"))
+
+    def test_run_logs_a_timestamped_outcome_line(self):
+        # #145: the background host's own lines carry a UTC timestamp so "when
+        # did this task run" is answerable from background-host.log alone.
+        self.install()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            background.run_once(self.profile)
+        outcome = [line for line in out.getvalue().splitlines()
+                   if "ran fixture.command:" in line]
+        self.assertEqual(len(outcome), 1, out.getvalue())
+        self.assertRegex(outcome[0], STAMP)
+        self.assertIn("exit=0 ok", outcome[0])

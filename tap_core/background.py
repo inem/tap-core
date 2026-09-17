@@ -10,7 +10,7 @@ import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from tap_core.runtime import TapError, atomic_json, command_execution_lock, profile_lock
+from tap_core.runtime import TapError, atomic_json, command_execution_lock, profile_lock, stamped
 from tap_core.pack_store import PackStore
 from tap_core.packs import PackError
 from tap_core.commands import discover, _run_pack
@@ -35,8 +35,8 @@ def tasks(root):
         except PackError as exc:
             # One pack failing integrity must not crash the whole scheduler.
             # Skip it and keep scheduling the rest; the next tick retries. (#137)
-            print('background: skipping %s@%s: %s' % (
-                pack_id, record['selected'], exc), file=sys.stderr)
+            print(stamped('background: skipping %s@%s: %s' % (
+                pack_id, record['selected'], exc)), file=sys.stderr, flush=True)
             continue
         for declaration in manifest['entrypoints'].get('command', {}).get('commands', []):
             schedule = declaration.get('schedule')
@@ -138,6 +138,8 @@ def run_once(root):
                 row['next_at'] = time.time() + schedule['interval_seconds']
                 state['jobs'][key] = row
                 atomic_json(root / 'state/background.json', state)
+            print(stamped('ran %s:%s exit=%s %s' % (
+                command.provider_id, '/'.join(command.path), code, row['phase'])), flush=True)
 
     with profile_lock(root):
         state = read_state(root)
@@ -187,5 +189,5 @@ if __name__ == '__main__':
         run_once(Path(sys.argv[1]))
     except TapError as exc:
         # Busy is expected: next tick retries discovery, never stale pack code.
-        print(str(exc), file=sys.stderr)
+        print(stamped(str(exc)), file=sys.stderr, flush=True)
         sys.exit(1)
