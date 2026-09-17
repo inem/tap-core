@@ -44,7 +44,7 @@ Each pack directory contains UTF-8 `pack.json`, with these required fields:
 | `entrypoints` | One or more roles from the table below. File-based roles use `{file, interface}`; `browser-scripts-v1` uses `{interface, uses}`. |
 | `config` | Named settings, each `{type, default}`. Only string, integer and boolean values; unknown overrides and wrong types fail. No expressions or configuration language. |
 | `access.origins` | Nonempty list of exact canonical HTTP(S) origins, including a nondefault port when relevant, or the single Core-owned all-sites sentinel `*`. No host wildcards such as `*.example.com`, credentials, path, query or fragment. ASCII DNS names and IPv4 supported here; IPv6/IDN syntax remains future work. `session.observe` remains limited to one exact HTTPS origin. |
-| `access.capabilities` | Explicit requests from `capture.read`, `response.mutate`, `page.inject`, `bridge.handle`; every declared role needs its capability. |
+| `access.capabilities` | Explicit requests from `capture.read`, `response.mutate`, `page.inject`, `bridge.handle`, `command.execute`, `background.run`, `session.observe`; every declared role needs its capability. |
 
 Host-provided Python, browser JavaScript and the already selected interception
 backend are interface prerequisites, not extra pack dependencies. The two

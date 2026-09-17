@@ -6,16 +6,16 @@ exercises which component, and what was actually verified live. It complements
 the product framing in [README.md](../README.md) and the per-slice documents in
 this directory; it does not replace either.
 
-Snapshot date of the "verified" columns: **2026-09-16**.
+Snapshot date of the "verified" columns: **2026-09-17**.
 
 ## Repositories
 
 | Repository | Role | State |
 |---|---|---|
 | [`tap-core`](https://github.com/inem/tap-core) | The runtime: capture, routing, readers, page bridge/Hub, pack lifecycle, commands, diagnostics. **This is the current TAP.** | public · CI green · release tracker [#1](https://github.com/inem/tap-core/issues/1) |
-| [`tap-runtime`](https://github.com/inem/tap-runtime) | Public runtime boundary and contracts (`contracts/`, `docs/`, `fixtures/`). | public · bootstrap only |
+| [`tap-runtime`](https://github.com/inem/tap-runtime) | Meant as the public runtime boundary + contracts, but holds one contract that conflicts with core and over-claims scope. | public · bootstrap only · [#155](https://github.com/inem/tap-core/issues/155) |
 | [`tap-pack-sdk`](https://github.com/inem/tap-pack-sdk) | Author tooling for packs: `sdk.py init/build/check`, generates `pack.json`, hashes, README, `.tap-pack` archive. | public · v0.1.0 |
-| `tap-pack-*` | One repository per pack, released as GitHub releases; installed with `tap pack add OWNER/REPO[@VERSION]`. See the pack table below. | mixed public/private |
+| `tap-pack-*` | One repository per pack, released as GitHub releases; installed with `tap pack add OWNER/REPO[@VERSION]`. See the pack table below. Three packs break the naming rule ([#156](https://github.com/inem/tap-core/issues/156)). | mixed public/private |
 | [`tapout-cli`](https://github.com/inem/tapout-cli) | `tapout`: index + search over the `~/tap-out` archive that readers produce (ChatGPT web, Codex Work, Claude Code, Kimi). The first tool to reach for when looking for an old conversation. | private |
 | [`tap-unfolded`](https://github.com/inem/tap-unfolded) | Private design world and fold receipts. | private |
 | [`tap`](https://github.com/inem/tap) | **Legacy** bash `tap` + mitmdump addon + Elixir/Python readers. Source material and behavioural evidence for the extraction (see [extraction-start.md](extraction-start.md)); superseded by Core for daily use. | private · WIP branch `youtube-intent-chain` |
@@ -97,38 +97,53 @@ after a listing therefore usually means "list again", not a Hub failure.
 `operation_unavailable` means the operation's pack is not injected on that
 origin (no grant), `operation_failed` means the page-side implementation threw.
 
-## Installed packs (verified 2026-09-16 on one system-routing profile)
+## Installed packs (verified 2026-09-17 on one system-routing profile)
 
 | Pack | Selected | Roles | Origins | Source / release | Live check |
 |---|---|---|---|---|---|
-| `tap.inspector` | 0.3.10 (0.3.11 installed, unreleased) | page + handler | chatgpt, linkedin, youtube, x | [tap-pack-inspector](https://github.com/inem/tap-pack-inspector) v0.3.10 | describe/query ok on all four origins |
-| `tap.intake` | 0.7.8 | page + handler | `*` | [inform](https://github.com/inem/inform) (private) — 0.7.8 on main, no release | injected on every connected page; no features declared |
+| `tap.inspector` | 0.3.11 | page + handler | `*` | [tap-pack-inspector](https://github.com/inem/tap-pack-inspector) v0.3.11 | describe/query ok on every injected page, incl. claude.ai & kimi.ai (origins widened to `*`) |
+| `tap.intake` | 0.7.8 | page + handler | `*` | [inform](https://github.com/inem/inform) (private) — 0.7.8 on main, no release; repo≠id ([#156](https://github.com/inem/tap-core/issues/156)) | injected on every connected page (except UAs in the bridge exclude list, [#153](https://github.com/inem/tap-core/pull/153)); no features declared |
 | `chatgpt.files` | 0.1.2 | page + handler | chatgpt | [tap-pack-chatgpt-files](https://github.com/inem/tap-pack-chatgpt-files) v0.1.2 | injected, 2 features |
 | `chatgpt.sessions` | 0.3.2 | reader | chatgpt | [tap-pack-chatgpt-sessions](https://github.com/inem/tap-pack-chatgpt-sessions) v0.3.2 | reader waiting · last batch ok |
 | `chatgpt.organizer` | 0.6.0 | command + background + session.observe | chatgpt | tap-pack-chatgpt-organizer (private) v0.6.0 | scheduled every 30 s |
-| `chatgpt.work` | 0.3.2 | command + background | chatgpt | tap-pack-chatgpt-work (private) **v0.3.1** — installed version ahead of release | scheduled every 30 s |
+| `chatgpt.work` | 0.3.2 | command + background | chatgpt | [tap-pack-chatgpt-work](https://github.com/inem/tap-pack-chatgpt-work) (private) v0.3.2 | scheduled every 30 s |
 | `linkedin.archive` | 0.1.1 | reader | linkedin | [tap-pack-linkedin-archive](https://github.com/inem/tap-pack-linkedin-archive) v0.1.1 | reader waiting · last batch ok |
 | `linkedin.copy-links` | 0.4.17 | page | linkedin | [tap-pack-linkedin-copy-links](https://github.com/inem/tap-pack-linkedin-copy-links) v0.4.17 | injected, 3 features |
 | `x.ui` | 0.7.9 | page | x | [tap-pack-x-ui](https://github.com/inem/tap-pack-x-ui) v0.7.9 | injected, 4 features |
-| `x.posts` | 0.2.2 (0.2.3 installed, unreleased) | reader + handler | x | [tap-pack-x-posts](https://github.com/inem/tap-pack-x-posts) v0.2.2 | reader waiting · injected, 2 features |
-| `x.subtitles` | 0.2.2 | reader + page + handler | x, video.twimg | [tap-pack-x-subtitles](https://github.com/inem/tap-pack-x-subtitles) (private) — source recovered 2026-09-17, no release yet | reader waiting · injected, 1 feature |
-| `x.chat-copy` | 0.1.0 | handler | x | [tap-pack-x-chat-copy](https://github.com/inem/tap-pack-x-chat-copy) (private) — source recovered 2026-09-17, no release yet | injected, 1 feature |
-| `youtube.subtitles` | 0.1.1 | reader | youtube | [tap-pack-youtube-copy-links](https://github.com/inem/tap-pack-youtube-copy-links) `packs/subtitles`, release tag `youtube.subtitles v0.1.1` | reader waiting · last batch ok |
+| `x.posts` | 0.2.2 (0.2.3 released, not activated) | reader + handler | x | [tap-pack-x-posts](https://github.com/inem/tap-pack-x-posts) v0.2.3 | reader waiting · injected, 2 features; running behind latest release ([#161](https://github.com/inem/tap-core/issues/161)) |
+| `x.subtitles` | 0.2.2 | reader + page + handler | x, video.twimg | [tap-pack-x-subtitles](https://github.com/inem/tap-pack-x-subtitles) (private) v0.2.2 | reader waiting · injected, 1 feature |
+| `x.chat-copy` | 0.1.0 (disabled) | handler | x | [tap-pack-x-chat-copy](https://github.com/inem/tap-pack-x-chat-copy) (private, **archived**) — deprecated, chat-copy folded into x.posts 0.2.3 | disabled on profile |
+| `youtube.subtitles` | 0.1.1 | reader | youtube | [tap-pack-youtube-copy-links](https://github.com/inem/tap-pack-youtube-copy-links) `packs/subtitles`, tag `youtube.subtitles v0.1.1`; repo≠id ([#156](https://github.com/inem/tap-core/issues/156)) | reader waiting · last batch ok |
 | `example.sdk-youtube-copy` | 0.1.0 | page | youtube | [tap-pack-sdk](https://github.com/inem/tap-pack-sdk) example | injected |
 | `google.ui` | 0.1.1 | page | google | [tap-pack-google-ui](https://github.com/inem/tap-pack-google-ui) v0.1.1 | not connected during the check |
 | `yandex.weather-ui` | 0.1.0 | page | yandex | [tap-pack-yandex-weather-ui](https://github.com/inem/tap-pack-yandex-weather-ui) v0.1.0 | not connected during the check |
-| `kimi.sessions` | 0.1.1 (0.1.4 installed) | command + background | kimi | [tap-pack-kimi-sessions](https://github.com/inem/tap-pack-kimi-sessions) (private) — 0.1.0–0.1.4 as commits, no release | injected shell only; command scheduled every 120 s |
+| `kimi.sessions` | 0.1.1 | command + background | kimi | [tap-pack-kimi-sessions](https://github.com/inem/tap-pack-kimi-sessions) (private) v0.1.1 | command scheduled every 120 s; orphan 0.1.2–0.1.4 dirs on disk ([#159](https://github.com/inem/tap-core/issues/159)) |
 
 Not installed on this profile but released: [tap-pack-chatgpt-search](https://github.com/inem/tap-pack-chatgpt-search)
 v0.1.3 (first command provider), [tap-pack-youtube-copy-links](https://github.com/inem/tap-pack-youtube-copy-links)
 v0.1.1 (reference external page pack), [tap-pack-linked-http](https://github.com/inem/tap-pack-linked-http)
 v0.1.0 (controlled HTTP → reader → handler → page example).
 
-## Known gaps found during the check
+## Known gaps and cross-component contradictions
 
-- Managed services shared fate with the Hub: any misbehaving pack service killed page injection everywhere. [#140](https://github.com/inem/tap-core/issues/140) → [PR #141](https://github.com/inem/tap-core/pull/141).
-- `tap dev execute` fails with a bare `operation_failed` on `www.youtube.com` (Trusted Types / CSP) while `dev inspect` and the inspector operations work. [#142](https://github.com/inem/tap-core/issues/142).
-- The hermetic test suite is not hermetic about the proxy port: one installer test refuses to run on a Mac that already runs a profile on 18999. [#143](https://github.com/inem/tap-core/issues/143).
-- Three installed packs had no repository (sources sat in per-task Codex/Kimi folders on iCloud); recovered into `tap-pack-x-subtitles`, `tap-pack-x-chat-copy` and `tap-pack-kimi-sessions` on 2026-09-17, still without releases. Two selected versions are ahead of their latest release. Tracked in [#144](https://github.com/inem/tap-core/issues/144).
-- System routing used to strip the pinned-client bypass, so iCloud/Apple daemons failed TLS through the proxy ~3×/s and iCloud Drive stopped syncing while TAP was on. [#147](https://github.com/inem/tap-core/issues/147) → the declared `passthrough` list ([proxy-routing.md](proxy-routing.md#pinned-clients-passthrough)).
-- `background-host.log` and `components.log` carry no timestamps, which makes "when did the Hub restart" a `ps -o lstart` question. [#145](https://github.com/inem/tap-core/issues/145).
+Resolved this cycle:
+
+- Managed services shared fate with the Hub. [#140](https://github.com/inem/tap-core/issues/140) → [PR #141](https://github.com/inem/tap-core/pull/141).
+- System routing stripped the pinned-client bypass, starving iCloud/Apple TLS. [#147](https://github.com/inem/tap-core/issues/147) → declared `passthrough` ([proxy-routing.md](proxy-routing.md#pinned-clients-passthrough)).
+- Installer test collided with a live profile's proxy port. [#143](https://github.com/inem/tap-core/issues/143) → [PR #154](https://github.com/inem/tap-core/pull/154).
+- Packs without a repository, and versions ahead of release, are recovered/released; the running code is backed. [#144](https://github.com/inem/tap-core/issues/144).
+- Page injection reached desktop apps rendering a site (e.g. the Claude Code app on claude.ai). Mitigated by the bridge `exclude_user_agents` gate. [PR #153](https://github.com/inem/tap-core/pull/153).
+
+Open:
+
+- `tap dev execute` returns a bare `operation_failed` on www.youtube.com (Trusted Types / CSP). [#142](https://github.com/inem/tap-core/issues/142).
+- `components.log` / `background-host.log` have no timestamps. [#145](https://github.com/inem/tap-core/issues/145).
+- tap-runtime's `tap.where-config/v1` contract conflicts with core's `tap where` output (`node_kind` vs `kind`, no `symlink`), and its scope.md over-claims ownership. [#155](https://github.com/inem/tap-core/issues/155).
+- Three pack ids don't match their repo (`tap.intake`→inform, `youtube.subtitles`→tap-pack-youtube-copy-links, `example.sdk-youtube-copy`→tap-pack-sdk). [#156](https://github.com/inem/tap-core/issues/156).
+- The manifest validator accepts `page/browser-module-v1` and the `mutator` role that the store/bridge can't install. [#157](https://github.com/inem/tap-core/issues/157).
+- `effective-runtime.json` carries a lossy `bridge` projection (drops `version`, `exclude_user_agents`). [#158](https://github.com/inem/tap-core/issues/158).
+- `kimi.sessions` orphan version dirs 0.1.2–0.1.4 not in the registry. [#159](https://github.com/inem/tap-core/issues/159).
+- A pack's `*` origin grant globally widens the bridge bootstrap surface for every `*` pack. [#160](https://github.com/inem/tap-core/issues/160).
+- `x.posts` runs 0.2.2 while 0.2.3 is the latest release. [#161](https://github.com/inem/tap-core/issues/161).
+
+Deliberate divergences (not bugs): legacy `tap` uses a shared reader byte-offset and ~7 GB segments; core uses per-reader cursors and 128 MiB segments ([pack-contract.md](pack-contract.md)). Core no longer reuses saved system-proxy domain bypasses as active exclusions.
