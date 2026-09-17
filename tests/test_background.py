@@ -136,15 +136,35 @@ class BackgroundTests(unittest.TestCase):
             self.assertFalse(plist.exists())
             self.assertTrue(any('bootout' in call.args[0] for call in adapter.run.call_args_list))
 
+    def install_other(self, version='0.1.0'):
+        # A second, independent scheduled pack (distinct id and command path)
+        # so a broken neighbour can be observed alongside a healthy one.
+        src = self.root / 'other-source'
+        if src.exists():
+            shutil.rmtree(src)
+        shutil.copytree(self.source, src)
+        manifest = json.loads((src / 'pack.json').read_text())
+        manifest['id'] = 'fixture.other'
+        manifest['version'] = version
+        manifest['entrypoints']['command']['commands'][0]['path'] = ['other', 'echo']
+        (src / 'pack.json').write_text(json.dumps(manifest))
+        artifact = self.root / ('other-' + version + '.tap-pack')
+        build_artifact(src, artifact)
+        self.store.install(artifact)
+        self.store.enable('fixture.other', version, origins=['https://fixture.example'],
+                          capabilities=['command.execute', 'background.run'])
+
+    def tamper(self, pack_id, version):
+        hashes = self.store.load()['packs'][pack_id]['versions'][version]['hashes']
+        name = next(n for n in hashes if n != 'pack.json')
+        victim = self.store.version_root(pack_id, version) / name
+        victim.write_bytes(victim.read_bytes() + b'\n# tampered\n')
+
     def test_pack_integrity_failure_is_isolated_not_crashing(self):
         # A single installed pack whose on-disk content drifted from its
         # registry hashes must not take down the whole scheduler. (#137)
         self.install()
-        registry = self.store.load()
-        hashes = registry['packs']['fixture.command']['versions']['0.1.0']['hashes']
-        victim_name = next(name for name in hashes if name != 'pack.json')
-        victim = self.store.version_root('fixture.command', '0.1.0') / victim_name
-        victim.write_bytes(victim.read_bytes() + b'\n# tampered\n')
+        self.tamper('fixture.command', '0.1.0')
         # verify() itself still reports the integrity failure...
         with self.assertRaises(PackError):
             self.store.verify(self.store.load(), 'fixture.command', '0.1.0')
@@ -170,3 +190,44 @@ class BackgroundTests(unittest.TestCase):
         self.assertEqual(len(outcome), 1, out.getvalue())
         self.assertRegex(outcome[0], STAMP)
         self.assertIn("exit=0 ok", outcome[0])
+    def test_verify_failure_quarantines_after_threshold_and_neighbor_runs(self):
+        # #139: a persistently broken pack is quarantined after N failures — it
+        # stops being retried and log-spammed — while a healthy neighbour keeps
+        # running the whole time.
+        self.install()             # healthy fixture.command
+        self.install_other()       # neighbour fixture.other
+        self.tamper('fixture.other', '0.1.0')
+        threshold = background.VERIFY_QUARANTINE_THRESHOLD
+        for _ in range(threshold):
+            background.run_once(self.profile)
+        # The healthy neighbour ran (once, then its 30s interval holds it).
+        self.assertEqual((self.profile / 'data/packs/fixture.command/runs').read_text().splitlines(),
+                         ['0.1.0'])
+        self.assertFalse((self.profile / 'data/packs/fixture.other/runs').exists())
+        # The broken pack is quarantined and surfaced in status.
+        record = background.read_state(self.profile)['verify_failures']['fixture.other']
+        self.assertTrue(record['quarantined'])
+        self.assertEqual(record['count'], threshold)
+        self.assertIn('fixture.other', background.status(self.profile)['quarantined'])
+        # Once quarantined it is no longer verified or logged each tick.
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            background.run_once(self.profile)
+        self.assertNotIn('fixture.other', err.getvalue())
+        self.assertEqual(background.read_state(self.profile)['verify_failures']['fixture.other']['count'],
+                         threshold)
+        # Disabling clears the quarantine so a later re-enable retries cleanly.
+        self.store.disable('fixture.other')
+        background.run_once(self.profile)
+        self.assertNotIn('fixture.other', background.read_state(self.profile).get('verify_failures', {}))
+
+    def test_verify_oserror_is_caught_not_crashing(self):
+        # #139: an OSError from verify() (a missing file or a permission error,
+        # not just a PackError) must be caught, not crash the scheduler.
+        self.install()
+        with patch.object(PackStore, 'verify', side_effect=OSError('installed code unreadable')):
+            self.assertEqual(background.tasks(self.profile), [])  # no exception
+            background.run_once(self.profile)                     # completes
+        record = background.read_state(self.profile)['verify_failures']['fixture.command']
+        self.assertEqual(record['count'], 1)
+        self.assertEqual(record['error'], 'installed code unreadable')
