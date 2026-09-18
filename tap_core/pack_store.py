@@ -60,15 +60,26 @@ def _declared_names(manifest):
     return ["pack.json", *manifest["files"]]
 
 
+def _is_bytecode(rel):
+    # Regenerable Python bytecode CPython writes into __pycache__ on import. It is
+    # never part of a pack's declared file set, so the integrity check ignores it
+    # regardless of which process wrote it — validation imports of a pack with
+    # local packages would otherwise self-inflict a file-set mismatch (#174).
+    return "__pycache__" in rel.parts or rel.suffix in (".pyc", ".pyo")
+
+
 def _tree_hashes(root, manifest):
     root = Path(root).resolve()
     expected = set(_declared_names(manifest))
     observed = set()
     for path in root.rglob("*"):
+        rel = path.relative_to(root)
+        if _is_bytecode(rel):
+            continue
         if path.is_symlink():
-            raise PackError(f"installed pack contains a symlink: {path.relative_to(root)}")
+            raise PackError(f"installed pack contains a symlink: {rel}")
         if path.is_file():
-            observed.add(path.relative_to(root).as_posix())
+            observed.add(rel.as_posix())
     require(observed == expected,
             f"installed pack file set changed: expected {sorted(expected)}, got {sorted(observed)}")
     return {name: _digest(root / name) for name in sorted(expected)}
