@@ -22,16 +22,18 @@ examples are `fixtures/capture/v1.jsonl`.
 | `method`, `url`, `status`, `ctype`, `ua` | Existing request method/URL, three-digit response status (`100…999`, including non-standard peer values), content type and observed User-Agent. User-Agent does not establish source application identity. |
 | `size` | Existing nonnegative size hint: Content-Length if usable, otherwise buffered raw length when available, otherwise zero; decoded-size omission reports decoded UTF-8 length. Not a measured streamed-body byte count. |
 | `streamed` | Whether the backend streamed this response, including backend size policy. |
-| `body_kept`, `body_reason` | Boolean plus `retained`, `media_type`, `streamed`, `unavailable`, `oversize`, `unbounded` or `oversize_decoded`. |
+| `body_kept`, `body_reason` | Boolean plus `retained`, `media_type`, `streamed`, `unavailable`, `oversize`, `unbounded`, `oversize_decoded` or `undecodable`. |
 | `body` | Text only when retained, including an empty string for a captured empty body. Omitted otherwise. Decoding uses the existing backend `get_text(strict=False)` behavior, not byte-exact storage. Bodies over `max_body_bytes` are omitted before or after decode (`oversize` / `oversize_decoded`). Missing Content-Length alone does not force omission; large unknown lengths rely on backend `stream_large_bodies`. Serialized records that would exceed the journal reader limit omit bodies before append. |
-| `req_body_kept`, `req_body_reason` | Boolean plus `retained`, `streamed`, `unavailable`, `response_not_retained` or `oversize_decoded`. Request bodies are considered only when the response body is retained, preserving the existing selective-capture policy. |
+| `req_body_kept`, `req_body_reason` | Boolean plus `retained`, `streamed`, `unavailable`, `response_not_retained`, `oversize_decoded` or `undecodable`. Request bodies are considered only when the response body is retained, preserving the existing selective-capture policy. |
 | `req_body` | Text only when retained; an omitted/streamed request is no longer represented by an empty-string placeholder. |
 
 The current media policy streams binary and SSE without reading their bodies.
 Those records use `media_type`. A body-eligible response that the backend streams
 uses `streamed`; this intentionally does not claim to know whether size policy or
 another addon caused it. A nonstreamed body unavailable from the backend uses
-`unavailable`. A retained empty body is distinct from an unavailable body.
+`unavailable`. A retained empty body is distinct from an unavailable body. A
+decoded body that is not valid UTF-8 (the backend surrogate-escaped undecodable
+bytes) is not stored as text and uses `undecodable` rather than raising (#182).
 
 No WS frame capture is introduced. An HTTP upgrade response is only an HTTP
 observation. Missing/failed exchanges without a response are not represented by
