@@ -534,5 +534,38 @@ class PackStoreTests(unittest.TestCase):
         self.assertEqual(json.loads(result.stdout), {"ok": True, "value": {"text": "linked:hi"}})
 
 
+class IntegrityBytecodeTests(unittest.TestCase):
+    """#174: regenerable __pycache__ must not trip the file-set integrity check."""
+
+    def _root(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        (root / "pack.json").write_text("{}\n")
+        (root / "handler.py").write_text("import core  # noqa\nx = 1\n")
+        (root / "core").mkdir()
+        (root / "core/__init__.py").write_text("")
+        return root
+
+    def test_integrity_ignores_python_bytecode(self):
+        from tap_core.pack_store import _tree_hashes
+        root = self._root()
+        # Bytecode as CPython writes it on import — top-level and in a subpackage.
+        (root / "__pycache__").mkdir()
+        (root / "__pycache__/handler.cpython-314.pyc").write_bytes(b"\x00\x01byte")
+        (root / "core/__pycache__").mkdir()
+        (root / "core/__pycache__/__init__.cpython-314.pyc").write_bytes(b"\x00\x01")
+        manifest = {"files": ["handler.py", "core/__init__.py"]}
+        hashes = _tree_hashes(root, manifest)  # must not raise "file set changed"
+        self.assertEqual(set(hashes), {"pack.json", "handler.py", "core/__init__.py"})
+
+    def test_integrity_still_catches_an_extra_source_file(self):
+        from tap_core.pack_store import _tree_hashes
+        root = self._root()
+        (root / "sneaky.py").write_text("evil = 1\n")  # real drift, not bytecode
+        manifest = {"files": ["handler.py", "core/__init__.py"]}
+        with self.assertRaisesRegex(PackError, "file set changed"):
+            _tree_hashes(root, manifest)
+
+
 if __name__ == "__main__":
     unittest.main()
