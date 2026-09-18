@@ -457,11 +457,18 @@ class Lifecycle:
             raise TapError(f"Capture startup failed: {error}; proxy settings were not changed") from error
         try:
             route.enable()
-            if not route.probe():
-                raise TapError("No successful HTTP response through the profile proxy")
         except (TapError, OSError) as error:
             self.recover(str(error))
-        return route.on_message()
+        # Routing is now armed and locally verified: our listener is up (start()
+        # waited for it) and the proxy settings point at it (enable() verified).
+        # Whether an external host answers *through* the proxy is a diagnostic,
+        # never a reason to tear down working routing — a bad or offline network
+        # must not change tap's state. A failed probe only downgrades the report.
+        try:
+            responded = route.probe()
+        except (TapError, OSError):
+            responded = False
+        return route.on_message() if responded else route.degraded_message()
 
     def off(self):
         route = self.routing
