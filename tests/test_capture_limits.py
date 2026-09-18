@@ -178,6 +178,49 @@ class CaptureLimitsTests(unittest.TestCase):
         self.assertEqual(records[0]["body"], '{"ok":true}')
         validate_record(records[0])
 
+    def test_undecodable_response_body_is_dropped_not_raised(self):
+        # mitmproxy surrogate-escapes non-UTF-8 bytes; response() must drop such a
+        # body as "undecodable" instead of raising and losing the whole flow (#182).
+        records = []
+        limits = {**DEFAULT_CAPTURE, "max_body_bytes": 1024}
+        capture = Capture(SimpleNamespace(submit=records.append, limits=limits), limits=limits)
+        response = SimpleNamespace(status_code=200,
+                                   headers={"content-type": "application/json"},
+                                   stream=False, raw_content=None,
+                                   get_text=lambda **kw: "abc\udc80def")  # lone surrogate
+        request = SimpleNamespace(method="GET", url="https://fixture.example/bin",
+                                  headers={}, stream=False, get_text=lambda **kw: "")
+        flow = SimpleNamespace(request=request, response=response)
+        capture.responseheaders(flow)
+        response.raw_content = b"\xff\xfe\x80\x81"
+        capture.response(flow)  # must not raise UnicodeEncodeError
+        self.assertFalse(records[0]["body_kept"])
+        self.assertEqual(records[0]["body_reason"], "undecodable")
+        self.assertNotIn("body", records[0])
+        self.assertEqual(records[0]["req_body_reason"], "response_not_retained")
+        validate_record(records[0])
+
+    def test_undecodable_request_body_is_dropped_but_response_is_kept(self):
+        records = []
+        limits = {**DEFAULT_CAPTURE, "max_body_bytes": 1024}
+        capture = Capture(SimpleNamespace(submit=records.append, limits=limits), limits=limits)
+        response = SimpleNamespace(status_code=200,
+                                   headers={"content-type": "application/json"},
+                                   stream=False, raw_content=None,
+                                   get_text=lambda **kw: '{"ok":true}')
+        request = SimpleNamespace(method="POST", url="https://fixture.example/post",
+                                  headers={}, stream=False, get_text=lambda **kw: "req\udcddbody")
+        flow = SimpleNamespace(request=request, response=response)
+        capture.responseheaders(flow)
+        response.raw_content = b'{"ok":true}'
+        capture.response(flow)  # must not raise
+        self.assertTrue(records[0]["body_kept"])
+        self.assertEqual(records[0]["body"], '{"ok":true}')
+        self.assertFalse(records[0]["req_body_kept"])
+        self.assertEqual(records[0]["req_body_reason"], "undecodable")
+        self.assertNotIn("req_body", records[0])
+        validate_record(records[0])
+
     def test_header_oversize_preserves_reason_and_size_after_forced_stream(self):
         records = []
         limits = {**DEFAULT_CAPTURE, "max_body_bytes": 128}

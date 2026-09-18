@@ -414,6 +414,20 @@ def encode_record(record):
     return (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8")
 
 
+def utf8_len(text):
+    """Byte length of `text` as UTF-8, or None when it is not valid UTF-8.
+
+    mitmproxy's get_text(strict=False) surrogate-escapes undecodable body bytes,
+    producing lone surrogates that a strict encode rejects. Such a body is not
+    text and must not be stored as UTF-8 JSON, so callers drop it as
+    "undecodable" rather than let the encode raise and lose the whole flow (#182).
+    """
+    try:
+        return len(text.encode("utf-8"))
+    except UnicodeEncodeError:
+        return None
+
+
 def fit_record(record):
     """Omit bodies until the serialized line fits the journal reader limit."""
     line = encode_record(record)
@@ -509,8 +523,10 @@ class Capture:
             if body is None:
                 keep, reason = False, "unavailable"
             else:
-                encoded = len(body.encode("utf-8"))
-                if encoded > limits["max_body_bytes"]:
+                encoded = utf8_len(body)
+                if encoded is None:
+                    keep, reason, body = False, "undecodable", None
+                elif encoded > limits["max_body_bytes"]:
                     keep, reason, body = False, "oversize_decoded", None
                     size = encoded
                 elif size <= 0:
@@ -534,8 +550,12 @@ class Capture:
                 request_body = None if request_streamed else flow.request.get_text(strict=False)
                 request_kept = request_body is not None
                 request_reason = "streamed" if request_streamed else "retained" if request_kept else "unavailable"
-                if request_kept and len(request_body.encode("utf-8")) > limits["max_body_bytes"]:
-                    request_kept, request_reason, request_body = False, "oversize_decoded", None
+                if request_kept:
+                    request_encoded = utf8_len(request_body)
+                    if request_encoded is None:
+                        request_kept, request_reason, request_body = False, "undecodable", None
+                    elif request_encoded > limits["max_body_bytes"]:
+                        request_kept, request_reason, request_body = False, "oversize_decoded", None
                 record["req_body_kept"] = request_kept
                 record["req_body_reason"] = request_reason
                 if request_kept:
