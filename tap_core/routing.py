@@ -56,6 +56,11 @@ class ExplicitProxyRouting:
     def on_message(self):
         return f"ON — explicit proxy 127.0.0.1:{self.profile.port}; system settings unchanged"
 
+    def degraded_message(self):
+        return (f"ON (degraded) — explicit proxy 127.0.0.1:{self.profile.port}; system settings unchanged; "
+                "listener is up but no HTTP response came back through it (external network?). "
+                "Routing left in place; nothing was rolled back.")
+
 
 class SystemProxyRouting(ExplicitProxyRouting):
     """Owns snapshot/restore of supported macOS HTTP(S) proxy settings."""
@@ -70,6 +75,11 @@ class SystemProxyRouting(ExplicitProxyRouting):
 
     def on_message(self):
         return "ON — HTTP and HTTPS proxy settings verified on all enabled services; traffic probe passed"
+
+    def degraded_message(self):
+        return ("ON (degraded) — HTTP and HTTPS proxy settings verified on all enabled services, "
+                "but the traffic probe got no HTTP response through the proxy (external network?). "
+                "Routing left in place; nothing was rolled back.")
 
     def matches(self, actual, expected):
         # Disabled endpoints are retained to avoid briefly enabling them while
