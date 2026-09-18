@@ -4,6 +4,7 @@ No readers, site declarations, global paths or consumer offset mutations.
 Loaded by mitmdump with explicit TAP_CORE_DATA and TAP_CORE_STATE directories.
 Optional TAP_CORE_CAPTURE JSON supplies profile storage limits (#8).
 """
+import base64
 import json
 import os
 from pathlib import Path
@@ -35,6 +36,24 @@ MAX_BYTES = DEFAULT_CAPTURE["segment_bytes"]
 KEEP_ROLLS = DEFAULT_CAPTURE["keep_rolls"]
 QUEUE_BYTES = DEFAULT_CAPTURE["queue_bytes"]
 _DECISION = "_tap_body_decision"
+_BINARY = "_tap_body_binary"
+
+# Response bodies whose media type we normally drop (e.g. protobuf/Connect) but
+# which carry small, useful payloads someone wants readable from the stream
+# (#171). Retained as base64 with body_encoding="base64". The core ships no
+# vendor paths: the allowlist comes from profile capture.binary_paths (flows to
+# the proxy via TAP_CORE_CAPTURE) or, for debugging, TAP_CAPTURE_BINARY_PATHS
+# (comma-separated URL substrings, overrides the profile). The match is a plain
+# substring of the request URL.
+def binary_retain_patterns(limits):
+    raw = os.environ.get("TAP_CAPTURE_BINARY_PATHS")
+    if raw is not None:
+        return tuple(p for p in (s.strip() for s in raw.split(",")) if p)
+    return tuple((limits or {}).get("binary_paths") or ())
+
+
+def wants_binary(url, patterns):
+    return any(pattern in url for pattern in patterns)
 
 
 def mitm_size(nbytes):
@@ -49,20 +68,32 @@ def mitm_size(nbytes):
 
 
 def capture_limits(value=None):
-    """Validate profile capture limits; None → defaults."""
+    """Validate profile capture limits; None → defaults.
+
+    `binary_paths` is optional (default empty): URL substrings whose binary
+    (non-JSON/text) response bodies are retained as base64 (#171). Optional so
+    existing profiles keep validating unchanged.
+    """
     if value is None:
-        return dict(DEFAULT_CAPTURE)
+        return dict(DEFAULT_CAPTURE, binary_paths=())
     if type(value) is not dict or value.get("version") != 1:
         raise ValueError("capture limits require version 1 object")
     required = set(DEFAULT_CAPTURE)
-    if set(value) != required:
-        raise ValueError("capture limits keys must be exactly: " + ", ".join(sorted(required)))
+    if not required <= set(value) or not set(value) <= required | {"binary_paths"}:
+        raise ValueError("capture limits keys must be exactly: " + ", ".join(sorted(required))
+                         + " (optional: binary_paths)")
     for name in ("stream_large_bodies", "segment_bytes", "queue_slots", "queue_bytes", "max_body_bytes"):
         number = value[name]
         if type(number) is not int or number < 1:
             raise ValueError(f"capture.{name} must be a positive int")
     if type(value["keep_rolls"]) is not int or value["keep_rolls"] < 0:
         raise ValueError("capture.keep_rolls must be a nonnegative int")
+    binary_paths = value.get("binary_paths", [])
+    # Accept tuple too: capture_limits output must stay re-validatable
+    # (write_plist re-validates the already-validated profile capture).
+    if not isinstance(binary_paths, (list, tuple)) or len(binary_paths) > 64 \
+            or any(type(p) is not str or not p.strip() or len(p) > 512 for p in binary_paths):
+        raise ValueError("capture.binary_paths must be a list of up to 64 non-empty URL substrings")
     if value["stream_large_bodies"] > 64 * 1024 * 1024:
         raise ValueError("capture.stream_large_bodies exceeds supported maximum (64 MiB)")
     if value["segment_bytes"] > 512 * 1024 * 1024:
@@ -77,7 +108,7 @@ def capture_limits(value=None):
         raise ValueError("capture.max_body_bytes exceeds supported maximum (12 MiB)")
     if 2 * value["max_body_bytes"] + 1024 * 1024 > MAX_RECORD_BYTES:
         raise ValueError("capture.max_body_bytes cannot fit request+response under journal record limit")
-    return dict(value)
+    return dict(value, binary_paths=tuple(p.strip() for p in binary_paths))
 
 
 def limits_from_env():
@@ -425,9 +456,14 @@ class Capture:
             return
         limits = self.limits or limits_from_env()
         keep, reason, force_stream, size = decide_body(response, limits["max_body_bytes"])
+        # Allowlisted binary bodies (#171): keep them bufferable (do not stream)
+        # so response() can retain the raw bytes as base64.
+        binary = (not keep and reason == "media_type" and 0 <= size <= limits["max_body_bytes"]
+                  and wants_binary(flow.request.url, binary_retain_patterns(limits)))
+        setattr(response, _BINARY, binary)
         setattr(response, _DECISION, {"keep": keep, "reason": reason,
                                       "force_stream": force_stream, "size": size})
-        if not keep and (force_stream or reason == "media_type"):
+        if not keep and (force_stream or reason == "media_type") and not binary:
             response.stream = True
 
     def response(self, flow):
@@ -449,10 +485,26 @@ class Capture:
             keep, reason, size = False, prior["reason"], prior["size"]
         elif prior and size <= 0 < prior["size"]:
             size = prior["size"]
+        binary = getattr(response, _BINARY, False)
         if streamed and reason == "retained":
             keep, reason = False, "streamed"
         body = None
-        if keep:
+        body_encoding = None
+        if binary and not streamed and reason == "media_type":
+            # Allowlisted binary body (#171): retain raw bytes as base64 rather
+            # than dropping on media type. get_content decodes content-encoding.
+            getter = getattr(response, "get_content", None)
+            raw = getter(strict=False) if getter else getattr(response, "raw_content", None)
+            if raw is None:
+                keep, reason = False, "unavailable"
+            elif len(raw) > limits["max_body_bytes"]:
+                keep, reason, size = False, "oversize", len(raw)
+            else:
+                # body_reason stays "retained" (validator contract); body_encoding
+                # carries that the text is base64-encoded raw bytes, not UTF-8.
+                body = base64.b64encode(raw).decode("ascii")
+                body_encoding, keep, reason, size = "base64", True, "retained", len(raw)
+        elif keep:
             body = response.get_text(strict=False)
             if body is None:
                 keep, reason = False, "unavailable"
@@ -469,16 +521,25 @@ class Capture:
                   "size": max(0, size), "body_kept": keep, "body_reason": reason, "streamed": streamed,
                   "req_body_kept": False, "req_body_reason": "response_not_retained",
                   "ua": flow.request.headers.get("user-agent", "")}
+        if body_encoding:
+            record["body_encoding"] = body_encoding
         if keep:
-            request_streamed = bool(flow.request.stream)
-            request_body = None if request_streamed else flow.request.get_text(strict=False)
-            request_kept = request_body is not None
-            request_reason = "streamed" if request_streamed else "retained" if request_kept else "unavailable"
-            if request_kept and len(request_body.encode("utf-8")) > limits["max_body_bytes"]:
-                request_kept, request_reason, request_body = False, "oversize_decoded", None
-            record.update(body=body, req_body_kept=request_kept, req_body_reason=request_reason)
-            if request_kept:
-                record["req_body"] = request_body
+            record["body"] = body
+            if body_encoding:
+                # Proto request body isn't decoded; a kept response forbids the
+                # "response_not_retained" default, so mark it unavailable.
+                record["req_body_reason"] = "unavailable"
+            else:
+                request_streamed = bool(flow.request.stream)
+                request_body = None if request_streamed else flow.request.get_text(strict=False)
+                request_kept = request_body is not None
+                request_reason = "streamed" if request_streamed else "retained" if request_kept else "unavailable"
+                if request_kept and len(request_body.encode("utf-8")) > limits["max_body_bytes"]:
+                    request_kept, request_reason, request_body = False, "oversize_decoded", None
+                record["req_body_kept"] = request_kept
+                record["req_body_reason"] = request_reason
+                if request_kept:
+                    record["req_body"] = request_body
         self.writer.submit(record)
 
     def done(self):

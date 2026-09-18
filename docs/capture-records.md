@@ -133,6 +133,11 @@ Writer limits, archive naming and error counters are profile-configurable via
 cutoff, default 4 MiB), `segment_bytes`, `keep_rolls`, `queue_slots`,
 `queue_bytes` and `max_body_bytes` (retained/decoded text budget). The existing
 backend/queue/disk defaults are preserved; the new retained-text limit is 12 MiB.
+Optional: `binary_paths` — up to 64 URL substrings whose binary (non-JSON/text)
+response bodies are retained as base64 (`body_encoding: "base64"`, #171). The core
+ships no vendor defaults; a profile or pack supplies the paths, e.g. via
+`capture.binary_paths` in `profile.json`, or `TAP_CAPTURE_BINARY_PATHS` as a
+debugging override.
 Bodies are omitted before decode for a known oversized length (`oversize`), or
 after decoding when retained UTF-8 text exceeds the limit (`oversize_decoded`).
 This does not bound decompression work. Unknown Content-Length alone is allowed;
