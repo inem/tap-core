@@ -61,6 +61,7 @@ It does not install a global command or modify an existing `tap` symlink.
 | Failed arm/rollback can claim safety | Arm failure attempts recovery; failed recovery retains the snapshot and reports failure without stopping capture. |
 | Broad process-pattern termination | Removed; only the exact profile job is booted out. An occupied foreign port is an error. |
 | `off` allows the recorder to respawn | The extracted command explicitly removes its autoload plist, boots out its own job and waits for its PID to exit, so this profile stays stopped until on. |
+| `off` cuts live keep-alive clients into a closed port (#176) | After the stop, the port is held for a bounded, loopback-only `CONNECT` drain so straggling clients tunnel direct instead of erroring; in-process (never collides with a later `on`), `TAP_OFF_DRAIN_SECONDS` tunes it (`0` disables). |
 | Capture rotation resets a shared reader offset | Removed. No reader runs in this slice; capture does not own consumer progress. |
 
 CLI coordination is implemented in Python using the working choice in
@@ -124,6 +125,22 @@ that networking was restored and cleanup remains pending.
 Recovery failure leaves the snapshot and service available;
 after correcting the OS/permission problem, run `off` again. It refuses to
 overwrite an unrelated proxy enabled after its snapshot was created.
+
+Graceful off (#176): restoring the saved routing points *new* connections
+direct, but a long-lived client (the desktop app running this session, any
+process that cached the system proxy or is holding keep-alive sockets to the
+listener port) would otherwise hit a closed port the instant the backend stops.
+So after the job is stopped `off` keeps the port answering for a bounded window
+as a plain loopback CONNECT tunnel to the origin — no interception, no capture —
+so those clients migrate to the now-direct route instead of erroring. The window
+is in-process and bounded, so it can never outlive `off` and collide with a later
+`on` (which refuses to start on an occupied port). It is `CONNECT`-only (every
+client we care about is HTTPS; a non-CONNECT request gets a clean 501), binds
+loopback only, and is best-effort: failing to bind never fails `off`. The window
+defaults to 10s; `TAP_OFF_DRAIN_SECONDS` overrides it, and `0` restores the
+previous instant-stop behavior. This does not stop capturing any client while
+TAP is on — it only smooths the stop transition (contrast with `passthrough`,
+which exempts a host from capture entirely).
 
 Setting a proxy endpoint can also enable it. To avoid briefly sending traffic
 through an old server during recovery, this adapter disables the proxy directly

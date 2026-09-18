@@ -25,6 +25,8 @@ class NetworkFixture(MacOS):
         self.events = []
         self.fail_arm = self.fail_restore = self.fail_start = self.fail_probe = False
         self.start_calls = 0
+        self.drained = False  # off() drain is a real socket op; stubbed off by default
+        self.drain_seconds = None
 
     def services(self):
         return list(self.network)
@@ -64,6 +66,10 @@ class NetworkFixture(MacOS):
 
     def stop(self, profile):
         self.events.append("stop")
+
+    def drain(self, profile, seconds):
+        self.drain_seconds = seconds  # record for wiring assertions; no real socket
+        return self.drained
 
     def flows(self, profile):
         self.events.append("probe")
@@ -108,6 +114,34 @@ class RuntimeTests(unittest.TestCase):
         self.assertRestored()
         self.assertEqual(self.os.events[-1], "stop")
         self.assertFalse(self.profile.snapshot.exists())
+
+    def test_off_drains_live_clients_after_stopping_the_backend(self):
+        # #176: once routing is restored and the backend is stopped, off holds the
+        # port as a tunnel for a grace window so keep-alive clients migrate to the
+        # now-direct route instead of hitting a closed port.
+        self.os.drained = True
+        self.runtime.on()
+        message = self.runtime.off()
+        self.assertRestored()
+        self.assertEqual(self.os.events[-1], "stop")  # drain runs after the stop
+        self.assertEqual(self.os.drain_seconds, 10)   # default window passed through
+        self.assertIn("drained", message)
+
+    def test_off_reports_plainly_when_nothing_was_drained(self):
+        self.os.drained = False  # window disabled or port could not be bound
+        self.runtime.on()
+        message = self.runtime.off()
+        self.assertNotIn("drained", message)
+        self.assertIn("previous proxy routing restored", message)
+
+    def test_off_drain_window_is_env_configurable(self):
+        from tap_core.runtime import off_drain_seconds
+        with patch.dict("os.environ", {"TAP_OFF_DRAIN_SECONDS": "0"}):
+            self.assertEqual(off_drain_seconds(), 0)
+        with patch.dict("os.environ", {"TAP_OFF_DRAIN_SECONDS": "25"}):
+            self.assertEqual(off_drain_seconds(), 25)
+        with patch.dict("os.environ", {"TAP_OFF_DRAIN_SECONDS": "nonsense"}):
+            self.assertEqual(off_drain_seconds(), 10)  # bad value falls back, never fails off
 
     def test_partial_arm_failure_rolls_back_inactive_service_too(self):
         self.os.fail_arm = True

@@ -22,6 +22,23 @@ from urllib.parse import urlsplit
 BACKEND_VERSION = "12.2.3"
 ADDON = Path(__file__).with_name("capture.py").resolve()
 NS = "/usr/sbin/networksetup"
+OFF_DRAIN_SECONDS = 10
+
+
+def off_drain_seconds():
+    """Grace window (seconds) for the post-off CONNECT drain (#176); 0 disables.
+
+    Overridable via TAP_OFF_DRAIN_SECONDS so an operator can restore the old
+    instant-stop behavior (0) or widen the window; a bad value falls back to the
+    default rather than failing `off`.
+    """
+    raw = os.environ.get("TAP_OFF_DRAIN_SECONDS")
+    if raw is None:
+        return OFF_DRAIN_SECONDS
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return OFF_DRAIN_SECONDS
 
 
 def stamped(message):
@@ -345,6 +362,15 @@ class MacOS:
         if errors:
             raise TapError("Profile cleanup FAILED: " + "; ".join(errors))
 
+    def drain(self, profile, seconds):
+        """Hold the listener port as a CONNECT tunnel for a grace window (#176).
+
+        Best-effort: called after the backend is stopped so straggling keep-alive
+        clients tunnel direct instead of hitting a closed port. Never fatal.
+        """
+        from .drain import run
+        return run("127.0.0.1", profile.port, seconds)
+
     def flows(self, profile):
         for _ in range(3):
             result = self.run(["/usr/bin/curl", "--silent", "--show-error", "--fail", "--noproxy", "",
@@ -476,4 +502,13 @@ class Lifecycle:
         from .components import stop
         stop(self.profile, self.os)
         self.os.stop(self.profile)
-        return route.off_message
+        # Routing is already restored (new connections go direct); keep the port
+        # answering as a plain CONNECT tunnel for a bounded window so clients that
+        # still hold keep-alive sockets / cached proxy config migrate without
+        # errors instead of hitting a closed port (#176). Bounded and in-process,
+        # so it cannot outlive off and block a later on (occupied-port refusal).
+        seconds = off_drain_seconds()
+        message = route.off_message
+        if self.os.drain(self.profile, seconds):
+            message += f"; drained live proxy clients on 127.0.0.1:{self.profile.port} for {seconds}s"
+        return message
