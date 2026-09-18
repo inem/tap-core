@@ -130,11 +130,17 @@ class RuntimeTests(unittest.TestCase):
             self.runtime.off()
         self.assertNotIn("stop", self.os.events)
 
-    def test_probe_failure_restores_network(self):
+    def test_probe_failure_keeps_routing_and_reports_degraded(self):
+        # A bad/offline external network must not roll back working routing (#177):
+        # the probe is a diagnostic, not the gate. Listener up (start) + proxy
+        # verified (enable) = on; a failed probe only downgrades the report.
         self.os.fail_probe = True
-        with self.assertRaisesRegex(TapError, "previous proxy routing restored"):
-            self.runtime.on()
-        self.assertRestored()
+        message = self.runtime.on()
+        self.assertIn("degraded", message)
+        self.assertTrue(select_routing(self.profile, self.os).verified())
+        self.assertActiveBypass()
+        self.assertTrue(self.profile.snapshot.exists())
+        self.assertEqual(self.os.events[-1], "probe")
 
     def test_start_failure_does_not_arm(self):
         self.os.fail_start = True
