@@ -100,6 +100,11 @@
         "knowledge": "unknown",
         "reason": "not_observed",
         "message": "observation was not supplied"
+      },
+      "control_liveness": {
+        "knowledge": "unknown",
+        "reason": "not_observed",
+        "message": "observation was not supplied"
       }
     },
     "components": {

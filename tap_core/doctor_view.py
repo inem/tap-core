@@ -62,9 +62,17 @@ def _bad_reasons(result):
     bridge = result.get("bridge") if isinstance(result.get("bridge"), dict) else {}
     if bridge.get("healthy") is not True:
         reasons.append(("bridge", "startup snapshot is not healthy"))
+    if bridge.get("hub_liveness") == "failed":
+        detail = bridge.get("liveness_error") or "health endpoint did not respond"
+        reasons.append(("bridge", f"Hub liveness probe failed: {detail}; inspect components.log and use off/on"))
+    elif bridge.get("control_liveness") == "failed":
+        detail = bridge.get("liveness_error") or "control endpoint did not respond"
+        reasons.append(("bridge", f"control-router probe failed: {detail}; inspect components.log and use off/on"))
     components = result.get("components") if isinstance(result.get("components"), dict) else {}
     if components.get("healthy") is not True:
-        reasons.append(("control", "managed component control plane is not healthy"))
+        detail = components.get("error")
+        message = "managed component control plane is not healthy"
+        reasons.append(("control", message + (f": {detail}" if detail else "")))
     if result.get("traffic_probe") is not True:
         reasons.append(("traffic", "proxy request probe did not pass"))
     if isinstance(result.get("inspection_errors"), dict):
@@ -88,7 +96,8 @@ def _limitations(result):
     if isinstance(trust, str) and trust.startswith("not_verified;"):
         items.append(("CA trust", trust.replace("not_verified;", "not verified —", 1)))
     bridge = result.get("bridge") if isinstance(result.get("bridge"), dict) else {}
-    if bridge.get("hub_liveness") == "not_checked":
+    if (bridge.get("hub_liveness") == "not_checked"
+            or bridge.get("control_liveness") == "not_checked"):
         items.append(("bridge", "Hub/control liveness was not checked"))
     background = result.get("background") if isinstance(result.get("background"), dict) else {}
     quarantined = background.get("quarantined")

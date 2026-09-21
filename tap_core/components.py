@@ -142,11 +142,32 @@ def identity(profile):
                         'bridge': runtime_bridge(effective_bridge, profile)})
 
 
-def hub_health(profile):
-    request = Request('http://127.0.0.1:%s/health' % profile.bridge['hub_port'],
+def _hub_json(profile, path):
+    request = Request('http://127.0.0.1:%s%s' % (profile.bridge['hub_port'], path),
                       headers={'Authorization': 'Bearer ' + secret(profile)})
-    with build_opener(ProxyHandler({})).open(request, timeout=1) as response:
-        return json.loads(response.read(16384))
+    try:
+        with build_opener(ProxyHandler({})).open(request, timeout=1) as response:
+            return json.loads(response.read(16384))
+    except ValueError as error:
+        raise TapError('Malformed Hub JSON response') from error
+
+
+def hub_health(profile):
+    value = _hub_json(profile, '/health')
+    if (type(value) is not dict or value.get('version') != 'tap.bridge/v1'
+            or type(value.get('pid')) is not int or value['pid'] < 1
+            or type(value.get('sessions')) is not int or value['sessions'] < 0
+            or type(value.get('active_handlers')) is not int or value['active_handlers'] < 0):
+        raise TapError('Malformed Hub health response')
+    return value
+
+
+def control_health(profile):
+    value = _hub_json(profile, '/v1/pages')
+    if (type(value) is not dict or value.get('version') != 'tap.bridge/v1'
+            or type(value.get('pages')) is not list):
+        raise TapError('Malformed Hub control response')
+    return value
 
 
 def status(profile, adapter):
@@ -184,7 +205,7 @@ def status(profile, adapter):
         else:
             try:
                 live = hub_health(profile).get('pid') == hub_pid
-            except OSError:
+            except (OSError, TapError):
                 pass
     ready = bool(current and fresh and live)
     readers = state.get('readers', {})

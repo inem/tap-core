@@ -74,7 +74,7 @@
         ["observation","components","error","known",null],
         ["collection-observation","component_readers","known","$count"]
       ],
-      "emit": [["candidate","components","state","ready",100,"page_control_plane_healthy",[["reader_count","$count"],["hub_pid","$hub"]]]]
+      "emit": [["candidate","components","state","ready",100,"controller_and_hub_live",[["reader_count","$count"],["hub_pid","$hub"]]]]
     },
     {
       "id": "components-50-degraded",
@@ -191,7 +191,7 @@
         ["appearance","components","absent","○ ","absent","muted","not configured"],
         ["appearance","components","inactive","○ ","inactive","muted","no controller observation"],
         ["appearance","components","starting","○ ","starting","warning","controller starting"],
-        ["appearance","components","ready","● ","ready","positive","page command router healthy"],
+        ["appearance","components","ready","● ","ready","positive","controller + Hub live"],
         ["appearance","components","degraded","✗ ","degraded","negative","page command router unhealthy"],
         ["appearance","components","stale","⚠ ","stale","warning","state is not current"],
         ["appearance","components","failed","✗ ","failed","negative","controller reported failure"],

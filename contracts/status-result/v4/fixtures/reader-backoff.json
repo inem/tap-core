@@ -121,6 +121,11 @@
         "knowledge": "unknown",
         "reason": "not_observed",
         "message": "observation was not supplied"
+      },
+      "control_liveness": {
+        "knowledge": "unknown",
+        "reason": "not_observed",
+        "message": "observation was not supplied"
       }
     },
     "components": {
@@ -227,7 +232,7 @@
     }
   },
   "terminal": {
-    "width_80": "tap           ● up · PID 123\nbrowser/apps  ○ direct   (tap on)\ncapture       ● ready · writer healthy\nbridge        ○ absent · not configured\ncontrol       ● ready · page command router healthy\n  alpha  ● waiting · last batch succeeded\n  beta  ⚠ backoff · retry pending",
+    "width_80": "tap           ● up · PID 123\nbrowser/apps  ○ direct   (tap on)\ncapture       ● ready · writer healthy\nbridge        ○ absent · not configured\ncontrol       ● ready · controller + Hub live\n  alpha  ● waiting · last batch succeeded\n  beta  ⚠ backoff · retry pending",
     "width_24": "tap           ● up\nbrowser/apps  ○ direct\ncapture       ● ready\nbridge        ○ absent\ncontrol       ● ready\n  alpha  ● waiting\n  beta  ⚠ backoff"
   }
 }

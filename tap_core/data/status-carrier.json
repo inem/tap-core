@@ -157,6 +157,16 @@
           ],
           "error": "bridge"
         }
+      },
+      {
+        "name": "control_liveness",
+        "source": {
+          "path": [
+            "bridge",
+            "control_liveness"
+          ],
+          "error": "bridge"
+        }
       }
     ],
     "components": [
