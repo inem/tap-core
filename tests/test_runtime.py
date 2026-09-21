@@ -31,6 +31,9 @@ class NetworkFixture(MacOS):
     def services(self):
         return list(self.network)
 
+    def active_service(self):
+        return "Wi-Fi"
+
     def proxy(self, name, secure=False):
         return dict(self.network[name]["https" if secure else "http"])
 
@@ -102,6 +105,28 @@ class RuntimeTests(unittest.TestCase):
         with patch.object(adapter, "run") as run:
             adapter.set_proxy("Wi-Fi", False, {"enabled": False, "server": "previous.test", "port": 8000})
         run.assert_called_once_with(["/usr/bin/sudo", "-n", "/usr/sbin/networksetup", "-setwebproxystate", "Wi-Fi", "off"])
+
+    def test_active_service_maps_default_interface_through_service_order(self):
+        adapter = MacOS()
+        route = SimpleNamespace(stdout="   route to: default\ninterface: en8\n")
+        order = SimpleNamespace(stdout=(
+            "An asterisk (*) denotes that a network service is disabled.\n"
+            "(1) USB 10/100/1000 LAN\n"
+            "(Hardware Port: USB 10/100/1000 LAN, Device: en8)\n"
+            "(2) Wi-Fi\n"
+            "(Hardware Port: Wi-Fi, Device: en0)\n"))
+        with patch.object(adapter, "run", side_effect=[route, order]):
+            self.assertEqual(adapter.active_service(), "USB 10/100/1000 LAN")
+
+    def test_proxy_diagnostics_distinguish_active_rescue_from_full_policy(self):
+        expected = {"enabled": True, "server": "127.0.0.1", "port": self.profile.port}
+        self.os.network["Wi-Fi"]["http"] = dict(expected)
+        self.os.network["Wi-Fi"]["https"] = dict(expected)
+        report = select_routing(self.profile, self.os).proxy_diagnostics()
+        self.assertTrue(report["active_service_verified"])
+        self.assertFalse(report["all_services_verified"])
+        self.assertEqual([item["service"] for item in report["mismatched_services"]],
+                         ["USB Ethernet"])
 
     def test_system_on_off_restores_all_services_and_bypass_before_stop(self):
         self.runtime.on()

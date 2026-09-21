@@ -87,6 +87,15 @@ for a known observation, null on inspection failure, and `not_used` for explicit
 An unavailable inspection still makes doctor unhealthy. A configured adapter is
 not proof of traffic, storage health or a ready Hub.
 
+`system` is release-grade only when HTTP and HTTPS point to the profile on every
+enabled network service. Diagnostics also resolve the service behind the current
+default route and report `active_system_proxy_verified`, the active service name,
+and exact per-service mismatches. When only that active service is armed, traffic
+may work, but status reports `active only`: this is a rescue condition, not a
+weaker ownership policy. Without the recovery snapshot, Core will not claim that
+`off` can safely restore settings. Disable that manually configured route before
+`tap on`; with a snapshot, run `tap off` and then `tap on` to re-arm all services.
+
 Neither proxy variant promises process attribution or selection. Unknown app
 identity is not inferred from User-Agent. `local` remains an unsupported profile
 choice; native routing will need its own integration and acceptance in #6/#7.

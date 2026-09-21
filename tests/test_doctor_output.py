@@ -23,6 +23,9 @@ def report(**changes):
         "healthy": True,
     }
     value.update(changes)
+    if "active_system_proxy_verified" not in changes:
+        value["active_system_proxy_verified"] = (
+            "not_used" if value["routing"] == "explicit" else value["system_proxy_verified"])
     return value
 
 
@@ -100,6 +103,21 @@ class DoctorOutputTests(unittest.TestCase):
         self.assertIn("routing: system proxy inspection is unknown", output)
         self.assertIn("Inspection errors", output)
         self.assertIn("port_open: Operation not permitted", output)
+
+    def test_active_service_rescue_names_mismatches_and_repair_policy(self):
+        disabled = {"enabled": False, "server": "", "port": 0}
+        value = report(
+            healthy=False, system_proxy_verified=False,
+            active_system_proxy_verified=True,
+            active_network_service="USB 10/100/1000 LAN",
+            system_proxy_mismatches=[
+                {"service": "Wi-Fi", "http": disabled, "https": disabled},
+            ])
+        code, output, error = self.invoke(value)
+        self.assertEqual((code, error), (1, ""))
+        self.assertIn("active service USB 10/100/1000 LAN works", output)
+        self.assertIn("Wi-Fi (HTTP off, HTTPS off)", output)
+        self.assertIn("rescue route is not owned", output)
 
     def test_color_auto_is_tty_only(self):
         value = report()

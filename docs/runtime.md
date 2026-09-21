@@ -57,6 +57,7 @@ It does not install a global command or modify an existing `tap` symlink.
 | Disarm before stopping capture | Preserved for system routing; failed recovery prevents stop. |
 | Port liveness and service identity matter | Both verified, including listener PID matching this exact launchd job. |
 | Operate across network services and preserve recovery state | Both HTTP and HTTPS verified on every enabled service, including inactive adapters. Existing bypass entries are saved for recovery and restored on off; the active TAP route keeps only the profile's declared passthrough list (pinning clients such as iCloud), so historical exceptions and local development hosts do not silently disable capture/injection. |
+| Active service works while inactive services are unarmed | Reported as an explicit rescue/partial state with exact mismatches. It is not release-grade `system` routing and does not relax recovery ownership. |
 | `install` can swallow startup/plist errors | Errors return nonzero. Failed startup restores routing before removing its job and plist; cleanup failures remain explicit. |
 | Failed arm/rollback can claim safety | Arm failure attempts recovery; failed recovery retains the snapshot and reports failure without stopping capture. |
 | Broad process-pattern termination | Removed; only the exact profile job is booted out. An occupied foreign port is an error. |

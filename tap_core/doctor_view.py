@@ -15,6 +15,33 @@ def _line(label, state, detail, color):
     return f"{label:<14} {symbol} {_safe(detail)}"
 
 
+def _proxy_endpoint(state):
+    if not isinstance(state, dict):
+        return "unknown"
+    if state.get("enabled") is not True:
+        return "off"
+    return f"{state.get('server', '?')}:{state.get('port', '?')}"
+
+
+def _proxy_reason(result):
+    mismatches = result.get("system_proxy_mismatches")
+    if not isinstance(mismatches, list) or not mismatches:
+        return "system proxy is not verified"
+    details = []
+    for item in mismatches:
+        if not isinstance(item, dict):
+            continue
+        details.append(f"{item.get('service', '?')} "
+                       f"(HTTP {_proxy_endpoint(item.get('http'))}, "
+                       f"HTTPS {_proxy_endpoint(item.get('https'))})")
+    active = result.get("active_network_service")
+    if result.get("active_system_proxy_verified") is True:
+        prefix = f"active service {active or '?'} works, but full system policy is not satisfied"
+    else:
+        prefix = "full system proxy policy is not satisfied"
+    return prefix + ("; mismatched services: " + ", ".join(details) if details else "")
+
+
 def _bad_reasons(result):
     reasons = []
     if "backend_error" in result:
@@ -27,7 +54,7 @@ def _bad_reasons(result):
         reasons.append(("runtime", "listener is not open"))
     proxy = result.get("system_proxy_verified")
     if proxy not in (True, "not_used"):
-        reasons.append(("routing", "system proxy is not verified" if proxy is False
+        reasons.append(("routing", _proxy_reason(result) if proxy is False
                         else "system proxy inspection is unknown"))
     capture = result.get("capture") if isinstance(result.get("capture"), dict) else {}
     if capture.get("healthy") is not True:
@@ -48,6 +75,15 @@ def _bad_reasons(result):
 
 def _limitations(result):
     items = []
+    if (result.get("system_proxy_verified") is False
+            and result.get("active_system_proxy_verified") is True):
+        active = result.get("active_network_service") or "the active service"
+        if result.get("network_recovery_pending") is True:
+            repair = "run tap off to restore owned routing, then tap on to re-arm every enabled service"
+        else:
+            repair = (f"rescue route is not owned; disable the manual proxy on {active}, "
+                      "then run tap on to adopt every enabled service")
+        items.append(("routing policy", repair))
     trust = result.get("ca_trust")
     if isinstance(trust, str) and trust.startswith("not_verified;"):
         items.append(("CA trust", trust.replace("not_verified;", "not verified —", 1)))

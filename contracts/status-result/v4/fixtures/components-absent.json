@@ -21,7 +21,8 @@
     "components": {
       "configured": false,
       "healthy": true
-    }
+    },
+    "active_system_proxy_verified": "not_used"
   },
   "semantic_result": {
     "schema": "tap.status-result/v4",
@@ -54,6 +55,10 @@
         "value": false
       },
       "system_proxy_verified": {
+        "knowledge": "known",
+        "value": "not_used"
+      },
+      "active_system_proxy_verified": {
         "knowledge": "known",
         "value": "not_used"
       }

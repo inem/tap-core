@@ -35,6 +35,9 @@ def snapshot(**changes):
         "components": {"configured": False, "healthy": True},
     }
     value.update(changes)
+    if "active_system_proxy_verified" not in changes:
+        value["active_system_proxy_verified"] = (
+            "not_used" if value["routing"] == "explicit" else value["system_proxy_verified"])
     return value
 
 
@@ -77,7 +80,8 @@ class StatusContractTests(unittest.TestCase):
     def test_routing_state_matrix(self):
         cases = [
             ({"routing": "explicit", "network_recovery_pending": False,
-              "system_proxy_verified": "not_used"}, ("client-opt-in", "system_proxy_not_managed")),
+              "system_proxy_verified": "not_used", "active_system_proxy_verified": "not_used"},
+             ("client-opt-in", "system_proxy_not_managed")),
             ({"routing": "explicit", "network_recovery_pending": True,
               "system_proxy_verified": "not_used"}, ("recovery-required", "unexpected_recovery_snapshot")),
             ({"network_recovery_pending": True, "system_proxy_verified": True},
@@ -88,13 +92,17 @@ class StatusContractTests(unittest.TestCase):
              ("recovery-required", "owned_system_proxy_drifted")),
             ({"network_recovery_pending": False, "system_proxy_verified": True},
              ("unowned-route", "recovery_snapshot_missing")),
+            ({"network_recovery_pending": False, "system_proxy_verified": False,
+              "active_system_proxy_verified": True},
+             ("active-service-only", "active_service_rescue_unowned")),
             ({"routing": "explicit", "network_recovery_pending": False,
               "system_proxy_verified": False}, ("unknown", "inconsistent_routing_observations")),
         ]
         for changes, expected in cases:
             with self.subTest(changes=changes):
                 self.assertEqual(states(snapshot(**changes))["routing"], expected)
-        for field in ("routing", "network_recovery_pending", "system_proxy_verified"):
+        for field in ("routing", "network_recovery_pending", "system_proxy_verified",
+                      "active_system_proxy_verified"):
             with self.subTest(unknown=field):
                 self.assertEqual(states(snapshot(**{field: None, "inspection_errors": {field: "denied"}}))["routing"],
                                  ("unknown", "inspection_incomplete"))
