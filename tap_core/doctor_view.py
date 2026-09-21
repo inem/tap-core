@@ -15,6 +15,60 @@ def _line(label, state, detail, color):
     return f"{label:<14} {symbol} {_safe(detail)}"
 
 
+def _bad_reasons(result):
+    reasons = []
+    if "backend_error" in result:
+        reasons.append(("backend", result["backend_error"]))
+    if result.get("port_owned") is not True:
+        reasons.append(("runtime", "profile does not own the listener"))
+    if result.get("port_open") is None:
+        reasons.append(("runtime", "listener inspection is unknown"))
+    elif result.get("port_open") is not True:
+        reasons.append(("runtime", "listener is not open"))
+    proxy = result.get("system_proxy_verified")
+    if proxy not in (True, "not_used"):
+        reasons.append(("routing", "system proxy is not verified" if proxy is False
+                        else "system proxy inspection is unknown"))
+    capture = result.get("capture") if isinstance(result.get("capture"), dict) else {}
+    if capture.get("healthy") is not True:
+        reasons.append(("capture", "writer health is not verified"))
+    bridge = result.get("bridge") if isinstance(result.get("bridge"), dict) else {}
+    if bridge.get("healthy") is not True:
+        reasons.append(("bridge", "startup snapshot is not healthy"))
+    components = result.get("components") if isinstance(result.get("components"), dict) else {}
+    if components.get("healthy") is not True:
+        reasons.append(("control", "managed component control plane is not healthy"))
+    if result.get("traffic_probe") is not True:
+        reasons.append(("traffic", "proxy request probe did not pass"))
+    if isinstance(result.get("inspection_errors"), dict):
+        for name, message in sorted(result["inspection_errors"].items()):
+            reasons.append((name, message))
+    return reasons
+
+
+def _limitations(result):
+    items = []
+    trust = result.get("ca_trust")
+    if isinstance(trust, str) and trust.startswith("not_verified;"):
+        items.append(("CA trust", trust.replace("not_verified;", "not verified —", 1)))
+    bridge = result.get("bridge") if isinstance(result.get("bridge"), dict) else {}
+    if bridge.get("hub_liveness") == "not_checked":
+        items.append(("bridge", "Hub/control liveness was not checked"))
+    background = result.get("background") if isinstance(result.get("background"), dict) else {}
+    quarantined = background.get("quarantined")
+    if isinstance(quarantined, list) and quarantined:
+        items.append(("background", "quarantined packs: " + ", ".join(map(str, quarantined))))
+    failures = background.get("verify_failures")
+    if isinstance(failures, dict) and failures:
+        visible = []
+        for name, record in sorted(failures.items()):
+            if isinstance(record, dict) and record.get("quarantined"):
+                visible.append(f"{name}@{record.get('version', '?')}")
+        if visible:
+            items.append(("pack integrity", "quarantined after verify failures: " + ", ".join(visible)))
+    return items
+
+
 def terminal_doctor(result, *, color=False):
     """Render diagnosis and actionable setup lines without changing doctor's result."""
     healthy = result.get("healthy") is True
@@ -53,6 +107,24 @@ def terminal_doctor(result, *, color=False):
                        "bad" if probe is False else "unknown",
                        "probe passed" if probe is True else
                        "probe failed" if probe is False else "not checked", color))
+
+    limitations = _limitations(result)
+    if limitations:
+        lines.append("Limitations")
+        for name, message in limitations:
+            lines.append(f"  {_safe(name)}: {_safe(message)}")
+
+    if not healthy:
+        reasons = _bad_reasons(result)
+        if reasons:
+            lines.append("Reasons")
+            seen = set()
+            for name, message in reasons:
+                key = (_safe(name), _safe(message))
+                if key in seen:
+                    continue
+                seen.add(key)
+                lines.append(f"  {key[0]}: {key[1]}")
 
     errors = result.get("inspection_errors")
     if isinstance(errors, dict) and errors:
