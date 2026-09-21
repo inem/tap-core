@@ -74,6 +74,15 @@
           ],
           "error": "system_proxy_verified"
         }
+      },
+      {
+        "name": "active_system_proxy_verified",
+        "source": {
+          "path": [
+            "active_system_proxy_verified"
+          ],
+          "error": "active_system_proxy_verified"
+        }
       }
     ],
     "capture": [

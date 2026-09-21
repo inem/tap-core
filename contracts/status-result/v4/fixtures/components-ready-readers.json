@@ -45,7 +45,8 @@
           "error": null
         }
       }
-    }
+    },
+    "active_system_proxy_verified": false
   },
   "semantic_result": {
     "schema": "tap.status-result/v4",
@@ -78,6 +79,10 @@
         "value": false
       },
       "system_proxy_verified": {
+        "knowledge": "known",
+        "value": false
+      },
+      "active_system_proxy_verified": {
         "knowledge": "known",
         "value": false
       }

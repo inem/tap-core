@@ -188,13 +188,24 @@ def status(profile, adapter):
         except (TapError, OSError, ValueError) as error:
             errors[name] = str(error)
             return unavailable
+    proxy = observe("system_proxy_verified", route.proxy_diagnostics)
+    if proxy is None and "system_proxy_verified" in errors:
+        errors["active_system_proxy_verified"] = errors["system_proxy_verified"]
+    elif proxy is not None and proxy.get("active_service_error"):
+        errors["active_system_proxy_verified"] = proxy["active_service_error"]
     result = {"profile": str(profile.root), "routing": profile.routing, "port": profile.port,
               "service_loaded": observe("service_loaded", lambda: adapter.service_loaded(profile)),
               "pid": observe("pid", lambda: adapter.service_pid(profile)),
               "port_owned": observe("port_owned", lambda: adapter.owns_port(profile)),
               "port_open": observe("port_open", lambda: adapter.port_open(profile)),
               "network_recovery_pending": observe("network_recovery_pending", route.recovery_pending),
-              "system_proxy_verified": observe("system_proxy_verified", route.verified),
+              "system_proxy_verified": (None if proxy is None else
+                                         proxy["all_services_verified"]),
+              "active_network_service": None if proxy is None else proxy["active_service"],
+              "active_system_proxy_verified": (None if proxy is None else
+                                                 proxy["active_service_verified"]),
+              "system_proxy_policy": None if proxy is None else proxy["policy"],
+              "system_proxy_mismatches": [] if proxy is None else proxy["mismatched_services"],
               "routing_adapter": route.capabilities(),
               "capture": observe("capture", lambda: health(profile, adapter),
                                  {"available": None, "healthy": None, "current_process": None})}

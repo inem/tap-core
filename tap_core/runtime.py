@@ -387,6 +387,22 @@ class MacOS:
             raise TapError("No enabled network services could be enumerated")
         return services
 
+    def active_service(self):
+        route = self.run(["/sbin/route", "-n", "get", "default"]).stdout
+        match = re.search(r"^\s*interface:\s*(\S+)\s*$", route, re.M)
+        if not match:
+            raise TapError("Cannot determine the default network interface")
+        interface = match[1]
+        order = self.run([NS, "-listnetworkserviceorder"]).stdout
+        entries = re.findall(
+            r"^[ \t]*\(\d+\)\s+(.+?)\s*$\n"
+            r"^[ \t]*\(Hardware Port:.*?,\s*Device:\s*([^,)]+)(?:,.*)?\)\s*$",
+            order, re.M)
+        for service, device in entries:
+            if device.strip() == interface:
+                return service.strip()
+        raise TapError(f"No enabled network service maps to default interface {interface}")
+
     def proxy(self, service, secure=False):
         output = self.run([NS, "-getsecurewebproxy" if secure else "-getwebproxy", service]).stdout
         values = dict(line.split(": ", 1) for line in output.splitlines() if ": " in line)

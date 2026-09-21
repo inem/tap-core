@@ -50,6 +50,11 @@ class ExplicitProxyRouting:
     def verified(self):
         return "not_used"
 
+    def proxy_diagnostics(self):
+        return {"policy": "client_opt_in", "all_services_verified": "not_used",
+                "active_service": None,
+                "active_service_verified": "not_used", "mismatched_services": []}
+
     def probe(self):
         return self.os.flows(self.profile)
 
@@ -68,6 +73,12 @@ class SystemProxyRouting(ExplicitProxyRouting):
     recovered_message = "previous proxy routing restored"
     off_message = "OFF — previous proxy routing restored, profile service stopped"
     legacy_local_bypass = ["localhost", "127.0.0.1", "*.local"]
+
+    def capabilities(self):
+        result = super().capabilities()
+        result.update({"verification_policy": "all_enabled_services",
+                       "active_service_rescue": "diagnostic_only"})
+        return result
 
     def mutation_lock(self):
         shared = Path.home() / "Library/Application Support/TAP Core/network-control"
@@ -88,10 +99,35 @@ class SystemProxyRouting(ExplicitProxyRouting):
             not expected["enabled"] or (actual["server"], actual["port"]) == (expected["server"], expected["port"]))
 
     def verified(self):
-        profile = self.profile
-        expected = {"enabled": True, "server": "127.0.0.1", "port": profile.port}
-        return all(self.matches(self.os.proxy(service, secure), expected)
-                   for service in self.os.services() for secure in (False, True))
+        return not self._proxy_mismatches()[0]
+
+    def _proxy_mismatches(self):
+        expected = {"enabled": True, "server": "127.0.0.1", "port": self.profile.port}
+        mismatches = []
+        states = {}
+        for service in self.os.services():
+            http = self.os.proxy(service, False)
+            https = self.os.proxy(service, True)
+            states[service] = {"http": http, "https": https}
+            if not self.matches(http, expected) or not self.matches(https, expected):
+                mismatches.append({"service": service, "http": http, "https": https})
+        return mismatches, states, expected
+
+    def proxy_diagnostics(self):
+        mismatches, states, expected = self._proxy_mismatches()
+        try:
+            active = self.os.active_service()
+            if active not in states:
+                raise TapError(f"Active network service is not enabled: {active}")
+            active_state = states[active]
+            active_verified = all(self.matches(active_state[kind], expected)
+                                  for kind in ("http", "https"))
+            active_error = None
+        except TapError as error:
+            active, active_verified, active_error = None, None, str(error)
+        return {"policy": "all_enabled_services", "all_services_verified": not mismatches,
+                "active_service": active, "active_service_verified": active_verified,
+                "active_service_error": active_error, "mismatched_services": mismatches}
 
     def active_bypass(self):
         # Only the declared passthrough list is exempt while TAP is on. Saved

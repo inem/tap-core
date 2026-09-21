@@ -2,7 +2,7 @@
   "schema": "tap.internal-status-material-fragment/v2",
   "id": "routing",
   "observations": {
-    "routing": ["routing","network_recovery_pending","system_proxy_verified"]
+    "routing": ["routing","network_recovery_pending","system_proxy_verified","active_system_proxy_verified"]
   },
   "semantic_rules": [
     {
@@ -10,7 +10,8 @@
       "when": [
         ["observation","routing","routing","$_","$_"],
         ["observation","routing","network_recovery_pending","$_","$_"],
-        ["observation","routing","system_proxy_verified","$_","$_"]
+        ["observation","routing","system_proxy_verified","$_","$_"],
+        ["observation","routing","active_system_proxy_verified","$_","$_"]
       ],
       "emit": [
         ["candidate","routing","state","unknown",0,"inconsistent_routing_observations",[]]
@@ -21,7 +22,8 @@
       "when": [
         ["observation","routing","routing","known","explicit"],
         ["observation","routing","network_recovery_pending","known",false],
-        ["observation","routing","system_proxy_verified","known","not_used"]
+        ["observation","routing","system_proxy_verified","known","not_used"],
+        ["observation","routing","active_system_proxy_verified","known","not_used"]
       ],
       "emit": [
         ["candidate","routing","state","client-opt-in",100,"system_proxy_not_managed",[]]
@@ -32,7 +34,8 @@
       "when": [
         ["observation","routing","routing","known","explicit"],
         ["observation","routing","network_recovery_pending","known",true],
-        ["observation","routing","system_proxy_verified","$_","$_"]
+        ["observation","routing","system_proxy_verified","$_","$_"],
+        ["observation","routing","active_system_proxy_verified","$_","$_"]
       ],
       "emit": [
         ["candidate","routing","state","recovery-required",100,"unexpected_recovery_snapshot",[]]
@@ -43,7 +46,8 @@
       "when": [
         ["observation","routing","routing","known","system"],
         ["observation","routing","network_recovery_pending","known",true],
-        ["observation","routing","system_proxy_verified","known",true]
+        ["observation","routing","system_proxy_verified","known",true],
+        ["observation","routing","active_system_proxy_verified","known",true]
       ],
       "emit": [
         ["candidate","routing","state","capturing",100,"owned_system_proxy_verified",[]]
@@ -54,7 +58,8 @@
       "when": [
         ["observation","routing","routing","known","system"],
         ["observation","routing","network_recovery_pending","known",false],
-        ["observation","routing","system_proxy_verified","known",false]
+        ["observation","routing","system_proxy_verified","known",false],
+        ["observation","routing","active_system_proxy_verified","known",false]
       ],
       "emit": [
         ["candidate","routing","state","direct",100,"system_proxy_disabled",[]]
@@ -65,7 +70,8 @@
       "when": [
         ["observation","routing","routing","known","system"],
         ["observation","routing","network_recovery_pending","known",true],
-        ["observation","routing","system_proxy_verified","known",false]
+        ["observation","routing","system_proxy_verified","known",false],
+        ["observation","routing","active_system_proxy_verified","known",false]
       ],
       "emit": [
         ["candidate","routing","state","recovery-required",100,"owned_system_proxy_drifted",[]]
@@ -76,7 +82,8 @@
       "when": [
         ["observation","routing","routing","known","system"],
         ["observation","routing","network_recovery_pending","known",false],
-        ["observation","routing","system_proxy_verified","known",true]
+        ["observation","routing","system_proxy_verified","known",true],
+        ["observation","routing","active_system_proxy_verified","known",true]
       ],
       "emit": [
         ["candidate","routing","state","unowned-route",100,"recovery_snapshot_missing",[]]
@@ -87,7 +94,8 @@
       "when": [
         ["observation","routing","routing","unknown","$_"],
         ["observation","routing","network_recovery_pending","$_","$_"],
-        ["observation","routing","system_proxy_verified","$_","$_"]
+        ["observation","routing","system_proxy_verified","$_","$_"],
+        ["observation","routing","active_system_proxy_verified","$_","$_"]
       ],
       "emit": [
         ["candidate","routing","state","unknown",200,"inspection_incomplete",[]]
@@ -98,7 +106,8 @@
       "when": [
         ["observation","routing","network_recovery_pending","unknown","$_"],
         ["observation","routing","routing","$_","$_"],
-        ["observation","routing","system_proxy_verified","$_","$_"]
+        ["observation","routing","system_proxy_verified","$_","$_"],
+        ["observation","routing","active_system_proxy_verified","$_","$_"]
       ],
       "emit": [
         ["candidate","routing","state","unknown",200,"inspection_incomplete",[]]
@@ -109,7 +118,44 @@
       "when": [
         ["observation","routing","system_proxy_verified","unknown","$_"],
         ["observation","routing","routing","$_","$_"],
-        ["observation","routing","network_recovery_pending","$_","$_"]
+        ["observation","routing","network_recovery_pending","$_","$_"],
+        ["observation","routing","active_system_proxy_verified","$_","$_"]
+      ],
+      "emit": [
+        ["candidate","routing","state","unknown",200,"inspection_incomplete",[]]
+      ]
+    },
+    {
+      "id": "routing-55-active-owned",
+      "when": [
+        ["observation","routing","routing","known","system"],
+        ["observation","routing","network_recovery_pending","known",true],
+        ["observation","routing","system_proxy_verified","known",false],
+        ["observation","routing","active_system_proxy_verified","known",true]
+      ],
+      "emit": [
+        ["candidate","routing","state","active-service-only",110,"owned_system_proxy_partial",[]]
+      ]
+    },
+    {
+      "id": "routing-65-active-rescue",
+      "when": [
+        ["observation","routing","routing","known","system"],
+        ["observation","routing","network_recovery_pending","known",false],
+        ["observation","routing","system_proxy_verified","known",false],
+        ["observation","routing","active_system_proxy_verified","known",true]
+      ],
+      "emit": [
+        ["candidate","routing","state","active-service-only",110,"active_service_rescue_unowned",[]]
+      ]
+    },
+    {
+      "id": "routing-70-inspection-3",
+      "when": [
+        ["observation","routing","active_system_proxy_verified","unknown","$_"],
+        ["observation","routing","routing","$_","$_"],
+        ["observation","routing","network_recovery_pending","$_","$_"],
+        ["observation","routing","system_proxy_verified","$_","$_"]
       ],
       "emit": [
         ["candidate","routing","state","unknown",200,"inspection_incomplete",[]]
@@ -190,6 +236,21 @@
         ["slot","routing-attachment","routing-line",3,"group","support",true,"",null,[["meaning","routing","state","unowned-route","$reason","$attrs"]]],
         ["slot","routing-separator","routing-attachment",0,"leaf","separator",false," · ",null,[["meaning","routing","state","unowned-route","$reason","$attrs"]]],
         ["slot","routing-detail","routing-attachment",1,"leaf","detail",false,"recovery snapshot missing",null,[["meaning","routing","state","unowned-route","$reason","$attrs"]]]
+      ]
+    },
+    {
+      "id": "presentation-routing-05-active-service-only",
+      "when": [
+        ["meaning","routing","state","active-service-only","$reason","$attrs"]
+      ],
+      "emit": [
+        ["slot","routing-line","status",1,"group","line",false,"",null,[["meaning","routing","state","active-service-only","$reason","$attrs"]]],
+        ["slot","routing-label","routing-line",0,"leaf","label",false,"browser/apps  ",null,[["meaning","routing","state","active-service-only","$reason","$attrs"]]],
+        ["slot","routing-indicator","routing-line",1,"leaf","indicator",false,"⚠ ","warning",[["meaning","routing","state","active-service-only","$reason","$attrs"]]],
+        ["slot","routing-value","routing-line",2,"leaf","value",false,"active only","warning",[["meaning","routing","state","active-service-only","$reason","$attrs"]]],
+        ["slot","routing-attachment","routing-line",3,"group","support",true,"",null,[["meaning","routing","state","active-service-only","$reason","$attrs"]]],
+        ["slot","routing-separator","routing-attachment",0,"leaf","separator",false," · ",null,[["meaning","routing","state","active-service-only","$reason","$attrs"]]],
+        ["slot","routing-detail","routing-attachment",1,"leaf","detail",false,"full policy not satisfied",null,[["meaning","routing","state","active-service-only","$reason","$attrs"]]]
       ]
     },
     {
