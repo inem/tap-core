@@ -3,7 +3,7 @@
 Tracking: [#197](https://github.com/inem/tap-core/issues/197) (zoom-in) and
 [#194](https://github.com/inem/tap-core/issues/194) (parity matrix). Inspected
 2026-09-21 against legacy `tap` HEAD `54ccb21` (private repo) and tap-core
-`origin/main` `1e5ad60`. Everything here was read from source and from the
+`origin/main` `9c226ec`. Everything here was read from source and from the
 installed machine; no legacy lifecycle command was executed.
 
 Legacy TAP is **source material, not a service to keep running**. Core owns the
@@ -65,8 +65,8 @@ commands were driven by coding agents (session archive, 2026-08-25 … 09-17).
 | `on`: start → arm all services → prove traffic → else disarm | `tap on` (start → arm → probe; snapshot in `state/proxy-before.json`) | ported | Yes · operator history (11×) | native | Legacy arms port-agnostically and overwrites any prior proxy | — (#177 done; verification policy in #189) | #192 live lifecycle acceptance | Low |
 | `off`: disarm verified before stopping | `tap off` + drain window (#176) | ported | Yes · history (4×) | native | Legacy `off` disarms **whoever** owns the proxy, including Core | — | #102 regression stays green | Low |
 | `reload`: preflight on a throwaway port, swap, disarm on failure; also restarts Probe + sources | none as one verb. Page-only pack changes are hot; reader/handler binding changes need `off`→`on` | missing | **Yes — most-used legacy verb (34×)** | native | Legacy couples runtime reload with app restarts | One-command recovery/reload that never drops routing: #119 | reload with a broken addon leaves routing intact and exits non-zero | Medium: without it operators fall back to `off`/`on` |
-| `status` (proc/port/armed, squatter, fd pressure, armed N/M) | `tap status` v4 | replaced | Yes | native | Legacy `armed()` is port-agnostic: legacy `status` reports "capturing" while Core owns the proxy | Truthfulness under partial knowledge: #191. **Observed 2026-09-21:** OS proxy points at Core's port while `status` says `direct` | status must name the real route when the OS proxy targets this profile's port | Medium |
-| `doctor` (backend, CA file, cert present, launchd, sudo rights, port, outward probe, fd headroom, bypass drift) | `tap doctor` | replaced | Yes · history (5×) | native | none | CA **trust** verification #193; fd-headroom meter and declared-vs-applied bypass drift are not in Core | doctor reports `not_verified` rather than ok for untested trust | Low |
+| `status` (proc/port/armed, squatter, fd pressure, armed N/M) | `tap status` v4 | replaced | Yes | native | Legacy `armed()` is port-agnostic: legacy `status` reports "capturing" while Core owns the proxy | Truthfulness under partial knowledge: #191 complete | status names active-only rescue separately from full system policy | Low |
+| `doctor` (backend, CA file, cert present, launchd, sudo rights, port, outward probe, fd headroom, bypass drift) | `tap doctor` | replaced | Yes · history (5×) | native | none | HTTPS decryption/default curl trust #193 complete; fd-headroom meter and declared-vs-applied bypass drift remain follow-ups | profile-CA issuer and default curl trust probes pass without `-k` | Low |
 | `where` (every file, sizes, recency, per-service harvest) | `tap where` | replaced (narrower) | Yes · history (5×) | native | none | #96 / #100; pack-contributed `where` providers | `where` lists every reader output dir with newest-file age | Low |
 | `directions` (hidden): phases, bypass table, system/`NO_PROXY` drift, phase drift | none | missing | Partly: drift report yes, "phases" no (nothing routes on them) | native | none | part of #6 | declared passthrough vs `scutil --proxy` vs `NO_PROXY` diff | Low |
 | `install`: PATH symlink, plist, bootstrap | `tap install` (repair semantics) | ported | Yes | native | **Legacy `install` relinks PATH `tap` to itself and bootstraps `com.tap`** — now gated | — | — | High if ungated (fixed in legacy `54ccb21`) |
@@ -209,7 +209,31 @@ lags the installed set; the legacy CLI hash pinned in
 [legacy-cli-lifecycle.md](legacy-cli-lifecycle.md) no longer matches (the
 retirement gate changed the script).
 
-## 11. Follow-up tickets
+## 11. High-value workflow smoke ledger
+
+This is the closure ledger for #194. A row is green only when a repeatable
+command and durable evidence exist. It does not make a missing capability
+"partially ported": future workflows remain owned by their implementation
+tickets in §12.
+
+| High-value workflow | Reproducible smoke | Durable evidence | State |
+|---|---|---|---|
+| Start, adopt all services, proxy traffic, browser access, rollback to direct | `python3 tools/check_migration_lifecycle.py --allow-system-routing --profile <profile> --tap <checkout>/tap --browser <chromium>` | [`results/migration-lifecycle-20260921T180934Z.json`](results/migration-lifecycle-20260921T180934Z.json) | live pass |
+| HTTPS is decrypted by this profile CA and trusted by default curl (no `-k`) | `tap doctor --output raw-json` | [`results/https-trust-20260921T182615Z.json`](results/https-trust-20260921T182615Z.json) | live pass; browser evidence stays separate in the lifecycle row |
+| Capture record, rotation/gap semantics and reader delivery | `python3 -m unittest tests.test_capture_storage tests.test_records_journal tests.test_readers tests.test_hubless_readers` | [`results/reader-delivery-parity-2026-09-07.json`](results/reader-delivery-parity-2026-09-07.json) | fixture pass |
+| Page injection, Hub/control command round-trip and origin isolation | `python3 tools/check_live_slice.py --help` (run with its declared Bun/Chrome/backend arguments) | [`../live-slice-2026-09-07.json`](../live-slice-2026-09-07.json) | live synthetic pass |
+| Installed page-pack update/rollback and hot assets in a browser | `python3 tools/check_hot_pack_assets.py --help` | [`results/hot-pack-assets-live.json`](results/hot-pack-assets-live.json) | live browser pass |
+| Linked page → handler → reader workflow | `python3 tools/check_linked_pack_live.py --help` | [`results/linked-pack-live-browser.json`](results/linked-pack-live-browser.json) | live browser pass |
+| Daily materializers and ChatGPT background work under Core ownership | `tap reader status chatgpt.sessions` and `tap doctor --output raw-json` | [`results/parity-live-20260921T183053Z.json`](results/parity-live-20260921T183053Z.json) | live pass |
+
+The final row covers the currently enabled high-value readers
+(`chatgpt.sessions`, `linkedin.archive`, `usage.meters`, `x.posts`,
+`x.subtitles`, `youtube.subtitles`) and the `chatgpt.work` /
+`chatgpt.organizer` background jobs. Page features whose actual user action is
+still missing are not covered by registry presence; their acceptance remains on
+#206, #208 and #209.
+
+## 12. Follow-up tickets
 
 | Ticket | What | Blocked on |
 |---|---|---|
@@ -232,7 +256,7 @@ Already tracked elsewhere: reload/recovery #119, mutator role #10/#157, policy
 layers #6, `where` #96/#100, status/doctor truthfulness #189–#193, archive
 layout #184.
 
-## 12. Rollback and retirement
+## 13. Rollback and retirement
 
 Legacy stays on disk as reference and rollback until the rows above marked
 `missing` with target `pack`/`compat` are `ported` or explicitly `retired`.
