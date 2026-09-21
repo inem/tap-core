@@ -35,6 +35,10 @@ PLAN_VERSION = 'tap.page-plan/v1'
 ALL_ORIGINS = '*'
 
 
+def is_regenerated_python_bytecode(path):
+    return '__pycache__' in path.parts
+
+
 def development_configuration(root):
     """Read the private local-authoring overlay; absence means installed mode."""
     try:
@@ -480,10 +484,13 @@ def effective_configuration(root, base):
                 raise ValueError(f'Enabled pack contains an unsafe path: {pack_id}@{version}')
         observed = set()
         for path in code.rglob('*'):
+            rel = path.relative_to(code)
             if path.is_symlink():
                 raise ValueError(f'Enabled pack contains a symlink: {pack_id}@{version}')
+            if is_regenerated_python_bytecode(rel):
+                continue
             if path.is_file():
-                observed.add(path.relative_to(code).as_posix())
+                observed.add(rel.as_posix())
         if observed != expected or set(metadata['hashes']) != expected:
             raise ValueError(f'Enabled pack file set changed: {pack_id}@{version}')
         for name in sorted(expected):

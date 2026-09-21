@@ -16,6 +16,7 @@ import shutil
 import tarfile
 import tempfile
 
+from .bridge import is_regenerated_python_bytecode
 from .packs import (ID, VERSION, PackError, check_activation, load_manifest,
                     no_duplicate_keys, require, resolve_config)
 
@@ -60,24 +61,16 @@ def _declared_names(manifest):
     return ["pack.json", *manifest["files"]]
 
 
-def _is_bytecode(rel):
-    # Regenerable Python bytecode CPython writes into __pycache__ on import. It is
-    # never part of a pack's declared file set, so the integrity check ignores it
-    # regardless of which process wrote it — validation imports of a pack with
-    # local packages would otherwise self-inflict a file-set mismatch (#174).
-    return "__pycache__" in rel.parts or rel.suffix in (".pyc", ".pyo")
-
-
 def _tree_hashes(root, manifest):
     root = Path(root).resolve()
     expected = set(_declared_names(manifest))
     observed = set()
     for path in root.rglob("*"):
         rel = path.relative_to(root)
-        if _is_bytecode(rel):
-            continue
         if path.is_symlink():
             raise PackError(f"installed pack contains a symlink: {rel}")
+        if is_regenerated_python_bytecode(rel):
+            continue
         if path.is_file():
             observed.add(rel.as_posix())
     require(observed == expected,
