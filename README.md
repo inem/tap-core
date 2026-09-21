@@ -158,6 +158,12 @@ state, access and delivery boundaries and the evidence behind each claim.
 The [development views](docs/development-views.md) show useful cycles, their
 operating conditions and the route from a live harness to an installable product.
 
+Usage freshness work under [#222](https://github.com/inem/tap-core/issues/222)
+is split the same way. Schema-2 observations, activity projection, Kimi
+passive-only discovery and the policy functions exist; the adapter contract,
+coordinator runtime, Copilot discovery and provenance UI are not wired. See
+[usage freshness policy](docs/usage-freshness-policy.md).
+
 ## License
 
 The new scaffold in this repository is MIT licensed. Existing implementation files and bundled dependencies must pass the migration and license review before being added.

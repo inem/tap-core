@@ -11,6 +11,19 @@ no LaunchAgent, schedule or pack behaviour changes. What is fixed here is *who
 decides and by which rules*, so that adapters (#228) and the dashboard (#223)
 can be written against a stable boundary.
 
+## Implemented vs not wired (#222)
+
+| Piece | Status |
+|---|---|
+| Schema-2 observation contract (`activity` / `quota` / `refresh`) | implemented in `tap-pack-usage` (#230) |
+| Activity projection (capture + Kimi local wire) | implemented in `tap-pack-usage` (#226) |
+| Kimi discovery | implemented, **passive-only** (#227) |
+| Freshness policy functions | implemented here (#225); not imported by Core runtime |
+| Adapter contract | **not wired** (#228) |
+| Coordinator runtime | **not wired** (no wake, LaunchAgent, or pack loop) |
+| Copilot discovery | **not wired** (#224) |
+| Provenance UI | **not wired** (#223) |
+
 ## Boundary
 
 ```
