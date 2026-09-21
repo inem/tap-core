@@ -1,0 +1,31 @@
+{
+  "checked_at": "2026-09-21T18:30:53Z",
+  "source_commit": "9c226ecec360d64a1d526d8bc6966b7644f8b1f0",
+  "profile": "/Users/inem/.local/share/tap-core-linkedin/profile",
+  "doctor_healthy": true,
+  "system_proxy_verified": true,
+  "https_decryption": {
+    "profile_ca_verified": true,
+    "system_trust_verified": true,
+    "profile_ca_common_name": "mitmproxy",
+    "peer_issuer_common_name": "mitmproxy"
+  },
+  "readers": {
+    "chatgpt.sessions": {"healthy": true, "phase": "waiting"},
+    "linkedin.archive": {"healthy": true, "phase": "waiting"},
+    "usage.meters": {"healthy": true, "phase": "waiting"},
+    "x.posts": {"healthy": true, "phase": "waiting"},
+    "x.subtitles": {"healthy": true, "phase": "waiting"},
+    "youtube.subtitles": {"healthy": true, "phase": "waiting"}
+  },
+  "background": {
+    "chatgpt.organizer:chatgpt organizer tick": {"phase": "ok", "exit_code": 0},
+    "chatgpt.work:chatgpt work refresh": {"phase": "ok", "exit_code": 0}
+  },
+  "chatgpt_sessions_status": {
+    "configured": true,
+    "progress_phase": "idle",
+    "error": null
+  },
+  "success": true
+}
