@@ -18,7 +18,7 @@ Snapshot date of the "verified" columns: **2026-09-17**.
 | `tap-pack-*` | One repository per pack, released as GitHub releases; installed with `tap pack add OWNER/REPO[@VERSION]`. See the pack table below. Three packs break the naming rule ([#156](https://github.com/inem/tap-core/issues/156)). | mixed public/private |
 | [`tapout-cli`](https://github.com/inem/tapout-cli) | `tapout`: index + search over the `~/tap-out` archive that readers produce (ChatGPT web, Codex Work, Claude Code, Kimi). The first tool to reach for when looking for an old conversation. | private |
 | [`tap-unfolded`](https://github.com/inem/tap-unfolded) | Private design world and fold receipts. | private |
-| [`tap`](https://github.com/inem/tap) | **Legacy** bash `tap` + mitmdump addon + Elixir/Python readers. Source material and behavioural evidence for the extraction (see [extraction-start.md](extraction-start.md)); superseded by Core for daily use. | private · WIP branch `youtube-intent-chain` |
+| [`tap`](https://github.com/inem/tap) | **Legacy** bash `tap` + mitmdump addon + Elixir/Python readers. Source material and behavioural evidence for the extraction (see [extraction-start.md](extraction-start.md) and the capability/parity matrix in [legacy-zoom-in.md](legacy-zoom-in.md)); superseded by Core for daily use. | private · WIP branch `youtube-intent-chain` |
 | [`tap-inject`](https://github.com/inem/tap-inject), [`apitap`](https://github.com/inem/apitap) | Early satellites: mutator catalogue for injecting into live traffic; OpenAPI inference from captured traffic. | private · dormant |
 
 ## Installed instance layout
