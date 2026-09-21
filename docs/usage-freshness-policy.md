@@ -4,7 +4,7 @@ Issue #225, parent #222. This is the **decision policy** for the future usage
 freshness coordinator, as executable code and deterministic tests:
 
 - `tap_core/freshness_policy.py` — pure functions, no clock, no I/O, no provider code.
-- `tests/test_freshness_policy.py` — 35 decision tests.
+- `tests/test_freshness_policy.py` — 43 decision tests.
 
 **The coordinator itself is not built.** Nothing in Core imports this module,
 no LaunchAgent, schedule or pack behaviour changes. What is fixed here is *who
@@ -47,7 +47,8 @@ carrying the receipt's `decision_id`.
 | # | Rule | Verdict |
 |---|---|---|
 | 1 | no admitted adapter | skip `no_adapter` |
-| 2 | a refresh is in flight and not past `timeout + grace` | skip `in_flight` |
+| 2a | a refresh is in flight **past** `timeout + grace` and its timeout has not been recorded | skip `stale_in_flight` — never an approval |
+| 2b | a refresh is in flight | skip `in_flight` |
 | 3 | known offline | skip `offline` — no failure counted, no budget spent |
 | 4 | `retry_at` in the future | skip `backoff` — explicit requests do not bypass it |
 | 5 | budget for the window used up (explicit requests get a small reserve) | skip `budget` |
@@ -59,7 +60,7 @@ carrying the receipt's `decision_id`.
 
 | Tier | When | Default interval |
 |---|---|---|
-| `night` | local hour in `[01, 08)` | 24 h (safety wake only) |
+| `night` | local hour in `[01, 08)` — **only when the local UTC offset is known** | 24 h (safety wake only) |
 | `away` | user idle ≥ 1 h | 24 h |
 | `active` | passive activity within 30 min **and newer than the last quota snapshot** | 15 min |
 | `watched` | dashboard visible | 30 min |
@@ -69,6 +70,13 @@ Night and away outrank activity on purpose: agents keep working at 3 am, the
 person reading the dashboard does not. Activity that the last snapshot already
 covers does not make a target active — the provider's number cannot have moved
 because of it.
+
+### Local time is an input, not an assumption
+
+`context()` has no default offset. The coordinator passes the machine's real
+`utc_offset_seconds`; when it cannot, the night gate is **off**
+(`inputs.night_gate: "disabled_unknown_timezone"`, `inputs.local_hour: null`)
+rather than applied at UTC hours. The away gate, budget and backoff still hold.
 
 ### How passive evidence suppresses refresh
 
@@ -82,7 +90,17 @@ When capture sees the client fetch its own quota (`observed_quota(…,
 
 - One refresh in flight per provider/account; other accounts are independent.
 - A refresh that never reports back becomes a `timeout` failure via
-  `expire_in_flight()` — not a free retry. Receipts flag `stale_in_flight`.
+  `expire_in_flight()` — not a free retry. Until that is recorded, `decide()`
+  answers `stale_in_flight` and **cannot approve**: the old request may still be
+  on the wire. `advance(state, ctx)` (settle, then decide) and `plan()` (settles
+  every target) are the entry points a coordinator uses; `started()` raises on a
+  non-refresh receipt or an existing flight. Backoff counts from the moment the
+  timeout occurred, not from when it was noticed.
+- **A successful call is not freshness.** `finished("success" | "unchanged")`
+  advances `last_authoritative_at` only with a finite `quota_observed_at` no more
+  than `max_clock_skew` (5 min) ahead of now — matching the `refresh` observation
+  contract. Otherwise the look is recorded as the failure `no_quota_observed` and
+  backs off. `observed_quota()` applies the same test to passive observations.
 - Failures back off 5 min × 2ⁿ, capped at 6 h. A provider `retry_after` is a
   floor, never shortened. Any successful look clears the streak.
 - Budget: 48 live attempts per 24 h per target, +6 reserved for explicit requests.
@@ -99,7 +117,7 @@ wake therefore never fans out into one request per provider.
 `tap.usage-freshness-decision/v1`, produced for **every** evaluation, refresh or
 skip: `decision_id`, `at`, `target{provider, account}`, `adapter`, `action`,
 `reason`, `tier`, `next_eligible_at`, `timeout`, `stale_in_flight`, and the
-`inputs` the verdict was based on (age, interval, last authoritative time and
+`inputs` (incl. `night_gate`) the verdict was based on (age, interval, last authoritative time and
 how it was obtained, last activity, failures, retry time, budget used/max,
 explicit request pending, online, local hour, user idle, dashboard visible).
 `decision_id` is a hash of target, time, action and reason — reproducible.
@@ -109,11 +127,11 @@ explicit request pending, online, local hour, user idle, dashboard visible).
 | Scenario | Test class |
 |---|---|
 | active versus idle, activity already covered by the snapshot, never observed | `ActiveVersusIdle` |
-| local night (timezone-aware), user away, rare safety wake, explicit request at night | `LocalNight` |
+| local night (timezone-aware), **unknown timezone**, user away, rare safety wake, explicit request at night | `LocalNight` |
 | captured provider answer / transitional producer suppress refresh; passive-only target | `PassiveEvidenceSuppressesRefresh` |
 | repaint and visibility flapping create no request; explicit requests coalesce | `UiNeverCausesARequest` |
 | single-flight per target, independence across accounts | `SingleFlight` |
-| timeout, exponential backoff and cap, rate-limit floor, success clears streak | `TimeoutAndBackoff` |
+| timeout, **stale in-flight never approves**, `started()` guards, **success without quota is a failure**, future timestamps, exponential backoff and cap, rate-limit floor, success clears streak | `TimeoutAndBackoff` |
 | offline costs nothing; unknown connectivity is not offline | `Offline` |
 | budget, explicit reserve, window expiry | `Budget` |
 | one approval per wake, explicit requests exempt, queue drains across wakes | `WakeDoesNotFanOut` |

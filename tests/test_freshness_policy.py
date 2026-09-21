@@ -17,6 +17,7 @@ def at(hour, minute=0):
 
 def ctx(now, **kw):
     kw.setdefault("online", True)
+    kw.setdefault("utc_offset_seconds", 0)   # these tests run on a machine that knows it is at UTC
     return fp.context(now, **kw)
 
 
@@ -74,6 +75,28 @@ class LocalNight(unittest.TestCase):
         local = fp.decide(s, ctx(now, utc_offset_seconds=7200))
         self.assertEqual((local["reason"], local["inputs"]["local_hour"]), ("night_quiet", 1))
 
+    def test_unknown_timezone_disables_the_night_gate_and_says_so(self):
+        now = at(3)                             # 03:00 UTC — but where is this machine?
+        s = target(last_authoritative_at=now - 2 * 3600, last_activity_at=now - 60)
+        r = fp.decide(s, fp.context(now, online=True))          # no offset supplied
+        self.assertEqual((r["action"], r["reason"], r["tier"]), ("refresh", "due_active", "active"))
+        self.assertIsNone(r["inputs"]["local_hour"])
+        self.assertEqual(r["inputs"]["night_gate"], "disabled_unknown_timezone")
+        known = fp.decide(s, ctx(now, utc_offset_seconds=0))
+        self.assertEqual((known["reason"], known["inputs"]["night_gate"], known["inputs"]["local_hour"]),
+                         ("night_quiet", "local_time", 3))
+
+    def test_omitting_the_offset_is_never_read_as_utc(self):
+        for hour in range(24):
+            r = fp.decide(target(last_authoritative_at=at(hour) - 100), fp.context(at(hour), online=True))
+            self.assertNotEqual(r["tier"], "night", hour)
+
+    def test_away_gate_still_works_without_a_timezone(self):
+        now = at(3)
+        s = target(last_authoritative_at=now - 2 * 3600, last_activity_at=now - 60)
+        r = fp.decide(s, fp.context(now, online=True, user_idle_seconds=7200))
+        self.assertEqual(r["reason"], "away_quiet")
+
     def test_user_away_counts_like_night(self):
         now = at(14)
         s = target(last_authoritative_at=now - 2 * 3600, last_activity_at=now - 60)
@@ -97,7 +120,7 @@ class PassiveEvidenceSuppressesRefresh(unittest.TestCase):
         now = at(14)
         s = target(last_authoritative_at=now - 1000, last_activity_at=now - 60)
         self.assertEqual(fp.decide(s, ctx(now))["action"], "refresh")
-        s = fp.observed_quota(s, now - 5, "passive-capture")   # the client asked; capture saw it
+        s = fp.observed_quota(s, now - 5, "passive-capture", now)   # the client asked; capture saw it
         s = fp.observed_activity(s, now - 1)
         r = fp.decide(s, ctx(now))
         self.assertEqual((r["action"], r["reason"]), ("skip", "passive_fresh"))
@@ -105,11 +128,11 @@ class PassiveEvidenceSuppressesRefresh(unittest.TestCase):
 
     def test_transitional_scheduled_producer_counts_too(self):
         now = at(14)
-        s = fp.observed_quota(target(last_activity_at=now - 60), now - 100, "legacy-schedule")
+        s = fp.observed_quota(target(last_activity_at=now - 60), now - 100, "legacy-schedule", now)
         self.assertEqual(fp.decide(s, ctx(now))["action"], "skip")
 
     def test_older_observation_never_moves_freshness_back(self):
-        s = fp.observed_quota(target(last_authoritative_at=500.0), 400.0, "passive-capture")
+        s = fp.observed_quota(target(last_authoritative_at=500.0), 400.0, "passive-capture", 1000.0)
         self.assertEqual(s["last_authoritative_at"], 500.0)
 
     def test_passive_only_target_is_never_refreshed(self):
@@ -171,13 +194,63 @@ class TimeoutAndBackoff(unittest.TestCase):
         s = fp.started(s, fp.decide(s, ctx(now)), now)
         late = now + P["timeout"] + P["in_flight_grace"]
         self.assertEqual(fp.expire_in_flight(s, late - 1), s)
-        self.assertTrue(fp.decide(s, ctx(late))["stale_in_flight"])
-        s = fp.expire_in_flight(s, late)
+        s, r = fp.advance(s, ctx(late))
         self.assertIsNone(s["in_flight"])
-        self.assertEqual(s["failures"], 1)
-        r = fp.decide(s, ctx(late + 1))
+        self.assertEqual((s["failures"], s["last_error"]), (1, "timeout"))
         self.assertEqual((r["action"], r["reason"], r["next_eligible_at"]),
                          ("skip", "backoff", late + P["backoff"]["base"]))
+
+    def test_stale_in_flight_never_approves_a_second_request(self):
+        now = at(14)
+        s = target(last_authoritative_at=now - 7 * 3600)
+        s = fp.started(s, fp.decide(s, ctx(now)), now)
+        for later in (P["timeout"] + P["in_flight_grace"], 3600, 86400 * 3):
+            for state in (s, fp.requested(s, now + later)):       # due, and explicitly requested
+                r = fp.decide(state, ctx(now + later))
+                self.assertEqual((r["action"], r["reason"], r["stale_in_flight"]),
+                                 ("skip", "stale_in_flight", True), later)
+        self.assertIsNotNone(s["in_flight"])                       # decide() settled nothing by itself
+
+    def test_started_refuses_to_overwrite_a_flight_or_take_a_skip(self):
+        now = at(14)
+        s = target(last_authoritative_at=now - 7 * 3600)
+        approved = fp.decide(s, ctx(now))
+        flying = fp.started(s, approved, now)
+        with self.assertRaises(ValueError):
+            fp.started(flying, approved, now + 500)
+        with self.assertRaises(ValueError):
+            fp.started(s, fp.decide(flying, ctx(now + 1)), now + 1)   # an in_flight skip receipt
+
+    def test_wake_settles_stale_flights_before_deciding(self):
+        now = at(14)
+        s = target(last_authoritative_at=now - 7 * 3600)
+        s = fp.started(s, fp.decide(s, ctx(now)), now)
+        states, receipts = fp.plan([s], ctx(now + 3600))
+        self.assertEqual((states[0]["in_flight"], states[0]["failures"]), (None, 1))
+        self.assertEqual(receipts[0]["reason"], "due_idle")          # backoff (300 s) has passed
+
+    def test_success_without_a_provider_stated_quota_is_not_freshness(self):
+        now = at(14)
+        s = target(last_authoritative_at=now - 7 * 3600)
+        for missing in (None, float("nan"), float("inf"), "1790000000", True):
+            flying = fp.started(s, fp.decide(s, ctx(now)), now)
+            done = fp.finished(flying, "success", now + 2, quota_observed_at=missing)
+            self.assertEqual(done["last_authoritative_at"], now - 7 * 3600, missing)
+            self.assertEqual((done["failures"], done["last_error"]), (1, "no_quota_observed"), missing)
+            self.assertEqual(done["retry_at"], now + 2 + P["backoff"]["base"])
+            self.assertEqual(fp.decide(done, ctx(now + 3))["reason"], "backoff")
+
+    def test_an_observation_from_the_future_is_not_believed(self):
+        now = at(14)
+        s = target(last_authoritative_at=now - 7 * 3600)
+        done = fp.finished(fp.started(s, fp.decide(s, ctx(now)), now), "unchanged", now + 2,
+                           quota_observed_at=now + 86400)
+        self.assertEqual((done["last_authoritative_at"], done["last_error"]),
+                         (now - 7 * 3600, "no_quota_observed"))
+        self.assertEqual(fp.observed_quota(s, now + 86400, "passive-capture", now), s)
+        self.assertEqual(fp.observed_quota(s, None, "passive-capture", now), s)
+        near = fp.observed_quota(s, now + 60, "passive-capture", now)   # inside clock skew
+        self.assertEqual(near["last_authoritative_at"], now + 60)
 
     def test_backoff_doubles_and_is_capped(self):
         now, s, delays = at(14), target(), []
@@ -221,7 +294,7 @@ class Offline(unittest.TestCase):
         self.assertEqual(fp.decide(s, ctx(now + 60, online=True))["action"], "refresh")
 
     def test_unknown_connectivity_is_not_offline(self):
-        r = fp.decide(target(), fp.context(at(14), online=None))
+        r = fp.decide(target(), fp.context(at(14), utc_offset_seconds=0, online=None))
         self.assertEqual(r["action"], "refresh")
 
 
@@ -257,7 +330,7 @@ class WakeDoesNotFanOut(unittest.TestCase):
 
     def test_one_wake_approves_the_most_overdue_target_only(self):
         now = at(14)
-        receipts = fp.plan(self.providers(now), ctx(now))
+        _, receipts = fp.plan(self.providers(now), ctx(now))
         approved = [r["target"]["provider"] for r in receipts if r["action"] == "refresh"]
         self.assertEqual(approved, ["claude"])
         waiting = {r["target"]["provider"]: (r["reason"], r.get("deferred_reason")) for r in receipts
@@ -270,14 +343,14 @@ class WakeDoesNotFanOut(unittest.TestCase):
         now = at(14)
         states = self.providers(now)
         states[0] = fp.requested(states[0], now)
-        approved = sorted(r["target"]["provider"] for r in fp.plan(states, ctx(now)) if r["action"] == "refresh")
+        approved = sorted(r["target"]["provider"] for r in fp.plan(states, ctx(now))[1] if r["action"] == "refresh")
         self.assertEqual(approved, ["claude", "codex"])
 
     def test_successive_wakes_drain_the_queue_one_by_one(self):
         now, states, order = at(14), self.providers(at(14)), []
         for wake in range(4):
             tick = now + wake * 300
-            receipts = fp.plan(states, ctx(tick))
+            states, receipts = fp.plan(states, ctx(tick))
             for index, r in enumerate(receipts):
                 if r["action"] == "refresh":
                     order.append(r["target"]["provider"])
@@ -296,7 +369,8 @@ class Receipt(unittest.TestCase):
                         "next_eligible_at", "inputs"):
                 self.assertIn(key, r)
             for key in ("age", "interval", "last_authoritative_at", "last_activity_at", "failures",
-                        "budget_used", "budget_max", "online", "local_hour", "dashboard_visible"):
+                        "budget_used", "budget_max", "online", "local_hour", "night_gate",
+                        "dashboard_visible"):
                 self.assertIn(key, r["inputs"])
 
     def test_decisions_are_deterministic_and_pure(self):

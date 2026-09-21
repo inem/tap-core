@@ -9,6 +9,7 @@ Nothing in Core imports this module yet. See docs/usage-freshness-policy.md.
 """
 import hashlib
 import json
+import math
 
 INF = float("inf")
 
@@ -27,6 +28,7 @@ DEFAULT_POLICY = {
     "budget": {"window": 86400, "max": 48, "manual_reserve": 6},
     "backoff": {"base": 300, "factor": 2, "max": 21600},
     "max_per_wake": 1,           # a wake never fans out to every provider
+    "max_clock_skew": 300,       # an observation this far in the future is not believed
 }
 
 REFRESH, SKIP = "refresh", "skip"
@@ -44,23 +46,37 @@ def new_state(provider, account=None, adapter=None):
         "failures": 0,
         "retry_at": None,
         "attempts": [],                  # started_at of live attempts, for the budget
+        "last_error": None,              # outcome of the last failed look
         "manual_requested_at": None,     # explicit user intent; a repaint is not intent
     }
 
 
-def context(now, utc_offset_seconds=0, online=None, user_idle_seconds=None,
+def context(now, utc_offset_seconds=None, online=None, user_idle_seconds=None,
             dashboard_visible=False):
+    """`utc_offset_seconds` is the machine's real local offset. There is no
+    default: None means the coordinator does not know the local time, and the
+    night gate is then off rather than applied at UTC hours."""
     return {"now": now, "utc_offset_seconds": utc_offset_seconds, "online": online,
             "user_idle_seconds": user_idle_seconds, "dashboard_visible": bool(dashboard_visible)}
 
 
 def local_hour(ctx):
-    return int(((ctx["now"] + ctx["utc_offset_seconds"]) % 86400) // 3600)
+    """Local hour 0–23, or None when the local offset is unknown."""
+    offset = ctx.get("utc_offset_seconds")
+    if offset is None:
+        return None
+    return int(((ctx["now"] + offset) % 86400) // 3600)
+
+
+def night_gate(ctx):
+    return "local_time" if ctx.get("utc_offset_seconds") is not None else "disabled_unknown_timezone"
 
 
 def is_night(ctx, policy):
-    start, end = policy["night"]["start_hour"], policy["night"]["end_hour"]
     hour = local_hour(ctx)
+    if hour is None:
+        return False   # never guess quiet hours; the away gate and the budget still apply
+    start, end = policy["night"]["start_hour"], policy["night"]["end_hour"]
     return start <= hour < end if start <= end else (hour >= start or hour < end)
 
 
@@ -112,7 +128,12 @@ def decide(state, ctx, policy=None):
 
     if not state.get("adapter"):
         return verdict(SKIP, "no_adapter")
-    if flight and not stale_flight:
+    if flight and stale_flight:
+        # The old request may still be on the wire and its timeout has not been
+        # recorded. Approving now would let started() overwrite it: two requests,
+        # and a failure that never reached the backoff. Settle first (advance()).
+        return verdict(SKIP, "stale_in_flight", now)
+    if flight:
         return verdict(SKIP, "in_flight",
                        flight["started_at"] + policy["timeout"] + policy["in_flight_grace"])
     if ctx.get("online") is False:
@@ -135,10 +156,23 @@ def decide(state, ctx, policy=None):
     return verdict(SKIP, quiet or "fresh", seen + interval)
 
 
+def advance(state, ctx, policy=None):
+    """The entry point a coordinator should use: settle, then decide.
+
+    Records the timeout of a refresh that never reported back, then evaluates
+    the settled state. Returns (state, receipt); persist the state."""
+    policy = policy or DEFAULT_POLICY
+    settled = expire_in_flight(state, ctx["now"], policy)
+    return settled, decide(settled, ctx, policy)
+
+
 def plan(states, ctx, policy=None):
     """One wake over many targets. Explicit requests all pass; of the rest at most
-    `max_per_wake` are approved, most overdue first. The others wait for the next wake."""
+    `max_per_wake` are approved, most overdue first. The others wait for the next wake.
+
+    Settles every target first (see advance()). Returns (states, receipts)."""
     policy = policy or DEFAULT_POLICY
+    states = [expire_in_flight(state, ctx["now"], policy) for state in states]
     receipts = [decide(state, ctx, policy) for state in states]
     due = [r for r in receipts if r["action"] == REFRESH and r["reason"] != "manual"]
     due.sort(key=lambda r: (-_overdue(r), r["target"]["provider"], r["target"]["account"] or ""))
@@ -146,7 +180,7 @@ def plan(states, ctx, policy=None):
         receipt["action"], receipt["deferred_reason"] = SKIP, receipt["reason"]
         receipt["reason"] = "coalesced_wake"
         receipt["decision_id"] = _decision_id(receipt)
-    return receipts
+    return states, receipts
 
 
 def _overdue(receipt):
@@ -156,6 +190,10 @@ def _overdue(receipt):
 
 # --- state transitions (pure: each returns a new state) -----------------------
 def started(state, receipt, now):
+    if receipt.get("action") != REFRESH:
+        raise ValueError("started() needs an approved refresh receipt, got %r" % receipt.get("reason"))
+    if state.get("in_flight"):
+        raise ValueError("a refresh is already in flight for this target")
     out = dict(state)
     out["in_flight"] = {"started_at": now, "decision_id": receipt["decision_id"]}
     out["attempts"] = list(state.get("attempts") or []) + [now]
@@ -167,11 +205,16 @@ def started(state, receipt, now):
 def finished(state, outcome, now, policy=None, quota_observed_at=None, retry_after=None):
     """outcome: success | unchanged | error | timeout | rate_limited."""
     policy = policy or DEFAULT_POLICY
-    out = dict(state, in_flight=None)
+    out = dict(state, in_flight=None, last_error=None)
     if outcome in ("success", "unchanged"):
-        out.update(failures=0, retry_at=None, last_authoritative_via="live-adapter",
-                   last_authoritative_at=max(quota_observed_at or now, state.get("last_authoritative_at") or 0))
-        return out
+        if _believable(quota_observed_at, now, policy):
+            out.update(failures=0, retry_at=None, last_authoritative_via="live-adapter",
+                       last_authoritative_at=max(quota_observed_at, state.get("last_authoritative_at") or 0))
+            return out
+        # The call succeeded but no provider-stated quota came with it (or its
+        # timestamp is impossible). That is not freshness: it is a failed look.
+        outcome = "no_quota_observed"
+    out["last_error"] = outcome
     failures = state.get("failures", 0) + 1
     back = policy["backoff"]
     delay = min(back["base"] * back["factor"] ** (failures - 1), back["max"])
@@ -185,14 +228,25 @@ def expire_in_flight(state, now, policy=None):
     """A refresh that never reported back is a timeout, not a free retry."""
     policy = policy or DEFAULT_POLICY
     flight = state.get("in_flight")
-    if flight and now - flight["started_at"] >= policy["timeout"] + policy["in_flight_grace"]:
-        return finished(state, "timeout", now, policy)
+    if flight:
+        deadline = flight["started_at"] + policy["timeout"] + policy["in_flight_grace"]
+        if now >= deadline:
+            # Back off from when it timed out, not from when somebody noticed:
+            # a coordinator that slept for an hour has already served the wait.
+            return finished(state, "timeout", deadline, policy)
     return state
 
 
-def observed_quota(state, quota_observed_at, via):
+def _believable(observed_at, now, policy):
+    return (type(observed_at) in (int, float) and math.isfinite(observed_at)
+            and observed_at <= now + policy["max_clock_skew"])
+
+
+def observed_quota(state, quota_observed_at, via, now, policy=None):
     """Provider-stated quota arrived without us asking (capture saw the client's
     own call, or the transitional scheduled producer wrote it)."""
+    if not _believable(quota_observed_at, now, policy or DEFAULT_POLICY):
+        return state
     if state.get("last_authoritative_at") is not None and quota_observed_at <= state["last_authoritative_at"]:
         return state
     return dict(state, last_authoritative_at=quota_observed_at, last_authoritative_via=via)
@@ -230,6 +284,7 @@ def _receipt(state, ctx, policy, action, reason, tier_name, interval, age, used,
             "budget_used": used, "budget_max": policy["budget"]["max"],
             "manual_pending": manual_pending,
             "online": ctx.get("online"), "local_hour": local_hour(ctx),
+            "night_gate": night_gate(ctx),
             "user_idle_seconds": ctx.get("user_idle_seconds"),
             "dashboard_visible": ctx.get("dashboard_visible", False),
         },
