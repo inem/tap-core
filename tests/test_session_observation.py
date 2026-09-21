@@ -1,12 +1,16 @@
 import json
 import os
+from contextlib import contextmanager
 from pathlib import Path
 import shutil
 import tempfile
+import threading
 import unittest
+from unittest.mock import patch
 from tap_core.pack_store import PackStore, build_artifact
 from tap_core.session_observation import consume, SessionObservation
 from tap_core.packs import validate_manifest, PackError
+from tap_core.runtime import profile_lock
 from types import SimpleNamespace
 
 class SessionObservationTests(unittest.TestCase):
@@ -43,12 +47,46 @@ class SessionObservationTests(unittest.TestCase):
 
     def test_queue_size_and_header_bound(self):
         addon=SessionObservation()
-        addon.routes=(("https://fixture.example","/api/"),)
+        addon.routes=((self.m['id'],"https://fixture.example","/api/"),)
         req=SimpleNamespace(scheme='https',host='fixture.example',port=443,path='/api/x',headers={'cookie':'x'*65537})
         addon.requestheaders(SimpleNamespace(request=req));self.assertTrue(addon.pending.empty())
-        req.headers={'cookie':'synthetic'}
-        for _ in range(30):addon.requestheaders(SimpleNamespace(request=req))
-        self.assertEqual(addon.pending.qsize(),16)
+        for i in range(30):
+            req.headers={'cookie':'synthetic-%d' % i}
+            addon.requestheaders(SimpleNamespace(request=req))
+        self.assertEqual(addon.pending.qsize(),1)
+        self.assertEqual(addon.latest[(self.m['id'],'https://fixture.example')][2]['cookie'],'synthetic-29')
+
+    def test_slow_verification_does_not_hold_profile_mutation_lock(self):
+        entered=threading.Event(); release=threading.Event()
+        original=PackStore.verify
+
+        def blocked(store,*args,**kwargs):
+            entered.set()
+            self.assertTrue(release.wait(2))
+            return original(store,*args,**kwargs)
+
+        worker=threading.Thread(target=consume,args=(
+            self.profile,'https://fixture.example','/api/x',{'cookie':'synthetic'}))
+        with patch.object(PackStore,'verify',blocked):
+            worker.start();self.assertTrue(entered.wait(2))
+            with profile_lock(self.profile):
+                pass
+            release.set();worker.join(2)
+        self.assertFalse(worker.is_alive())
+
+    def test_disable_between_verification_and_publish_drops_observation(self):
+        target=self.profile/'state/packs/fixture.command/auth/fixture.example.cookie'
+        real_lock=profile_lock
+
+        @contextmanager
+        def disable_before_publish(root,*args,**kwargs):
+            self.store.disable(self.m['id'])
+            with real_lock(root,*args,**kwargs) as lock:
+                yield lock
+
+        with patch('tap_core.session_observation.profile_lock',disable_before_publish):
+            consume(self.profile,'https://fixture.example','/api/x',{'cookie':'synthetic'})
+        self.assertFalse(target.exists())
 
     def test_command_observer_coexists_with_bridge_without_expanding_origins(self):
         from tap_core.bridge import configuration, effective_configuration
