@@ -103,8 +103,14 @@ def tier(state, ctx, policy):
 
 
 def budget_used(state, now, policy):
+    return len(trim_attempts(state.get("attempts"), now, policy))
+
+
+def trim_attempts(attempts, now, policy):
+    """Keep only attempt times that still count toward the budget window."""
     since = now - policy["budget"]["window"]
-    return sum(1 for at in state.get("attempts") or [] if at > since)
+    return [at for at in (attempts or [])
+            if type(at) in (int, float) and math.isfinite(at) and at > since]
 
 
 def decide(state, ctx, policy=None):
@@ -191,14 +197,15 @@ def _overdue(receipt):
 
 
 # --- state transitions (pure: each returns a new state) -----------------------
-def started(state, receipt, now):
+def started(state, receipt, now, policy=None):
     if receipt.get("action") != REFRESH:
         raise ValueError("started() needs an approved refresh receipt, got %r" % receipt.get("reason"))
     if state.get("in_flight"):
         raise ValueError("a refresh is already in flight for this target")
+    policy = policy or DEFAULT_POLICY
     out = dict(state)
     out["in_flight"] = {"started_at": now, "decision_id": receipt["decision_id"]}
-    out["attempts"] = list(state.get("attempts") or []) + [now]
+    out["attempts"] = trim_attempts(list(state.get("attempts") or []) + [now], now, policy)
     if receipt["reason"] == "manual":
         out["manual_requested_at"] = None
     return out
