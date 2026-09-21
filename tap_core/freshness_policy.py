@@ -120,9 +120,10 @@ def decide(state, ctx, policy=None):
     manual = state.get("manual_requested_at")
     manual_pending = manual is not None and (seen is None or manual > seen)
     flight = state.get("in_flight")
+    started_at = _flight_started_at(flight, now) if flight else None
     stale_flight = False
-    if flight:
-        stale_flight = now - flight["started_at"] >= policy["timeout"] + policy["in_flight_grace"]
+    if flight and started_at is not None:
+        stale_flight = now - started_at >= policy["timeout"] + policy["in_flight_grace"]
 
     def verdict(action, reason, next_at=None):
         return _receipt(state, ctx, policy, action, reason, name, interval, age, used,
@@ -136,8 +137,10 @@ def decide(state, ctx, policy=None):
         # and a failure that never reached the backoff. Settle first (advance()).
         return verdict(SKIP, "stale_in_flight", now)
     if flight:
+        if started_at is None:
+            return verdict(SKIP, "in_flight", now)
         return verdict(SKIP, "in_flight",
-                       flight["started_at"] + policy["timeout"] + policy["in_flight_grace"])
+                       started_at + policy["timeout"] + policy["in_flight_grace"])
     if ctx.get("online") is False:
         return verdict(SKIP, "offline")
     if state.get("retry_at") is not None and now < state["retry_at"]:
@@ -230,13 +233,29 @@ def expire_in_flight(state, now, policy=None):
     """A refresh that never reported back is a timeout, not a free retry."""
     policy = policy or DEFAULT_POLICY
     flight = state.get("in_flight")
-    if flight:
-        deadline = flight["started_at"] + policy["timeout"] + policy["in_flight_grace"]
-        if now >= deadline:
-            # Back off from when it timed out, not from when somebody noticed:
-            # a coordinator that slept for an hour has already served the wait.
-            return finished(state, "timeout", deadline, policy)
+    if not flight:
+        return state
+    started_at = _flight_started_at(flight, now)
+    if started_at is None:
+        return finished(state, "timeout", now, policy)
+    deadline = started_at + policy["timeout"] + policy["in_flight_grace"]
+    if now >= deadline:
+        # Back off from when it timed out, not from when somebody noticed:
+        # a coordinator that slept for an hour has already served the wait.
+        return finished(state, "timeout", deadline, policy)
     return state
+
+
+def _flight_started_at(flight, now):
+    """Numeric start in the past, or None when the flight record is unusable."""
+    if not isinstance(flight, dict):
+        return None
+    started = flight.get("started_at")
+    if type(started) not in (int, float) or not math.isfinite(started):
+        return None
+    if started > now:
+        return None
+    return started
 
 
 def _believable(observed_at, now, policy):
