@@ -252,6 +252,56 @@ class ObservationTests(unittest.TestCase):
         self.assertTrue(result["healthy"])
         self.assertEqual(result["inspection_errors"], {})
 
+    def doctor_bridge_snapshot(self):
+        return {
+            "profile": str(self.profile.root), "routing": "explicit", "port": 18999,
+            "service_loaded": True, "pid": 123, "port_owned": True, "port_open": True,
+            "network_recovery_pending": False, "system_proxy_verified": "not_used",
+            "active_system_proxy_verified": "not_used", "inspection_errors": {},
+            "capture": {"available": True, "current_process": True, "healthy": True},
+            "bridge": {"configured": True, "enabled": True, "healthy": True,
+                       "hub_liveness": "not_checked", "control_liveness": "not_checked"},
+            "components": {"configured": True, "healthy": True, "hub_pid": 4321},
+            "background": {"registered": True, "quarantined": []},
+            "diagnostics": {"inspection_errors_present": False,
+                            "background_quarantine_present": False,
+                            "background_verify_failure_present": False},
+        }
+
+    def test_doctor_requires_bounded_hub_and_control_router_probes(self):
+        self.profile.bridge = {"hub_port": 19002}
+        adapter = self.adapter()
+        with patch("tap_core.cli.status", return_value=self.doctor_bridge_snapshot()), \
+                patch("tap_core.components.hub_health", return_value={"pid": 4321}), \
+                patch("tap_core.components.control_health", return_value={"pages": []}):
+            result = doctor(self.profile, adapter)
+        self.assertEqual(result["bridge"]["hub_liveness"], "live")
+        self.assertEqual(result["bridge"]["control_liveness"], "live")
+        self.assertTrue(result["healthy"])
+
+    def test_healthy_snapshot_with_dead_hub_is_not_healthy(self):
+        self.profile.bridge = {"hub_port": 19002}
+        with patch("tap_core.cli.status", return_value=self.doctor_bridge_snapshot()), \
+                patch("tap_core.components.hub_health", side_effect=OSError("connection refused")), \
+                patch("tap_core.components.control_health") as control:
+            result = doctor(self.profile, self.adapter())
+        self.assertEqual(result["bridge"]["hub_liveness"], "failed")
+        self.assertEqual(result["bridge"]["control_liveness"], "blocked")
+        self.assertIn("connection refused", result["bridge"]["liveness_error"])
+        self.assertFalse(result["healthy"])
+        control.assert_not_called()
+
+    def test_live_hub_with_dead_control_router_is_not_healthy(self):
+        self.profile.bridge = {"hub_port": 19002}
+        with patch("tap_core.cli.status", return_value=self.doctor_bridge_snapshot()), \
+                patch("tap_core.components.hub_health", return_value={"pid": 4321}), \
+                patch("tap_core.components.control_health", side_effect=OSError("router timeout")):
+            result = doctor(self.profile, self.adapter())
+        self.assertEqual(result["bridge"]["hub_liveness"], "live")
+        self.assertEqual(result["bridge"]["control_liveness"], "failed")
+        self.assertIn("router timeout", result["bridge"]["liveness_error"])
+        self.assertFalse(result["healthy"])
+
     def test_doctor_prints_absolute_finish_setup_when_ca_grant_missing(self):
         import base64
         import hashlib

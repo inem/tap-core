@@ -176,7 +176,35 @@ def bridge_status(profile, adapter):
                and state['enabled'] is effective['enabled'])
     return {"configured": True, "healthy": healthy, "enabled": effective['enabled'],
             "hub_port": effective['hub_port'], "applies": "startup snapshot",
-            "hub_liveness": "not_checked"}
+            "hub_liveness": "not_checked", "control_liveness": "not_checked"}
+
+
+def doctor_bridge_liveness(profile, result):
+    bridge = result.get("bridge")
+    if (not isinstance(bridge, dict) or bridge.get("configured") is not True
+            or bridge.get("enabled") is not True):
+        return
+    from .components import control_health, hub_health
+    bridge = dict(bridge)
+    result["bridge"] = bridge
+    try:
+        observed = hub_health(profile)
+        expected_pid = (result.get("components") or {}).get("hub_pid")
+        if type(expected_pid) is int and observed["pid"] != expected_pid:
+            raise TapError(f"Hub PID mismatch: expected {expected_pid}, observed {observed['pid']}")
+        bridge["hub_liveness"] = "live"
+        bridge["hub_pid"] = observed["pid"]
+    except (OSError, TapError) as error:
+        bridge["hub_liveness"] = "failed"
+        bridge["control_liveness"] = "blocked"
+        bridge["liveness_error"] = str(error)
+        return
+    try:
+        control_health(profile)
+        bridge["control_liveness"] = "live"
+    except (OSError, TapError) as error:
+        bridge["control_liveness"] = "failed"
+        bridge["liveness_error"] = str(error)
 
 
 def status(profile, adapter):
@@ -229,6 +257,7 @@ def status(profile, adapter):
 
 def doctor(profile, adapter):
     result = status(profile, adapter)
+    doctor_bridge_liveness(profile, result)
     try:
         result["backend_version"] = adapter.backend_version(profile)
     except TapError as error:
@@ -260,9 +289,13 @@ def doctor(profile, adapter):
             result["traffic_probe"] = select_routing(profile, adapter).probe()
         except TapError as error:
             result["inspection_errors"]["traffic_probe"] = str(error)
+    bridge = result.get("bridge") if isinstance(result.get("bridge"), dict) else {}
+    bridge_live = (bridge.get("enabled") is not True
+                   or (bridge.get("hub_liveness") == "live"
+                       and bridge.get("control_liveness") == "live"))
     result["healthy"] = bool("backend_error" not in result and not result["inspection_errors"] and result["port_owned"]
                          and result["capture"]["healthy"] and result["traffic_probe"] and result["bridge"]["healthy"]
-                         and result['components']['healthy']
+                         and bridge_live and result['components']['healthy']
                          and (result["system_proxy_verified"] == "not_used" or result["system_proxy_verified"] is True))
     return result
 

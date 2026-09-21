@@ -112,10 +112,15 @@ under the existing #9 contract; configuring a binding does not reset progress.
 Profiles without `components` keep their previous externally managed Hub behavior.
 
 `status` exposes component PID, observation age/configuration match, Hub PID,
-and reader phases/progress/errors. Its control-plane health covers the owned
-controller and required Hub; reader outcomes are separate workload observations.
-`doctor` checks Hub health
-through its private endpoint as well as the proxy, capture and routing. `where`
+and reader phases/progress/errors. Its `control ready` state covers the owned
+controller and required Hub, and is rendered as `controller + Hub live`; it does
+not claim that the command-router endpoint was probed. Reader outcomes are
+separate workload observations.
+`doctor` checks Hub health through its private `/health` endpoint, verifies the
+observed Hub PID against the controller snapshot, and separately calls the
+private `/v1/pages` control-router endpoint. Both calls are authenticated and
+bounded to one second. A healthy startup snapshot cannot hide a dead Hub or
+router. These checks are in addition to the proxy, capture and routing. `where`
 includes both launch agent paths and component/handler logs. An absent, stale,
 failed or hung Hub cannot become healthy just because injection is loaded.
 

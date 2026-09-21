@@ -2,7 +2,7 @@
   "schema": "tap.internal-status-material-fragment/v2",
   "id": "bridge",
   "observations": {
-    "bridge": ["configured","enabled","healthy","hub_liveness"]
+    "bridge": ["configured","enabled","healthy","hub_liveness","control_liveness"]
   },
   "semantic_rules": [
     {
@@ -11,7 +11,8 @@
         ["observation","bridge","configured","$_","$_"],
         ["observation","bridge","enabled","$_","$_"],
         ["observation","bridge","healthy","$_","$_"],
-        ["observation","bridge","hub_liveness","$_","$_"]
+        ["observation","bridge","hub_liveness","$_","$_"],
+        ["observation","bridge","control_liveness","$_","$_"]
       ],
       "emit": [["candidate","bridge","state","unknown",0,"inconsistent_bridge_observations",[]]]
     },
@@ -21,7 +22,8 @@
         ["observation","bridge","configured","known",false],
         ["observation","bridge","enabled","unknown","not_observed"],
         ["observation","bridge","healthy","known",true],
-        ["observation","bridge","hub_liveness","unknown","not_observed"]
+        ["observation","bridge","hub_liveness","unknown","not_observed"],
+        ["observation","bridge","control_liveness","unknown","not_observed"]
       ],
       "emit": [["candidate","bridge","state","absent",100,"bridge_not_configured",[]]]
     },
@@ -31,7 +33,8 @@
         ["observation","bridge","configured","known",true],
         ["observation","bridge","enabled","known",false],
         ["observation","bridge","healthy","known",true],
-        ["observation","bridge","hub_liveness","known","not_checked"]
+        ["observation","bridge","hub_liveness","known","not_checked"],
+        ["observation","bridge","control_liveness","known","not_checked"]
       ],
       "emit": [["candidate","bridge","state","disabled",100,"disabled_snapshot_applied",[]]]
     },
@@ -41,7 +44,8 @@
         ["observation","bridge","configured","known",true],
         ["observation","bridge","enabled","known",true],
         ["observation","bridge","healthy","known",true],
-        ["observation","bridge","hub_liveness","known","not_checked"]
+        ["observation","bridge","hub_liveness","known","not_checked"],
+        ["observation","bridge","control_liveness","known","not_checked"]
       ],
       "emit": [["candidate","bridge","state","applied",100,"enabled_snapshot_applied_hub_unchecked",[]]]
     },
@@ -51,7 +55,8 @@
         ["observation","bridge","configured","known",true],
         ["observation","bridge","enabled","known",true],
         ["observation","bridge","healthy","known",false],
-        ["observation","bridge","hub_liveness","known","not_checked"]
+        ["observation","bridge","hub_liveness","$_","$_"],
+        ["observation","bridge","control_liveness","$_","$_"]
       ],
       "emit": [["candidate","bridge","state","unapplied",100,"startup_snapshot_not_applied",[]]]
     },
@@ -61,7 +66,8 @@
         ["observation","bridge","configured","known",true],
         ["observation","bridge","enabled","known",false],
         ["observation","bridge","healthy","known",false],
-        ["observation","bridge","hub_liveness","known","not_checked"]
+        ["observation","bridge","hub_liveness","$_","$_"],
+        ["observation","bridge","control_liveness","$_","$_"]
       ],
       "emit": [["candidate","bridge","state","unapplied",100,"startup_snapshot_not_applied",[]]]
     },
@@ -71,7 +77,8 @@
         ["observation","bridge","configured","unknown","$_"],
         ["observation","bridge","enabled","$_","$_"],
         ["observation","bridge","healthy","$_","$_"],
-        ["observation","bridge","hub_liveness","$_","$_"]
+        ["observation","bridge","hub_liveness","$_","$_"],
+        ["observation","bridge","control_liveness","$_","$_"]
       ],
       "emit": [["candidate","bridge","state","unknown",200,"inspection_incomplete",[]]]
     },
@@ -81,6 +88,51 @@
         ["observation","bridge","healthy","unknown","$_"],
         ["observation","bridge","configured","$_","$_"],
         ["observation","bridge","enabled","$_","$_"],
+        ["observation","bridge","hub_liveness","$_","$_"],
+        ["observation","bridge","control_liveness","$_","$_"]
+      ],
+      "emit": [["candidate","bridge","state","unknown",200,"inspection_incomplete",[]]]
+    },
+    {
+      "id": "bridge-31-control-live",
+      "when": [
+        ["observation","bridge","configured","known",true],
+        ["observation","bridge","enabled","known",true],
+        ["observation","bridge","healthy","known",true],
+        ["observation","bridge","hub_liveness","known","live"],
+        ["observation","bridge","control_liveness","known","live"]
+      ],
+      "emit": [["candidate","bridge","state","control-live",110,"hub_and_control_probe_passed",[]]]
+    },
+    {
+      "id": "bridge-32-hub-failed",
+      "when": [
+        ["observation","bridge","configured","known",true],
+        ["observation","bridge","enabled","known",true],
+        ["observation","bridge","healthy","known",true],
+        ["observation","bridge","hub_liveness","known","failed"],
+        ["observation","bridge","control_liveness","known","blocked"]
+      ],
+      "emit": [["candidate","bridge","state","control-unavailable",110,"hub_probe_failed",[]]]
+    },
+    {
+      "id": "bridge-33-control-failed",
+      "when": [
+        ["observation","bridge","configured","known",true],
+        ["observation","bridge","enabled","known",true],
+        ["observation","bridge","healthy","known",true],
+        ["observation","bridge","hub_liveness","known","live"],
+        ["observation","bridge","control_liveness","known","failed"]
+      ],
+      "emit": [["candidate","bridge","state","control-unavailable",110,"control_probe_failed",[]]]
+    },
+    {
+      "id": "bridge-92-inspection-control",
+      "when": [
+        ["observation","bridge","control_liveness","unknown","inspection_failed"],
+        ["observation","bridge","configured","$_","$_"],
+        ["observation","bridge","enabled","$_","$_"],
+        ["observation","bridge","healthy","$_","$_"],
         ["observation","bridge","hub_liveness","$_","$_"]
       ],
       "emit": [["candidate","bridge","state","unknown",200,"inspection_incomplete",[]]]
@@ -124,6 +176,32 @@
         ["slot","bridge-attachment","bridge-line",3,"group","support",true,"",null,[["meaning","bridge","state","applied","$reason","$attrs"]]],
         ["slot","bridge-separator","bridge-attachment",0,"leaf","separator",false," · ",null,[["meaning","bridge","state","applied","$reason","$attrs"]]],
         ["slot","bridge-detail","bridge-attachment",1,"leaf","detail",false,"enabled, hub unchecked",null,[["meaning","bridge","state","applied","$reason","$attrs"]]]
+      ]
+    },
+    {
+      "id": "presentation-bridge-21-control-live",
+      "when": [["meaning","bridge","state","control-live","$reason","$attrs"]],
+      "emit": [
+        ["slot","bridge-line","status",3,"group","line",false,"",null,[["meaning","bridge","state","control-live","$reason","$attrs"]]],
+        ["slot","bridge-label","bridge-line",0,"leaf","label",false,"bridge        ",null,[["meaning","bridge","state","control-live","$reason","$attrs"]]],
+        ["slot","bridge-indicator","bridge-line",1,"leaf","indicator",false,"● ","positive",[["meaning","bridge","state","control-live","$reason","$attrs"]]],
+        ["slot","bridge-value","bridge-line",2,"leaf","value",false,"control live","positive",[["meaning","bridge","state","control-live","$reason","$attrs"]]],
+        ["slot","bridge-attachment","bridge-line",3,"group","support",true,"",null,[["meaning","bridge","state","control-live","$reason","$attrs"]]],
+        ["slot","bridge-separator","bridge-attachment",0,"leaf","separator",false," · ",null,[["meaning","bridge","state","control-live","$reason","$attrs"]]],
+        ["slot","bridge-detail","bridge-attachment",1,"leaf","detail",false,"Hub + router probed",null,[["meaning","bridge","state","control-live","$reason","$attrs"]]]
+      ]
+    },
+    {
+      "id": "presentation-bridge-22-control-unavailable",
+      "when": [["meaning","bridge","state","control-unavailable","$reason","$attrs"]],
+      "emit": [
+        ["slot","bridge-line","status",3,"group","line",false,"",null,[["meaning","bridge","state","control-unavailable","$reason","$attrs"]]],
+        ["slot","bridge-label","bridge-line",0,"leaf","label",false,"bridge        ",null,[["meaning","bridge","state","control-unavailable","$reason","$attrs"]]],
+        ["slot","bridge-indicator","bridge-line",1,"leaf","indicator",false,"✗ ","negative",[["meaning","bridge","state","control-unavailable","$reason","$attrs"]]],
+        ["slot","bridge-value","bridge-line",2,"leaf","value",false,"control unavailable","negative",[["meaning","bridge","state","control-unavailable","$reason","$attrs"]]],
+        ["slot","bridge-attachment","bridge-line",3,"group","support",true,"",null,[["meaning","bridge","state","control-unavailable","$reason","$attrs"]]],
+        ["slot","bridge-separator","bridge-attachment",0,"leaf","separator",false," · ",null,[["meaning","bridge","state","control-unavailable","$reason","$attrs"]]],
+        ["slot","bridge-detail","bridge-attachment",1,"leaf","detail",false,"snapshot applied; live probe failed",null,[["meaning","bridge","state","control-unavailable","$reason","$attrs"]]]
       ]
     },
     {

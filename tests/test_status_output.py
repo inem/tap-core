@@ -149,14 +149,23 @@ class StatusContractTests(unittest.TestCase):
             ({"configured": False, "healthy": True},
              ("absent", "bridge_not_configured")),
             ({"configured": True, "enabled": False, "healthy": True,
-              "hub_liveness": "not_checked"},
+              "hub_liveness": "not_checked", "control_liveness": "not_checked"},
              ("disabled", "disabled_snapshot_applied")),
             ({"configured": True, "enabled": True, "healthy": True,
-              "hub_liveness": "not_checked"},
+              "hub_liveness": "not_checked", "control_liveness": "not_checked"},
              ("applied", "enabled_snapshot_applied_hub_unchecked")),
             ({"configured": True, "enabled": True, "healthy": False,
-              "hub_liveness": "not_checked"},
+              "hub_liveness": "not_checked", "control_liveness": "not_checked"},
              ("drifted", "running_runtime_snapshot_mismatch")),
+            ({"configured": True, "enabled": True, "healthy": True,
+              "hub_liveness": "live", "control_liveness": "live"},
+             ("control-live", "hub_and_control_probe_passed")),
+            ({"configured": True, "enabled": True, "healthy": True,
+              "hub_liveness": "failed", "control_liveness": "blocked"},
+             ("control-unavailable", "hub_probe_failed")),
+            ({"configured": True, "enabled": True, "healthy": True,
+              "hub_liveness": "live", "control_liveness": "failed"},
+             ("control-unavailable", "control_probe_failed")),
             ({"configured": False, "healthy": False},
              ("unknown", "inconsistent_bridge_observations")),
         ]
@@ -170,14 +179,14 @@ class StatusContractTests(unittest.TestCase):
 
     def test_bridge_meaning_preserves_snapshot_scope_and_unchecked_liveness(self):
         bridge = {"configured": True, "enabled": True, "healthy": True,
-                  "hub_liveness": "not_checked"}
+                  "hub_liveness": "not_checked", "control_liveness": "not_checked"}
         projection = project_status(public_status_result(snapshot(bridge=bridge)))
         meaning = next(atom for atom in projection.meanings if atom.arguments[0] == "bridge")
         self.assertEqual(meaning.arguments[2], "applied")
         candidate = projection.provenance[meaning].warrants[0]
         warrants = projection.provenance[candidate].warrants
         self.assertEqual({atom.arguments[1] for atom in warrants},
-                         {"configured", "enabled", "healthy", "hub_liveness"})
+                         {"configured", "enabled", "healthy", "hub_liveness", "control_liveness"})
         self.assertIn("hub unchecked", render_terminal(projection.document))
 
     def test_component_controller_state_matrix(self):
@@ -190,7 +199,7 @@ class StatusContractTests(unittest.TestCase):
              ("inactive", "controller_observation_absent")),
             (dict(ready, healthy=False, phase="starting"),
              ("starting", "controller_starting")),
-            (ready, ("ready", "page_control_plane_healthy")),
+            (ready, ("ready", "controller_and_hub_live")),
             (dict(ready, healthy=False),
              ("degraded", "page_control_plane_unhealthy")),
             (dict(ready, healthy=False, current_process=False),
@@ -237,7 +246,7 @@ class StatusContractTests(unittest.TestCase):
 
     def test_unapplied_bridge_is_refined_by_runtime_before_presentation(self):
         bridge = {"configured": True, "enabled": True, "healthy": False,
-                  "hub_liveness": "not_checked"}
+                  "hub_liveness": "not_checked", "control_liveness": "not_checked"}
         cases = [
             ({}, ("drifted", "running_runtime_snapshot_mismatch")),
             ({"service_loaded": False, "pid": None, "port_owned": False,

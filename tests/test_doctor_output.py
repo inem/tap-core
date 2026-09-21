@@ -76,7 +76,7 @@ class DoctorOutputTests(unittest.TestCase):
         value = report(healthy=False, system_proxy_verified=False,
                        bridge={"configured": True, "enabled": True, "healthy": True,
                                "hub_port": 19002, "applies": "startup snapshot",
-                               "hub_liveness": "not_checked"},
+                               "hub_liveness": "not_checked", "control_liveness": "not_checked"},
                        background={"registered": True, "quarantined": ["tap.intake"],
                                    "verify_failures": {
                                        "tap.intake": {"version": "0.7.8",
@@ -92,6 +92,21 @@ class DoctorOutputTests(unittest.TestCase):
         self.assertIn("bridge: Hub/control liveness was not checked", output)
         self.assertIn("background: quarantined packs: tap.intake", output)
         self.assertIn("pack integrity: quarantined after verify failures: tap.intake@0.7.8", output)
+
+    def test_dead_hub_and_router_are_explicit_actionable_reasons(self):
+        value = report(
+            healthy=False,
+            bridge={"configured": True, "enabled": True, "healthy": True,
+                    "hub_liveness": "failed", "control_liveness": "blocked",
+                    "liveness_error": "connection refused"},
+            components={"configured": True, "healthy": False,
+                        "error": "Hub unavailable or hung"})
+        code, output, error = self.invoke(value)
+        self.assertEqual((code, error), (1, ""))
+        self.assertIn("bridge        ✗ control unavailable", output)
+        self.assertIn("Hub liveness probe failed: connection refused", output)
+        self.assertIn("inspect components.log and use off/on", output)
+        self.assertIn("control: managed component control plane is not healthy: Hub unavailable or hung", output)
 
     def test_unknown_observations_are_called_unknown_not_healthy(self):
         value = report(healthy=False, port_open=None, system_proxy_verified=None,
