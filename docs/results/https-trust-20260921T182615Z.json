@@ -1,0 +1,27 @@
+{
+  "checked_at": "2026-09-21T18:26:15Z",
+  "source_commit": "dc966d6",
+  "live_runtime_commit": "c412122688905c20040783e7c9d7f93d1859fe93",
+  "host": {
+    "macos": "15.6.1",
+    "architecture": "arm64"
+  },
+  "profile": "/Users/inem/.local/share/tap-core-linkedin/profile",
+  "proxy": "http://127.0.0.1:18999",
+  "probe_url": "https://example.com/",
+  "traffic_probe": true,
+  "profile_ca_verified": true,
+  "system_curl_trust_verified": true,
+  "profile_ca_common_name": "mitmproxy",
+  "peer_issuer_common_name": "mitmproxy",
+  "ca_trust": "verified_live",
+  "ca_trust_grant_recorded": false,
+  "browser_trust": {
+    "status": "separate_acceptance_passed",
+    "evidence": "docs/results/migration-lifecycle-20260921T180934Z.json",
+    "note": "Browser trust is not inferred from the curl probes."
+  },
+  "doctor_healthy": true,
+  "remediation": "open /Users/inem/.local/share/tap-core-linkedin/profile/certificates/mitmproxy-ca-cert.pem",
+  "success": true
+}

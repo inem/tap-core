@@ -20,6 +20,10 @@ def report(**changes):
         "backend_version": "12.2.3", "ca_file_present": True,
         "ca_trust": "not_verified; HTTPS clients must trust this profile CA explicitly",
         "sudoers": {"ready": True, "next": None}, "traffic_probe": True,
+        "https_decryption": {"probe_url": "https://example.com/",
+                             "profile_ca_verified": True,
+                             "system_trust_verified": True,
+                             "browser_trust": "not_checked; browser trust is separate from curl"},
         "healthy": True,
     }
     value.update(changes)
@@ -49,11 +53,22 @@ class DoctorOutputTests(unittest.TestCase):
         self.assertEqual((code, error), (0, ""))
         self.assertIn("doctor         ● healthy", output)
         self.assertIn("  traffic      ● probe passed", output)
+        self.assertIn("  HTTPS decrypt ● profile CA verified", output)
+        self.assertIn("  curl trust   ● default trust verified", output)
         self.assertIn("? not verified", output)
         self.assertNotIn('"profile":', output)
         code, raw, error = self.invoke(value, "--output", "raw-json")
         self.assertEqual((code, error), (0, ""))
         self.assertEqual(raw, json.dumps(value, indent=2) + "\n")
+
+    def test_live_https_verification_overrides_missing_grant_metadata(self):
+        value = report(ca_trust=("verified_live; profile-CA decryption and default "
+                                "/usr/bin/curl trust passed; finish-setup grant record absent"),
+                       ca_trust_grant_recorded=False)
+        code, output, error = self.invoke(value)
+        self.assertEqual((code, error), (0, ""))
+        self.assertIn("CA trust     ● verified live", output)
+        self.assertIn("CA provenance: live trust may pass, but no owned finish-setup grant is recorded", output)
 
     def test_failure_keeps_exit_code_and_shows_errors_and_next_once(self):
         value = report(healthy=False, backend_error="backend missing",
@@ -107,6 +122,19 @@ class DoctorOutputTests(unittest.TestCase):
         self.assertIn("Hub liveness probe failed: connection refused", output)
         self.assertIn("inspect components.log and use off/on", output)
         self.assertIn("control: managed component control plane is not healthy: Hub unavailable or hung", output)
+
+    def test_https_decryption_and_default_trust_failures_are_actionable(self):
+        value = report(healthy=False, https_decryption={
+            "profile_ca_verified": True, "system_trust_verified": False,
+            "system_trust_error": "SSL certificate problem",
+            "browser_trust": "not_checked; browser trust is separate from curl"},
+            next=["/owned/checkout/instll/finish-setup"])
+        code, output, error = self.invoke(value)
+        self.assertEqual((code, error), (1, ""))
+        self.assertIn("HTTPS decrypt ● profile CA verified", output)
+        self.assertIn("curl trust   ✗ default trust failed", output)
+        self.assertIn("curl trust: default trust probe failed: SSL certificate problem", output)
+        self.assertIn("/owned/checkout/instll/finish-setup", output)
 
     def test_unknown_observations_are_called_unknown_not_healthy(self):
         value = report(healthy=False, port_open=None, system_proxy_verified=None,

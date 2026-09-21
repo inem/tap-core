@@ -266,6 +266,7 @@ def doctor(profile, adapter):
     install_root = install_root_for_profile(profile)
     setup = finish_setup_command(install_root) if install_root is not None else None
     ca_granted = bool(install_root and ca_grant_recorded(install_root, profile))
+    result["ca_trust_grant_recorded"] = ca_granted
     if ca_granted:
         result["ca_trust"] = "granted; finish-setup recorded System keychain trust for this profile CA"
     else:
@@ -278,17 +279,50 @@ def doctor(profile, adapter):
             result["inspection_errors"]["sudoers"] = (
                 "system routing needs finish-setup (sudoers + CA trust); "
                 "run the finish-setup from this installation's checkout")
-    need_setup = bool(setup and (not ca_granted or (profile.routing == "system"
-                                                     and not result.get("sudoers", {}).get("ready"))))
-    next_lines = next_shell_commands(profile, setup=setup if need_setup else None)
-    if next_lines:
-        result["next"] = next_lines
     result["traffic_probe"] = None
+    result["https_decryption"] = {
+        "probe_url": "https://example.com/",
+        "profile_ca_verified": "not_checked",
+        "system_trust_verified": "not_checked",
+        "reason": "proxy_not_owned",
+        "browser_trust": "not_checked; browser trust is separate from curl",
+    }
     if result["port_owned"] is True:
         try:
             result["traffic_probe"] = select_routing(profile, adapter).probe()
         except TapError as error:
             result["inspection_errors"]["traffic_probe"] = str(error)
+        try:
+            result["https_decryption"] = adapter.https_decryption(profile)
+        except (OSError, TapError) as error:
+            result["inspection_errors"]["https_decryption"] = str(error)
+            result["https_decryption"] = {
+                "probe_url": "https://example.com/",
+                "profile_ca_verified": None,
+                "system_trust_verified": None,
+                "error": str(error),
+                "browser_trust": "not_checked; browser trust is separate from curl",
+            }
+    https = result["https_decryption"]
+    https_ready = (https.get("profile_ca_verified") is True
+                   and https.get("system_trust_verified") is True)
+    if https_ready:
+        result["ca_trust"] = ("verified_live; profile-CA decryption and default /usr/bin/curl trust passed"
+                              + ("; finish-setup grant recorded" if ca_granted else
+                                 "; finish-setup grant record absent"))
+    elif https.get("profile_ca_verified") is True:
+        result["ca_trust"] = "not_verified; profile decrypts HTTPS but default /usr/bin/curl does not trust its CA"
+    elif https.get("profile_ca_verified") is False:
+        result["ca_trust"] = "not_verified; profile-CA HTTPS decryption probe failed"
+    need_setup = bool(setup and (not ca_granted or not https_ready
+                                or (profile.routing == "system"
+                                    and not result.get("sudoers", {}).get("ready"))))
+    next_lines = next_shell_commands(profile, setup=setup if need_setup else None)
+    if (not next_lines and not ca_granted and result["ca_file_present"] is True):
+        ca_path = profile.root / "certificates/mitmproxy-ca-cert.pem"
+        next_lines = ["open " + shlex.quote(str(ca_path))]
+    if next_lines:
+        result["next"] = next_lines
     bridge = result.get("bridge") if isinstance(result.get("bridge"), dict) else {}
     bridge_live = (bridge.get("enabled") is not True
                    or (bridge.get("hub_liveness") == "live"
@@ -296,6 +330,7 @@ def doctor(profile, adapter):
     result["healthy"] = bool("backend_error" not in result and not result["inspection_errors"] and result["port_owned"]
                          and result["capture"]["healthy"] and result["traffic_probe"] and result["bridge"]["healthy"]
                          and bridge_live and result['components']['healthy']
+                         and https_ready
                          and (result["system_proxy_verified"] == "not_used" or result["system_proxy_verified"] is True))
     return result
 
