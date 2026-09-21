@@ -22,7 +22,12 @@
       "configured": false,
       "healthy": true
     },
-    "active_system_proxy_verified": "not_used"
+    "active_system_proxy_verified": "not_used",
+    "diagnostics": {
+      "inspection_errors_present": false,
+      "background_quarantine_present": false,
+      "background_verify_failure_present": false
+    }
   },
   "semantic_result": {
     "schema": "tap.status-result/v4",
@@ -125,6 +130,20 @@
         "knowledge": "unknown",
         "reason": "not_observed",
         "message": "observation was not supplied"
+      }
+    },
+    "diagnostics": {
+      "inspection_errors_present": {
+        "knowledge": "known",
+        "value": false
+      },
+      "background_quarantine_present": {
+        "knowledge": "known",
+        "value": false
+      },
+      "background_verify_failure_present": {
+        "knowledge": "known",
+        "value": false
       }
     },
     "component_readers": {

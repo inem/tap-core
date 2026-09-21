@@ -38,6 +38,14 @@ def snapshot(**changes):
     if "active_system_proxy_verified" not in changes:
         value["active_system_proxy_verified"] = (
             "not_used" if value["routing"] == "explicit" else value["system_proxy_verified"])
+    if "diagnostics" not in changes:
+        background = value.get("background") if isinstance(value.get("background"), dict) else {}
+        value["diagnostics"] = {
+            "inspection_errors_present": bool(value["inspection_errors"]),
+            "background_quarantine_present": bool(background.get("quarantined")),
+            "background_verify_failure_present": bool(background.get("verify_failures")
+                                                      or background.get("quarantined")),
+        }
     return value
 
 
@@ -301,6 +309,31 @@ class StatusContractTests(unittest.TestCase):
                              for atom in projection.meanings))
         self.assertEqual(render_terminal(projection.document).count("\n"), 4)
 
+    def test_operator_warnings_are_visible_without_expanding_the_clear_status(self):
+        clear = terminal_status(public_status_result(snapshot()))
+        self.assertNotIn("raw-json", clear)
+
+        inspection = terminal_status(public_status_result(snapshot(
+            port_open=None, inspection_errors={"port_open": "Operation not permitted"})))
+        self.assertIn("inspection errors", inspection)
+        self.assertIn("raw-json has details", inspection)
+
+        quarantine = terminal_status(public_status_result(snapshot(
+            background={"registered": True, "quarantined": ["tap.intake"]})))
+        self.assertIn("pack quarantined", quarantine)
+        self.assertIn("raw-json has details", quarantine)
+
+        verify_failure = terminal_status(public_status_result(snapshot(
+            background={"registered": True, "quarantined": [],
+                        "verify_failures": {"tap.intake": {"quarantined": False}}})))
+        self.assertIn("pack verification failed", verify_failure)
+
+        both = terminal_status(public_status_result(snapshot(
+            port_open=None, inspection_errors={"port_open": "denied"},
+            background={"registered": True, "quarantined": ["tap.intake"]})))
+        self.assertIn("status warnings", both)
+        self.assertIn("inspection errors + pack quarantine", both)
+
     def test_absent_field_is_not_observed_instead_of_known_null(self):
         raw = snapshot()
         del raw["port_owned"]
@@ -552,7 +585,7 @@ class MaterialCompositionTests(unittest.TestCase):
         self.assertEqual(material["id"], "tap-core.status-terminal-material/v1")
         self.assertEqual(material["input_schema"], "tap.status-result/v4")
         self.assertEqual(set(material["observations"]),
-                         {"runtime", "routing", "capture", "bridge", "components"})
+                         {"runtime", "routing", "capture", "bridge", "components", "diagnostics"})
         self.assertEqual(set(material["observation_collections"]), {"component_readers"})
         self.assertTrue(material["composition_rules"])
         self.assertEqual(material["document_root"], "status")

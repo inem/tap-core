@@ -1,0 +1,170 @@
+{
+  "schema": "tap.internal-status-material-fragment/v2",
+  "id": "diagnostics",
+  "observations": {
+    "diagnostics": ["inspection_errors_present","background_quarantine_present","background_verify_failure_present"]
+  },
+  "semantic_rules": [
+    {
+      "id": "diagnostics-00-fallback",
+      "when": [
+        ["observation","diagnostics","inspection_errors_present","$_","$_"],
+        ["observation","diagnostics","background_quarantine_present","$_","$_"],
+        ["observation","diagnostics","background_verify_failure_present","$_","$_"]
+      ],
+      "emit": [["candidate","diagnostics","state","unknown",0,"inconsistent_diagnostics",[]]]
+    },
+    {
+      "id": "diagnostics-10-clear",
+      "when": [
+        ["observation","diagnostics","inspection_errors_present","known",false],
+        ["observation","diagnostics","background_quarantine_present","known",false],
+        ["observation","diagnostics","background_verify_failure_present","known",false]
+      ],
+      "emit": [["candidate","diagnostics","state","clear",100,"no_operator_warnings",[]]]
+    },
+    {
+      "id": "diagnostics-20-inspection",
+      "when": [
+        ["observation","diagnostics","inspection_errors_present","known",true],
+        ["observation","diagnostics","background_quarantine_present","known",false],
+        ["observation","diagnostics","background_verify_failure_present","known",false]
+      ],
+      "emit": [["candidate","diagnostics","state","inspection-errors",100,"inspection_failed",[]]]
+    },
+    {
+      "id": "diagnostics-30-quarantine",
+      "when": [
+        ["observation","diagnostics","inspection_errors_present","known",false],
+        ["observation","diagnostics","background_quarantine_present","known",true],
+        ["observation","diagnostics","background_verify_failure_present","known",true]
+      ],
+      "emit": [["candidate","diagnostics","state","pack-quarantine",100,"background_verify_failure",[]]]
+    },
+    {
+      "id": "diagnostics-40-both",
+      "when": [
+        ["observation","diagnostics","inspection_errors_present","known",true],
+        ["observation","diagnostics","background_quarantine_present","known",true],
+        ["observation","diagnostics","background_verify_failure_present","known",true]
+      ],
+      "emit": [["candidate","diagnostics","state","warnings",100,"inspection_and_quarantine",[]]]
+    },
+    {
+      "id": "diagnostics-32-verification",
+      "when": [
+        ["observation","diagnostics","inspection_errors_present","known",false],
+        ["observation","diagnostics","background_quarantine_present","known",false],
+        ["observation","diagnostics","background_verify_failure_present","known",true]
+      ],
+      "emit": [["candidate","diagnostics","state","pack-verification",100,"background_verify_failure",[]]]
+    },
+    {
+      "id": "diagnostics-42-inspection-verification",
+      "when": [
+        ["observation","diagnostics","inspection_errors_present","known",true],
+        ["observation","diagnostics","background_quarantine_present","known",false],
+        ["observation","diagnostics","background_verify_failure_present","known",true]
+      ],
+      "emit": [["candidate","diagnostics","state","inspection-and-verification",100,"inspection_and_verify_failure",[]]]
+    },
+    {
+      "id": "diagnostics-90-unknown-inspection",
+      "when": [
+        ["observation","diagnostics","inspection_errors_present","unknown","$_"],
+        ["observation","diagnostics","background_quarantine_present","$_","$_"],
+        ["observation","diagnostics","background_verify_failure_present","$_","$_"]
+      ],
+      "emit": [["candidate","diagnostics","state","unknown",200,"inspection_incomplete",[]]]
+    },
+    {
+      "id": "diagnostics-91-unknown-quarantine",
+      "when": [
+        ["observation","diagnostics","background_quarantine_present","unknown","$_"],
+        ["observation","diagnostics","inspection_errors_present","$_","$_"],
+        ["observation","diagnostics","background_verify_failure_present","$_","$_"]
+      ],
+      "emit": [["candidate","diagnostics","state","unknown",200,"inspection_incomplete",[]]]
+    },
+    {
+      "id": "diagnostics-92-unknown-verification",
+      "when": [
+        ["observation","diagnostics","background_verify_failure_present","unknown","$_"],
+        ["observation","diagnostics","inspection_errors_present","$_","$_"],
+        ["observation","diagnostics","background_quarantine_present","$_","$_"]
+      ],
+      "emit": [["candidate","diagnostics","state","unknown",200,"inspection_incomplete",[]]]
+    }
+  ],
+  "presentation_rules": [
+    {
+      "id": "presentation-diagnostics-20-inspection",
+      "when": [["meaning","diagnostics","state","inspection-errors","$reason","$attrs"]],
+      "emit": [
+        ["slot","diagnostics-line","status",6,"group","line",false,"",null,[["meaning","diagnostics","state","inspection-errors","$reason","$attrs"]]],
+        ["slot","diagnostics-indicator","diagnostics-line",0,"leaf","indicator",false,"?  ","warning",[["meaning","diagnostics","state","inspection-errors","$reason","$attrs"]]],
+        ["slot","diagnostics-value","diagnostics-line",1,"leaf","value",false,"inspection errors","warning",[["meaning","diagnostics","state","inspection-errors","$reason","$attrs"]]],
+        ["slot","diagnostics-support","diagnostics-line",2,"group","support",true,"",null,[["meaning","diagnostics","state","inspection-errors","$reason","$attrs"]]],
+        ["slot","diagnostics-separator","diagnostics-support",0,"leaf","separator",false," · ",null,[["meaning","diagnostics","state","inspection-errors","$reason","$attrs"]]],
+        ["slot","diagnostics-detail","diagnostics-support",1,"leaf","detail",false,"raw-json has details",null,[["meaning","diagnostics","state","inspection-errors","$reason","$attrs"]]]
+      ]
+    },
+    {
+      "id": "presentation-diagnostics-30-quarantine",
+      "when": [["meaning","diagnostics","state","pack-quarantine","$reason","$attrs"]],
+      "emit": [
+        ["slot","diagnostics-line","status",6,"group","line",false,"",null,[["meaning","diagnostics","state","pack-quarantine","$reason","$attrs"]]],
+        ["slot","diagnostics-indicator","diagnostics-line",0,"leaf","indicator",false,"⚠  ","warning",[["meaning","diagnostics","state","pack-quarantine","$reason","$attrs"]]],
+        ["slot","diagnostics-value","diagnostics-line",1,"leaf","value",false,"pack quarantined","warning",[["meaning","diagnostics","state","pack-quarantine","$reason","$attrs"]]],
+        ["slot","diagnostics-support","diagnostics-line",2,"group","support",true,"",null,[["meaning","diagnostics","state","pack-quarantine","$reason","$attrs"]]],
+        ["slot","diagnostics-separator","diagnostics-support",0,"leaf","separator",false," · ",null,[["meaning","diagnostics","state","pack-quarantine","$reason","$attrs"]]],
+        ["slot","diagnostics-detail","diagnostics-support",1,"leaf","detail",false,"raw-json has details",null,[["meaning","diagnostics","state","pack-quarantine","$reason","$attrs"]]]
+      ]
+    },
+    {
+      "id": "presentation-diagnostics-32-verification",
+      "when": [["meaning","diagnostics","state","pack-verification","$reason","$attrs"]],
+      "emit": [
+        ["slot","diagnostics-line","status",6,"group","line",false,"",null,[["meaning","diagnostics","state","pack-verification","$reason","$attrs"]]],
+        ["slot","diagnostics-indicator","diagnostics-line",0,"leaf","indicator",false,"⚠  ","warning",[["meaning","diagnostics","state","pack-verification","$reason","$attrs"]]],
+        ["slot","diagnostics-value","diagnostics-line",1,"leaf","value",false,"pack verification failed","warning",[["meaning","diagnostics","state","pack-verification","$reason","$attrs"]]],
+        ["slot","diagnostics-support","diagnostics-line",2,"group","support",true,"",null,[["meaning","diagnostics","state","pack-verification","$reason","$attrs"]]],
+        ["slot","diagnostics-separator","diagnostics-support",0,"leaf","separator",false," · ",null,[["meaning","diagnostics","state","pack-verification","$reason","$attrs"]]],
+        ["slot","diagnostics-detail","diagnostics-support",1,"leaf","detail",false,"raw-json has details",null,[["meaning","diagnostics","state","pack-verification","$reason","$attrs"]]]
+      ]
+    },
+    {
+      "id": "presentation-diagnostics-40-both",
+      "when": [["meaning","diagnostics","state","warnings","$reason","$attrs"]],
+      "emit": [
+        ["slot","diagnostics-line","status",6,"group","line",false,"",null,[["meaning","diagnostics","state","warnings","$reason","$attrs"]]],
+        ["slot","diagnostics-indicator","diagnostics-line",0,"leaf","indicator",false,"⚠  ","warning",[["meaning","diagnostics","state","warnings","$reason","$attrs"]]],
+        ["slot","diagnostics-value","diagnostics-line",1,"leaf","value",false,"status warnings","warning",[["meaning","diagnostics","state","warnings","$reason","$attrs"]]],
+        ["slot","diagnostics-support","diagnostics-line",2,"group","support",true,"",null,[["meaning","diagnostics","state","warnings","$reason","$attrs"]]],
+        ["slot","diagnostics-separator","diagnostics-support",0,"leaf","separator",false," · ",null,[["meaning","diagnostics","state","warnings","$reason","$attrs"]]],
+        ["slot","diagnostics-detail","diagnostics-support",1,"leaf","detail",false,"inspection errors + pack quarantine; raw-json has details",null,[["meaning","diagnostics","state","warnings","$reason","$attrs"]]]
+      ]
+    },
+    {
+      "id": "presentation-diagnostics-42-inspection-verification",
+      "when": [["meaning","diagnostics","state","inspection-and-verification","$reason","$attrs"]],
+      "emit": [
+        ["slot","diagnostics-line","status",6,"group","line",false,"",null,[["meaning","diagnostics","state","inspection-and-verification","$reason","$attrs"]]],
+        ["slot","diagnostics-indicator","diagnostics-line",0,"leaf","indicator",false,"⚠  ","warning",[["meaning","diagnostics","state","inspection-and-verification","$reason","$attrs"]]],
+        ["slot","diagnostics-value","diagnostics-line",1,"leaf","value",false,"status warnings","warning",[["meaning","diagnostics","state","inspection-and-verification","$reason","$attrs"]]],
+        ["slot","diagnostics-support","diagnostics-line",2,"group","support",true,"",null,[["meaning","diagnostics","state","inspection-and-verification","$reason","$attrs"]]],
+        ["slot","diagnostics-separator","diagnostics-support",0,"leaf","separator",false," · ",null,[["meaning","diagnostics","state","inspection-and-verification","$reason","$attrs"]]],
+        ["slot","diagnostics-detail","diagnostics-support",1,"leaf","detail",false,"inspection errors + pack verification; raw-json has details",null,[["meaning","diagnostics","state","inspection-and-verification","$reason","$attrs"]]]
+      ]
+    },
+    {
+      "id": "presentation-diagnostics-90-unknown",
+      "when": [["meaning","diagnostics","state","unknown","$reason","$attrs"]],
+      "emit": [
+        ["slot","diagnostics-line","status",6,"group","line",false,"",null,[["meaning","diagnostics","state","unknown","$reason","$attrs"]]],
+        ["slot","diagnostics-indicator","diagnostics-line",0,"leaf","indicator",false,"?  ","warning",[["meaning","diagnostics","state","unknown","$reason","$attrs"]]],
+        ["slot","diagnostics-value","diagnostics-line",1,"leaf","value",false,"diagnostics unknown","warning",[["meaning","diagnostics","state","unknown","$reason","$attrs"]]]
+      ]
+    }
+  ]
+}
