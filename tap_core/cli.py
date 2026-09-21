@@ -217,6 +217,13 @@ def status(profile, adapter):
     from .background import status as background_status
     result["background"] = observe("background", lambda: background_status(profile.root))
     result["inspection_errors"] = errors
+    background = result["background"] if isinstance(result["background"], dict) else {}
+    result["diagnostics"] = {
+        "inspection_errors_present": bool(errors),
+        "background_quarantine_present": bool(background.get("quarantined")),
+        "background_verify_failure_present": bool(background.get("verify_failures")
+                                                  or background.get("quarantined")),
+    }
     return result
 
 

@@ -34,7 +34,12 @@
         }
       }
     },
-    "active_system_proxy_verified": false
+    "active_system_proxy_verified": false,
+    "diagnostics": {
+      "inspection_errors_present": false,
+      "background_quarantine_present": false,
+      "background_verify_failure_present": false
+    }
   },
   "semantic_result": {
     "schema": "tap.status-result/v4",
@@ -133,6 +138,20 @@
       "error": {
         "knowledge": "known",
         "value": "Hub unavailable"
+      }
+    },
+    "diagnostics": {
+      "inspection_errors_present": {
+        "knowledge": "known",
+        "value": false
+      },
+      "background_quarantine_present": {
+        "knowledge": "known",
+        "value": false
+      },
+      "background_verify_failure_present": {
+        "knowledge": "known",
+        "value": false
       }
     },
     "component_readers": {

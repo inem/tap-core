@@ -243,6 +243,41 @@
           "error": "components"
         }
       }
+    ],
+    "diagnostics": [
+      {
+        "name": "inspection_errors_present",
+        "source": {
+          "path": [
+            "payload",
+            "diagnostics",
+            "inspection_errors_present"
+          ],
+          "error": "diagnostics"
+        }
+      },
+      {
+        "name": "background_quarantine_present",
+        "source": {
+          "path": [
+            "payload",
+            "diagnostics",
+            "background_quarantine_present"
+          ],
+          "error": "diagnostics"
+        }
+      },
+      {
+        "name": "background_verify_failure_present",
+        "source": {
+          "path": [
+            "payload",
+            "diagnostics",
+            "background_verify_failure_present"
+          ],
+          "error": "diagnostics"
+        }
+      }
     ]
   },
   "observation_collections": {

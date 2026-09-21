@@ -2,5 +2,5 @@
   "schema": "tap.internal-status-material-manifest/v2",
   "id": "tap-core.status-terminal-material/v1",
   "input_schema": "tap.status-result/v4",
-  "fragments": ["runtime.json","routing.json","capture.json","bridge.json","components.json","composition.json","document.json"]
+  "fragments": ["runtime.json","routing.json","capture.json","bridge.json","components.json","diagnostics.json","composition.json","document.json"]
 }
