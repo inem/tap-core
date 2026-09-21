@@ -207,3 +207,28 @@ See [the recorded live result](runtime-live-2026-09-07.json) and
 [dependency declarations](../runtime-dependencies.json). The live check does not
 arm system routing, trust a CA, validate HTTPS/browser traffic or prove clean-Mac
 installation. System-routing transitions are currently fixture-verified only.
+
+### Installed migration lifecycle gate
+
+`tools/check_migration_lifecycle.py` is the owner-run gate for the real installed
+system-routing profile. It records the active network service and complete
+starting proxy state, refuses legacy port `8899`, runs `off -> on -> doctor`,
+checks listener ownership, explicit and ordinary HTTPS requests, `scutil`, and a
+real headless Chrome/Chromium page load, then always runs `off` and verifies
+direct access. A timestamped JSON report is written under `docs/results/`, even
+after a failed check.
+
+Run it from an owner terminal after reviewing the profile and browser paths:
+
+```sh
+python3 tools/check_migration_lifecycle.py \
+  --allow-system-routing \
+  --profile "$HOME/.tap-core/profile" \
+  --browser "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+```
+
+The gate intentionally finishes with the profile off. Named, understood doctor
+gates may be admitted with repeated `--expected-limitation NAME` (for example
+`components` or `inspection:sudoers`); all other unhealthy gates fail the run.
+A cleanup failure leaves the profile and
+recovery snapshot intact and records `rollback_error` in the result.
