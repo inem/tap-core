@@ -106,6 +106,15 @@ class PackManifestTests(unittest.TestCase):
         self.invalid(lambda m: m["access"].update(capabilities=[]), "missing capability")
         self.invalid(lambda m: m["access"].update(capabilities=["capture.read", "shell.anything"]), "unknown capability")
 
+    def test_request_body_capture_requires_bounded_paths_exact_origins_and_grant(self):
+        self.manifest["capture"] = {"request_body_paths": ["/v1/messages"]}
+        validate_manifest(self.manifest, self.root)
+        self.invalid(lambda m: m["capture"].update(request_body_paths=[]), "at least one")
+        self.invalid(lambda m: m["capture"].update(request_body_paths=["v1/messages"]),
+                     "URL path")
+        self.invalid(lambda m: m["access"].update(origins=["*"]), "exact origins")
+        self.invalid(lambda m: m["access"].update(capabilities=[]), "requires capture.read")
+
     def test_page_and_handler_are_independent_roles(self):
         for role, capability in (("page", "page.inject"), ("handler", "bridge.handle")):
             manifest = load_manifest(FIXTURES / "page-bridge")

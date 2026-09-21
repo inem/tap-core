@@ -295,6 +295,8 @@ class MacOS:
         from .routing import select_routing
         from .capture import capture_limits, mitm_size
         limits = capture_limits(profile.capture)
+        from .pack_store import PackStore
+        limits = PackStore(profile.root).effective_capture(limits)
         args = [profile.backend, *select_routing(profile, self).backend_args(),
                 "--set", "confdir=" + str(profile.root / "certificates"),
                 "--set", f"stream_large_bodies={mitm_size(limits['stream_large_bodies'])}",

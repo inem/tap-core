@@ -124,7 +124,8 @@ def validate_manifest(manifest, root, host_api=PACK_API):
     """Validate declarations and packaged files without importing any pack code."""
     root = Path(root).resolve()
     fields(manifest, ("manifest_version", "id", "version", "requires", "files",
-                      "entrypoints", "config", "access"), optional=("resources", "features"))
+                      "entrypoints", "config", "access"),
+           optional=("resources", "features", "capture"))
     require(type(manifest["manifest_version"]) is int and manifest["manifest_version"] == 1,
             "manifest_version: supported version is 1")
     require(type(manifest["id"]) is str and ID.fullmatch(manifest["id"]), "id: invalid pack id")
@@ -246,6 +247,22 @@ def validate_manifest(manifest, root, host_api=PACK_API):
     for origin in access["origins"]:
         exact_or_all_origin(origin)
     strings(access["capabilities"], "access.capabilities")
+    capture = manifest.get("capture")
+    if capture is not None:
+        fields(capture, ("request_body_paths",), label="capture")
+        strings(capture["request_body_paths"], "capture.request_body_paths")
+        require(bool(capture["request_body_paths"]),
+                "capture.request_body_paths: at least one path required")
+        require(len(capture["request_body_paths"]) <= 64,
+                "capture.request_body_paths: at most 64 paths")
+        for path in capture["request_body_paths"]:
+            require(path.startswith("/") and len(path) <= 512 and "#" not in path
+                    and all(character.isprintable() for character in path),
+                    "capture.request_body_paths: expected printable URL path substrings")
+        require("capture.read" in access["capabilities"],
+                "capture.request_body_paths requires capture.read")
+        require(ALL_ORIGINS not in access["origins"],
+                "capture.request_body_paths requires exact origins, not '*'")
     if any("schedule" in declaration for declaration in entries.get("command", {}).get("commands", [])):
         require("background.run" in access["capabilities"], "scheduled commands require background.run")
     observation = entries.get("command", {}).get("session_headers")
