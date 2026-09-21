@@ -358,6 +358,16 @@ class Budget(unittest.TestCase):
         s = target(attempts=[now - P["budget"]["window"] - 1] * 100)
         self.assertEqual(fp.decide(s, ctx(now))["inputs"]["budget_used"], 0)
 
+    def test_started_drops_attempts_outside_the_budget_window(self):
+        now = at(14)
+        stale = [now - P["budget"]["window"] - 1 - i for i in range(80)]
+        s = target(attempts=stale, last_authoritative_at=now - 7 * 3600)
+        receipt = fp.decide(s, ctx(now))
+        self.assertEqual(receipt["action"], "refresh")
+        out = fp.started(s, receipt, now)
+        self.assertEqual(out["attempts"], [now])
+        self.assertLess(len(out["attempts"]), len(stale))
+
 
 class WakeDoesNotFanOut(unittest.TestCase):
     def providers(self, now):
