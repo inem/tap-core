@@ -69,6 +69,38 @@ class DoctorOutputTests(unittest.TestCase):
         self.assertEqual(json.loads(raw), value)
         self.assertEqual(error, "tap-core: next: tap on\n")
 
+    def test_unhealthy_output_names_false_green_reasons(self):
+        value = report(healthy=False, system_proxy_verified=False,
+                       bridge={"configured": True, "enabled": True, "healthy": True,
+                               "hub_port": 19002, "applies": "startup snapshot",
+                               "hub_liveness": "not_checked"},
+                       background={"registered": True, "quarantined": ["tap.intake"],
+                                   "verify_failures": {
+                                       "tap.intake": {"version": "0.7.8",
+                                                      "quarantined": True,
+                                                      "error": "__pycache__ changed file set"}
+                                   }})
+        code, output, error = self.invoke(value)
+        self.assertEqual((code, error), (1, ""))
+        self.assertIn("Reasons", output)
+        self.assertIn("routing: system proxy is not verified", output)
+        self.assertIn("Limitations", output)
+        self.assertIn("CA trust: not verified", output)
+        self.assertIn("bridge: Hub/control liveness was not checked", output)
+        self.assertIn("background: quarantined packs: tap.intake", output)
+        self.assertIn("pack integrity: quarantined after verify failures: tap.intake@0.7.8", output)
+
+    def test_unknown_observations_are_called_unknown_not_healthy(self):
+        value = report(healthy=False, port_open=None, system_proxy_verified=None,
+                       inspection_errors={"port_open": "Operation not permitted",
+                                          "system_proxy_verified": "No enabled network services"})
+        code, output, error = self.invoke(value)
+        self.assertEqual((code, error), (1, ""))
+        self.assertIn("runtime: listener inspection is unknown", output)
+        self.assertIn("routing: system proxy inspection is unknown", output)
+        self.assertIn("Inspection errors", output)
+        self.assertIn("port_open: Operation not permitted", output)
+
     def test_color_auto_is_tty_only(self):
         value = report()
         self.assertNotIn("\x1b[", self.invoke(value)[1])
