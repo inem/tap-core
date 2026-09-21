@@ -142,6 +142,31 @@ class PackStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(PackError, "shared page resource"):
             self.store.effective_bridge(bridge())
 
+    def test_effective_bridge_ignores_regenerated_python_bytecode(self):
+        artifact = self.artifact(SOURCE, "bytecode.tap-pack")
+        self.store.install(artifact)
+        self.store.enable(PACK_ID, "0.1.0",
+                          origins=ORIGINS, capabilities=CAPABILITIES)
+        root = self.store.version_root(PACK_ID, "0.1.0")
+        (root / "__pycache__").mkdir()
+        (root / "__pycache__/feature.cpython-314.pyc").write_bytes(b"\x00\x01byte")
+
+        effective = self.store.effective_bridge(bridge())
+        self.assertEqual(effective_configuration(self.profile, bridge()), effective)
+        self.assertEqual(effective["page_pack_origins"], [
+            {"id": PACK_ID, "version": "0.1.0", "origins": ORIGINS, "features": []},
+        ])
+
+    def test_effective_bridge_rejects_bytecode_outside_pycache(self):
+        artifact = self.artifact(SOURCE, "root-bytecode.tap-pack")
+        self.store.install(artifact)
+        self.store.enable(PACK_ID, "0.1.0",
+                          origins=ORIGINS, capabilities=CAPABILITIES)
+        (self.store.version_root(PACK_ID, "0.1.0") / "json.pyc").write_bytes(b"\x00\x01byte")
+
+        with self.assertRaisesRegex(PackError, "file set changed"):
+            self.store.effective_bridge(bridge())
+
     def test_all_sites_pack_projects_wildcard_origin(self):
         source = self.sibling_source("fixture.all-sites-page", origins=["*"])
         artifact = self.artifact(source, "all-sites.tap-pack")
@@ -564,6 +589,22 @@ class IntegrityBytecodeTests(unittest.TestCase):
         (root / "sneaky.py").write_text("evil = 1\n")  # real drift, not bytecode
         manifest = {"files": ["handler.py", "core/__init__.py"]}
         with self.assertRaisesRegex(PackError, "file set changed"):
+            _tree_hashes(root, manifest)
+
+    def test_integrity_still_catches_bytecode_outside_pycache(self):
+        from tap_core.pack_store import _tree_hashes
+        root = self._root()
+        (root / "json.pyc").write_bytes(b"\x00\x01byte")
+        manifest = {"files": ["handler.py", "core/__init__.py"]}
+        with self.assertRaisesRegex(PackError, "file set changed"):
+            _tree_hashes(root, manifest)
+
+    def test_integrity_checks_symlinks_before_ignoring_pycache(self):
+        from tap_core.pack_store import _tree_hashes
+        root = self._root()
+        (root / "__pycache__").symlink_to(root / "core")
+        manifest = {"files": ["handler.py", "core/__init__.py"]}
+        with self.assertRaisesRegex(PackError, "symlink"):
             _tree_hashes(root, manifest)
 
 
