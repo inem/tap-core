@@ -140,9 +140,14 @@ class ComponentTests(unittest.TestCase):
             database = self.root / 'data/readers/fixture.fresh/projection.sqlite3'
             while time.monotonic() < deadline:
                 if database.exists():
-                    with sqlite3.connect(database) as connection:
-                        rows = [json.loads(row[0])['value'] for row in
-                                connection.execute('SELECT body FROM deliveries ORDER BY rowid')]
+                    # The reader creates the file before its table: a poll landing
+                    # in between is "not yet", not a failure.
+                    try:
+                        with sqlite3.connect(database) as connection:
+                            rows = [json.loads(row[0])['value'] for row in
+                                    connection.execute('SELECT body FROM deliveries ORDER BY rowid')]
+                    except sqlite3.OperationalError:
+                        rows = []
                     if 'new' in rows:
                         break
                 time.sleep(0.05)
