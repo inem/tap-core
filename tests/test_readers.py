@@ -1,4 +1,5 @@
 """Real child readers with isolated state; no live network or launchd operations."""
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -40,7 +41,7 @@ class ReaderTests(unittest.TestCase):
         return records
 
     def outputs(self, reader):
-        with sqlite3.connect(reader.output / 'projection.sqlite3') as db:
+        with contextlib.closing(sqlite3.connect(reader.output / 'projection.sqlite3')) as db:
             return [json.loads(row[0])['value'] for row in db.execute('SELECT body FROM deliveries ORDER BY rowid')]
 
     def test_two_readers_resume_at_independent_speeds(self):
@@ -168,7 +169,7 @@ class ReaderTests(unittest.TestCase):
         self.reader.run(spec)
         self.assertEqual(self.outputs(self.reader), ['A'])
         self.assertEqual(self.reader.load()['processed'], 1)
-        with sqlite3.connect(self.reader.output / 'projection.sqlite3') as db:
+        with contextlib.closing(sqlite3.connect(self.reader.output / 'projection.sqlite3')) as db:
             self.assertEqual(db.execute('SELECT id,generation FROM receipts').fetchall(), [(invocation, 1)])
         self.reader.replay(spec)
         with self.assertRaisesRegex(ReaderError, 'code 4'):
@@ -177,7 +178,7 @@ class ReaderTests(unittest.TestCase):
         self.assertNotEqual(replay_invocation, invocation)
         self.reader.run(spec)
         self.assertEqual(self.outputs(self.reader), ['A'])
-        with sqlite3.connect(self.reader.output / 'projection.sqlite3') as db:
+        with contextlib.closing(sqlite3.connect(self.reader.output / 'projection.sqlite3')) as db:
             self.assertEqual(db.execute('SELECT id,generation FROM receipts ORDER BY generation').fetchall(),
                              [(invocation, 1), (replay_invocation, 2)])
 
@@ -351,7 +352,7 @@ class ReaderTests(unittest.TestCase):
         self.write('A', 'B', 'A')
         self.reader.run(self.spec)
         self.assertEqual(self.outputs(self.reader), ['A', 'B', 'A'])
-        with sqlite3.connect(self.reader.output / 'projection.sqlite3') as db:
+        with contextlib.closing(sqlite3.connect(self.reader.output / 'projection.sqlite3')) as db:
             self.assertEqual(json.loads(db.execute('SELECT body FROM latest').fetchone()[0])['value'], 'A')
         self.reader.replay(self.spec)
         self.reader.run(self.spec)
@@ -360,7 +361,7 @@ class ReaderTests(unittest.TestCase):
     def test_changed_definition_requires_deliberate_new_generation(self):
         self.write('A', 'B', 'C')
         self.reader.run(self.spec)
-        with sqlite3.connect(self.reader.output / 'projection.sqlite3') as db:
+        with contextlib.closing(sqlite3.connect(self.reader.output / 'projection.sqlite3')) as db:
             delivery_ids = db.execute('SELECT id FROM deliveries ORDER BY rowid').fetchall()
             original_invocations = {row[0] for row in db.execute('SELECT id FROM receipts')}
         previous = self.reader.checkpoint.read_bytes()
@@ -372,7 +373,7 @@ class ReaderTests(unittest.TestCase):
         self.reader.run(changed)
         self.assertEqual(self.reader.load()['generation'], 2)
         self.assertEqual(self.outputs(self.reader), ['new:A', 'new:B', 'new:C'])
-        with sqlite3.connect(self.reader.output / 'projection.sqlite3') as db:
+        with contextlib.closing(sqlite3.connect(self.reader.output / 'projection.sqlite3')) as db:
             self.assertEqual(db.execute('SELECT id FROM deliveries ORDER BY rowid').fetchall(), delivery_ids)
             replay_invocations = {row[0] for row in db.execute('SELECT id FROM receipts WHERE generation=2')}
             self.assertEqual(len(replay_invocations), 3)
@@ -390,7 +391,7 @@ class ReaderTests(unittest.TestCase):
         # output. Retrying the prefix must not rewrite latest from B back to A.
         self.reader.checkpoint.write_bytes(replay_start)
         self.reader.run(changed, max_records=1)
-        with sqlite3.connect(self.reader.output / 'projection.sqlite3') as db:
+        with contextlib.closing(sqlite3.connect(self.reader.output / 'projection.sqlite3')) as db:
             self.assertEqual(json.loads(db.execute('SELECT body FROM latest').fetchone()[0])['value'], 'new:B')
             self.assertEqual(db.execute('SELECT count(*) FROM receipts WHERE generation=2').fetchone()[0], 2)
         self.reader.run(changed)
@@ -399,9 +400,10 @@ class ReaderTests(unittest.TestCase):
     def test_legacy_projection_requires_explicit_migration(self):
         self.write('A')
         self.reader.prepare()
-        with sqlite3.connect(self.reader.output / 'projection.sqlite3') as db:
+        with contextlib.closing(sqlite3.connect(self.reader.output / 'projection.sqlite3')) as db:
             db.execute('CREATE TABLE deliveries (id TEXT PRIMARY KEY, body TEXT NOT NULL)')
             db.execute('INSERT INTO deliveries VALUES(?,?)', ('legacy', '{"value":"old"}'))
+            db.commit()  # closing() closes; it does not commit like `with connection`
         with self.assertRaisesRegex(ReaderError, 'code 1'):
             self.reader.run(self.spec)
         self.assertIn('Legacy fixture projection has unscoped receipts',
@@ -432,7 +434,7 @@ class ReaderTests(unittest.TestCase):
         with self.assertRaisesRegex(ReaderError, 'code 5'):
             self.reader.run(spec)
         self.assertIsNone(self.reader.load()['cursor'])
-        with sqlite3.connect(self.reader.output / 'projection.sqlite3') as db:
+        with contextlib.closing(sqlite3.connect(self.reader.output / 'projection.sqlite3')) as db:
             self.assertEqual(db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall(), [])
         self.reader.run(spec)
         self.assertEqual(self.outputs(self.reader), ['A'])
