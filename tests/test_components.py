@@ -100,6 +100,7 @@ class ComponentTests(unittest.TestCase):
         self.assertEqual(observed['readers']['broken']['phase'], 'failed')
 
     def test_fresh_managed_reader_handles_new_capture_while_replay_has_backlog(self):
+        import contextlib
         import sqlite3
         source = self.root / 'fresh-pack'
         source.mkdir()
@@ -143,7 +144,9 @@ class ComponentTests(unittest.TestCase):
                     # The reader creates the file before its table: a poll landing
                     # in between is "not yet", not a failure.
                     try:
-                        with sqlite3.connect(database) as connection:
+                        # `with sqlite3.connect()` only ends the transaction; an unclosed
+                        # connection surfaces later as a ResourceWarning in another test's stderr.
+                        with contextlib.closing(sqlite3.connect(database)) as connection:
                             rows = [json.loads(row[0])['value'] for row in
                                     connection.execute('SELECT body FROM deliveries ORDER BY rowid')]
                     except sqlite3.OperationalError:
