@@ -178,6 +178,51 @@ class CaptureLimitsTests(unittest.TestCase):
         self.assertEqual(records[0]["body"], '{"ok":true}')
         validate_record(records[0])
 
+    def test_allowlisted_request_body_survives_streamed_sse_response(self):
+        records = []
+        limits = {**DEFAULT_CAPTURE, "max_body_bytes": 1024,
+                  "request_body_paths": ("https://api.fixture.example/v1/messages",)}
+        capture = Capture(SimpleNamespace(submit=records.append, limits=limits), limits=limits)
+        response = SimpleNamespace(status_code=200,
+                                   headers={"content-type": "text/event-stream"},
+                                   stream=False, raw_content=None,
+                                   get_text=lambda **kw: (_ for _ in ()).throw(
+                                       AssertionError("SSE response must not decode")))
+        request = SimpleNamespace(method="POST",
+                                  url="https://api.fixture.example/v1/messages?stream=true",
+                                  headers={}, stream=False,
+                                  get_text=lambda **kw: '{"messages":[{"role":"user"}]}')
+        flow = SimpleNamespace(request=request, response=response)
+        capture.responseheaders(flow)
+        self.assertTrue(response.stream)
+        capture.response(flow)
+        self.assertFalse(records[0]["body_kept"])
+        self.assertEqual(records[0]["body_reason"], "media_type")
+        self.assertTrue(records[0]["req_body_kept"])
+        self.assertEqual(records[0]["req_body_reason"], "retained")
+        self.assertIn("messages", records[0]["req_body"])
+        validate_record(records[0])
+        self.assertEqual(decode_record((json.dumps(records[0]) + "\n").encode(),
+                                       allow_legacy=False), records[0])
+
+    def test_non_allowlisted_sse_request_body_stays_dropped(self):
+        records = []
+        limits = {**DEFAULT_CAPTURE, "max_body_bytes": 1024,
+                  "request_body_paths": ("https://api.fixture.example/v1/messages",)}
+        capture = Capture(SimpleNamespace(submit=records.append, limits=limits), limits=limits)
+        response = SimpleNamespace(status_code=200,
+                                   headers={"content-type": "text/event-stream"},
+                                   stream=True, raw_content=None,
+                                   get_text=lambda **kw: None)
+        request = SimpleNamespace(method="POST", url="https://api.fixture.example/v1/other",
+                                  headers={}, stream=False,
+                                  get_text=lambda **kw: "secret")
+        capture.response(SimpleNamespace(request=request, response=response))
+        self.assertFalse(records[0]["req_body_kept"])
+        self.assertEqual(records[0]["req_body_reason"], "response_not_retained")
+        self.assertNotIn("req_body", records[0])
+        validate_record(records[0])
+
     def test_undecodable_response_body_is_dropped_not_raised(self):
         # mitmproxy surrogate-escapes non-UTF-8 bytes; response() must drop such a
         # body as "undecodable" instead of raising and losing the whole flow (#182).

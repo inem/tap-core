@@ -83,7 +83,7 @@ commands were driven by coding agents (session archive, 2026-08-25 … 09-17).
 | Enqueue-only hook, writer thread, drop-and-count, SSE/binary passthrough decided at `responseheaders` | same design in `capture.py` / `journal.py` | ported | Yes | native | — | — | fixtures in `legacy-characterization-2026-09-07.json` | Low |
 | Record envelope `{ts, method, url, status, ctype, size, body_kept, streamed, ua, req_body?, body?}` (unversioned) | record v1 (adds `record_id`, reasons, caps); v0 decodes | ported | Yes | native | — | — | mixed-journal tests exist | Low |
 | Body kept for any `*json*` / `text/*` ctype (not exact `application/json` — vendor `+json` types were once lost) | same rule, 12 MiB cap | ported | Yes | native | — | — | vendor `+json` fixture | Low |
-| Request body of a call whose **response is SSE** (LLM API request history) | not retained: `req_body_reason = response_not_retained` | **missing** | **Yes — the legacy Claude wire reader is built entirely on request bodies** · 104 sessions + 647 contract files on disk | native | — | Capture policy: retain request bodies for declared URL substrings independently of response retention (mirror of `binary_paths`), pack-declarable | a reader receives `req_body` for an SSE-answered POST on an allowlisted path | **High: blocks the Claude wire pack** |
+| Request body of a call whose **response is SSE** (LLM API request history) | `request_body_paths`, including exact-origin-scoped pack declarations (#198) | **ported** | **Yes — the legacy Claude wire reader is built entirely on request bodies** · 104 sessions + 647 contract files on disk | native | — | Capture policy retains allowlisted request bodies independently of response retention; pack paths require `capture.read` and exact origins | tested SSE POST record round-trips through the v1 validator while a non-allowlisted path remains dropped | Low: Claude pack itself remains to be shipped |
 | 7 GB segments × 3, single shared `read.offset`, capture resets the reader's cursor on roll (unread tail lost) | 128 MiB × 3, per-reader opaque cursors, gap receipts | replaced | No (the legacy behaviour is a bug) | drop | — | — | #126 | — |
 | ≈20 GB of legacy archives in `~/.tap` | none; decoder accepts v0 but the journal only opens numeric-suffix segments inside the profile | missing | Partly. Already projected until 2026-09-17; **unprojected residue: 09-17…09-21 window** for readers without a Core pack, LLM request history, raw micro-versions | native (tool) | Must not be inserted into the live profile journal | `tap reader run --journal-dir <dir> --allow-legacy` or a documented offline import profile; output merge policy per pack | replaying a legacy archive through an installed reader yields the same files as the legacy reader did | Medium: window is lost once archives are deleted |
 | Raw stream and mitmdump log world-readable, tokens in URLs | profile-private data dir | retired | No | drop | **Never carry over** | — | — | Cleanup needed before archives are kept long-term |
@@ -189,7 +189,7 @@ capture routing or global status.
 
 ## 10. Missing Core APIs / contracts (ordered by what they unblock)
 
-1. **Request-body retention policy** independent of response retention — #198.
+1. ~~**Request-body retention policy** independent of response retention — #198.~~ Implemented with profile and exact-origin-scoped pack declarations.
 2. **Generalized `session.observe`** + Core-provided replay client settings — #199.
 3. **Pack-served same-origin routes** under a Core-mediated prefix — #200.
 4. **Legacy/foreign journal replay** for installed readers — #201.
@@ -203,8 +203,8 @@ capture routing or global status.
 
 Doc drift noticed on the way: [profile-bridge.md](profile-bridge.md) says CSP is
 left intact while `bridge.py` adds a nonce to `script-src-elem`;
-[capture-records.md](capture-records.md) says a pack can supply `binary_paths`
-but no manifest field exists; the pack table in [components.md](components.md)
+[capture-records.md](capture-records.md) previously said a pack could supply
+`binary_paths`; #198 now documents that only profiles can declare those. The pack table in [components.md](components.md)
 lags the installed set; the legacy CLI hash pinned in
 [legacy-cli-lifecycle.md](legacy-cli-lifecycle.md) no longer matches (the
 retirement gate changed the script).

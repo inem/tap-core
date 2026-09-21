@@ -24,7 +24,7 @@ examples are `fixtures/capture/v1.jsonl`.
 | `streamed` | Whether the backend streamed this response, including backend size policy. |
 | `body_kept`, `body_reason` | Boolean plus `retained`, `media_type`, `streamed`, `unavailable`, `oversize`, `unbounded`, `oversize_decoded` or `undecodable`. |
 | `body` | Text only when retained, including an empty string for a captured empty body. Omitted otherwise. Decoding uses the existing backend `get_text(strict=False)` behavior, not byte-exact storage. Bodies over `max_body_bytes` are omitted before or after decode (`oversize` / `oversize_decoded`). Missing Content-Length alone does not force omission; large unknown lengths rely on backend `stream_large_bodies`. Serialized records that would exceed the journal reader limit omit bodies before append. |
-| `req_body_kept`, `req_body_reason` | Boolean plus `retained`, `streamed`, `unavailable`, `response_not_retained`, `oversize_decoded` or `undecodable`. Request bodies are considered only when the response body is retained, preserving the existing selective-capture policy. |
+| `req_body_kept`, `req_body_reason` | Boolean plus `retained`, `streamed`, `unavailable`, `response_not_retained`, `oversize_decoded` or `undecodable`. Request bodies are considered when the response body is retained or the request URL matches the explicit request-body capture policy. |
 | `req_body` | Text only when retained; an omitted/streamed request is no longer represented by an empty-string placeholder. |
 
 The current media policy streams binary and SSE without reading their bodies.
@@ -137,9 +137,19 @@ cutoff, default 4 MiB), `segment_bytes`, `keep_rolls`, `queue_slots`,
 backend/queue/disk defaults are preserved; the new retained-text limit is 12 MiB.
 Optional: `binary_paths` — up to 64 URL substrings whose binary (non-JSON/text)
 response bodies are retained as base64 (`body_encoding: "base64"`, #171). The core
-ships no vendor defaults; a profile or pack supplies the paths, e.g. via
-`capture.binary_paths` in `profile.json`, or `TAP_CAPTURE_BINARY_PATHS` as a
-debugging override.
+ships no vendor defaults. A profile supplies the paths via
+`capture.binary_paths` in `profile.json`; `TAP_CAPTURE_BINARY_PATHS` is a
+debugging override. Packs cannot currently declare binary response paths.
+Optional: `request_body_paths` — up to 64 URL substrings whose UTF-8 request
+bodies are retained even when the response is not retained, including streamed
+SSE responses. A profile may supply complete URL substrings. A pack may instead
+declare bounded path substrings in `capture.request_body_paths`; Core prefixes
+each path with every exact granted `access.origin`, rejects wildcard origins,
+and projects the result only while that pack is enabled. This policy is a proxy
+startup snapshot: stop the profile before enabling, disabling, updating or
+rolling back a pack that changes it, then run `tap on`. The same
+`max_body_bytes` limit applies. `TAP_CAPTURE_REQUEST_BODY_PATHS` is a debugging
+override.
 Bodies are omitted before decode for a known oversized length (`oversize`), or
 after decoding when retained UTF-8 text exceeds the limit (`oversize_decoded`).
 This does not bound decompression work. Unknown Content-Length alone is allowed;

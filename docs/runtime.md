@@ -162,7 +162,7 @@ Defaults preserve the previous hardcoded bounds; each limit has a distinct owner
 | Limit | Default | Owner / effect at the boundary |
 | --- | --- | --- |
 | `stream_large_bodies` | 4 MiB | mitmproxy backend: larger bodies are streamed; Capture sees `streamed`, not a buffered body. Not a process-memory cap. |
-| `max_body_bytes` | 12 MiB | Capture: omit retained/decoded text before or after `get_text` (`oversize` / `oversize_decoded`). Combined request+response must fit journal `MAX_RECORD_BYTES` (32 MiB). Unknown Content-Length alone does not force streaming; backend `stream_large_bodies` bounds large chunked bodies. |
+| `max_body_bytes` | 12 MiB | Capture: omit retained/decoded text before or after `get_text` (`oversize` / `oversize_decoded`). Combined request+response must fit journal `MAX_RECORD_BYTES` (32 MiB). The same cap applies to request bodies independently retained by `request_body_paths`. Unknown Content-Length alone does not force streaming; backend `stream_large_bodies` bounds large chunked bodies. |
 | `queue_slots` / `queue_bytes` | 64 / 16 MiB | Writer submit queue only; overflow increments `dropped` and does not invent a journal gap. |
 | `segment_bytes` / `keep_rolls` | 128 MiB / 3 | On-disk rotation of `stream.jsonl` archives; not a total disk quota. |
 

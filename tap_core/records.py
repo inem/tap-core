@@ -73,8 +73,6 @@ def validate_record(record, allow_legacy=True):
         raise RecordError("Streamed body must report streaming or media type policy")
     if record["streamed"] and record["body_kept"]:
         raise RecordError("Streamed response cannot retain its body")
-    if not record["body_kept"] and record["req_body_reason"] != "response_not_retained":
-        raise RecordError("Request capture requires a retained response")
     if record["body_kept"] and record["req_body_reason"] == "response_not_retained":
         raise RecordError("Inconsistent request body reason")
     if "body_encoding" in record:

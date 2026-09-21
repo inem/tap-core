@@ -111,6 +111,14 @@ class PackStoreTests(unittest.TestCase):
         (source / "pack.json").write_text(json.dumps(manifest, indent=2) + "\n")
         return source
 
+    def capture_source(self):
+        source = self.source_version("0.2.0", "request body capture")
+        manifest = json.loads((source / "pack.json").read_text())
+        manifest["capture"] = {"request_body_paths": ["/v1/messages"]}
+        manifest["access"]["capabilities"].append("capture.read")
+        (source / "pack.json").write_text(json.dumps(manifest, indent=2) + "\n")
+        return source
+
     def test_artifact_is_reproducible_and_installed_binding_uses_snapshot(self):
         first = self.artifact(SOURCE, "first.tap-pack")
         second = self.artifact(SOURCE, "second.tap-pack")
@@ -156,6 +164,21 @@ class PackStoreTests(unittest.TestCase):
         self.assertEqual(effective["page_pack_origins"], [
             {"id": PACK_ID, "version": "0.1.0", "origins": ORIGINS, "features": []},
         ])
+
+    def test_pack_request_body_paths_are_origin_scoped_and_startup_only(self):
+        artifact = self.artifact(self.capture_source(), "capture.tap-pack")
+        self.store.install(artifact)
+        grants = {"origins": ORIGINS,
+                  "capabilities": ["page.inject", "capture.read"]}
+        with self.assertRaisesRegex(PackError, "Stop this profile with off"):
+            self.store.enable(PACK_ID, "0.2.0", live=True, **grants)
+        result = self.store.enable(PACK_ID, "0.2.0", **grants)
+        self.assertIn("next profile on", result["applies"])
+        effective = self.store.effective_capture(None)
+        self.assertEqual(effective["request_body_paths"],
+                         ("https://fixture.example/v1/messages",))
+        with self.assertRaisesRegex(PackError, "Stop this profile with off"):
+            self.store.disable(PACK_ID, live=True)
 
     def test_effective_bridge_rejects_bytecode_outside_pycache(self):
         artifact = self.artifact(SOURCE, "root-bytecode.tap-pack")

@@ -354,6 +354,16 @@ class PackStore:
         except (OSError, UnicodeError, json.JSONDecodeError) as error:
             raise PackError(f"profile configuration: {error}") from error
 
+    def _profile_capture(self):
+        try:
+            profile = json.loads((self.root / "profile.json").read_text(encoding="utf-8"),
+                                 object_pairs_hook=no_duplicate_keys)
+            return profile.get("capture")
+        except FileNotFoundError:
+            return None
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise PackError(f"profile configuration: {error}") from error
+
     def _require_host_entrypoints(self, manifest):
         roles = set(manifest["entrypoints"])
         unsupported = roles - HOST_ROLES
@@ -566,6 +576,25 @@ class PackStore:
             result["handlers"][name] = spec
         return result
 
+    def _effective_capture(self, registry, base):
+        """Project pack request-body declarations into the proxy startup policy."""
+        from .capture import capture_limits
+        result = capture_limits(base)
+        paths = list(result["request_body_paths"])
+        for _pack_id, _root, manifest, _record in self._enabled_packs(registry):
+            declaration = manifest.get("capture")
+            if declaration is None:
+                continue
+            for origin in manifest["access"]["origins"]:
+                for path in declaration["request_body_paths"]:
+                    pattern = origin + path
+                    if pattern not in paths:
+                        paths.append(pattern)
+        require(len(paths) <= 64,
+                "enabled packs and profile declare more than 64 request-body paths")
+        result["request_body_paths"] = tuple(paths)
+        return capture_limits(result)
+
     def _refuse_live_component_change(self, before_registry, candidate):
         """Refuse before save when a running profile would change reader/handler bindings."""
         base = self._profile_components()
@@ -577,6 +606,14 @@ class PackStore:
             raise PackError(
                 'Stop this profile with off before changing reader/handler packs; '
                 'page-only pack changes may apply while the proxy is running')
+
+    def _refuse_live_capture_change(self, before_registry, candidate):
+        base = self._profile_capture()
+        before = self._effective_capture(before_registry, base)
+        after = self._effective_capture(candidate, base)
+        if before != after:
+            raise PackError(
+                'Stop this profile with off before changing pack request-body capture policy')
 
     def enable(self, pack_id, version=None, *, origins=(), capabilities=(), dependencies=None,
                config=None, live=False):
@@ -602,10 +639,12 @@ class PackStore:
         self._validate_commands(candidate)
         self._effective_bridge(candidate, self._profile_bridge())
         projected = self._effective_components(candidate, self._profile_components())
+        self._effective_capture(candidate, self._profile_capture())
         if "reader" in manifest["entrypoints"] and projected is not None:
             self._refuse_incompatible_reader_progress(pack_id, projected["readers"][pack_id])
         if live:
             self._refuse_live_component_change(registry, candidate)
+            self._refuse_live_capture_change(registry, candidate)
         self.save(candidate)
         roles = set(manifest["entrypoints"])
         if roles & {"reader", "handler"}:
@@ -618,6 +657,8 @@ class PackStore:
             applies = "next profile on"
         if "command" in roles and "page" in roles and not (roles & {"reader", "handler"}):
             applies = "immediately for new command invocations; " + PAGE_APPLIES
+        if manifest.get("capture") is not None:
+            applies = "next profile on; request-body capture policy is a proxy startup snapshot"
         return {"id": pack_id, "version": version, "enabled": True,
                 "code": str(root), "applies": applies}
 
@@ -651,10 +692,12 @@ class PackStore:
         self._validate_commands(candidate)
         self._effective_bridge(candidate, self._profile_bridge())
         projected = self._effective_components(candidate, self._profile_components())
+        self._effective_capture(candidate, self._profile_capture())
         if "reader" in manifest["entrypoints"] and projected is not None:
             self._refuse_incompatible_reader_progress(pack_id, projected["readers"][pack_id])
         if live:
             self._refuse_live_component_change(registry, candidate)
+            self._refuse_live_capture_change(registry, candidate)
         self.save(candidate)
         roles = set(manifest["entrypoints"])
         if roles & {"reader", "handler"}:
@@ -667,6 +710,8 @@ class PackStore:
             applies = "next profile on"
         if "command" in roles and "page" in roles and not (roles & {"reader", "handler"}):
             applies = "immediately for new command invocations; " + PAGE_APPLIES
+        if manifest.get("capture") is not None:
+            applies = "next profile on; request-body capture policy is a proxy startup snapshot"
         return {"id": pack_id, "version": version, "enabled": True,
                 "code": str(root), "applies": applies}
 
@@ -677,6 +722,7 @@ class PackStore:
         record["enabled"] = False
         if live:
             self._refuse_live_component_change(before, registry)
+            self._refuse_live_capture_change(before, registry)
         self.save(registry)
         return {"id": pack_id, "version": record["selected"], "enabled": False,
                 "applies": "immediately for command discovery; service/page bindings apply next profile on; "
@@ -713,6 +759,9 @@ class PackStore:
 
     def effective_components(self, base):
         return self._effective_components(self.load(), base)
+
+    def effective_capture(self, base):
+        return self._effective_capture(self.load(), base)
 
     def reader_origins(self):
         """Origin subscriptions for enabled installed readers; not a reader definition."""
