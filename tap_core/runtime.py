@@ -15,11 +15,25 @@ import re
 import shlex
 import secrets
 import socket
+import ssl
 import subprocess
 import time
 from urllib.parse import urlsplit
 
 BACKEND_VERSION = "12.2.3"
+HTTPS_TRUST_PROBE_URL = "https://example.com/"
+
+
+def certificate_common_name(path):
+    try:
+        certificate = ssl._ssl._test_decode_cert(str(path))
+    except (OSError, ValueError, ssl.SSLError) as error:
+        raise TapError(f"Cannot decode profile CA: {error}") from error
+    for relative_name in certificate.get("subject", ()):
+        for name, value in relative_name:
+            if name == "commonName" and value:
+                return value
+    raise TapError("Profile CA has no common name")
 ADDON = Path(__file__).with_name("capture.py").resolve()
 NS = "/usr/sbin/networksetup"
 OFF_DRAIN_SECONDS = 10
@@ -379,6 +393,44 @@ class MacOS:
             if result.returncode == 0:
                 return True
         return False
+
+    def https_decryption(self, profile):
+        """Prove MITM decryption and this curl client's default trust separately."""
+        ca = profile.root / "certificates/mitmproxy-ca-cert.pem"
+        base = ["/usr/bin/curl", "--silent", "--show-error", "--fail",
+                "--noproxy", "", "--max-time", "8", "--proxy",
+                f"http://127.0.0.1:{profile.port}", "--output", "/dev/null"]
+
+        def probe(extra):
+            result = self.run([*base, "--write-out", "%{certs}", *extra,
+                               HTTPS_TRUST_PROBE_URL], check=False, timeout=10)
+            error = " ".join((result.stderr or "").split())[-1000:] or None
+            match = re.search(r"(?m)^Issuer:.*?\bCN\s*=\s*([^,\r\n]+)", result.stdout or "")
+            return result.returncode == 0, error, match.group(1).strip() if match else None
+
+        if ca.is_file():
+            ca_name = certificate_common_name(ca)
+            ca_ok, decryption_error, peer_issuer = probe(["--cacert", str(ca)])
+            decrypted = ca_ok and peer_issuer == ca_name
+            if ca_ok and not decrypted:
+                decryption_error = (f"peer issuer {peer_issuer or 'unknown'} does not match "
+                                    f"profile CA {ca_name}")
+        else:
+            ca_name, peer_issuer = None, None
+            decrypted, decryption_error = False, f"profile CA missing: {ca}"
+        trust_ok, trust_error, trusted_peer_issuer = probe([])
+        trusted = trust_ok and trusted_peer_issuer == ca_name
+        if trust_ok and not trusted:
+            trust_error = (f"peer issuer {trusted_peer_issuer or 'unknown'} does not match "
+                           f"profile CA {ca_name or 'missing'}")
+        return {"probe_url": HTTPS_TRUST_PROBE_URL,
+                "profile_ca_verified": decrypted,
+                "system_trust_verified": trusted,
+                "profile_ca_common_name": ca_name,
+                "peer_issuer_common_name": peer_issuer,
+                "profile_ca_error": decryption_error,
+                "system_trust_error": trust_error,
+                "browser_trust": "not_checked; browser trust is separate from curl"}
 
     def services(self):
         lines = self.run([NS, "-listallnetworkservices"]).stdout.splitlines()

@@ -75,6 +75,13 @@ def _bad_reasons(result):
         reasons.append(("control", message + (f": {detail}" if detail else "")))
     if result.get("traffic_probe") is not True:
         reasons.append(("traffic", "proxy request probe did not pass"))
+    https = result.get("https_decryption") if isinstance(result.get("https_decryption"), dict) else {}
+    if https.get("profile_ca_verified") is not True:
+        detail = https.get("profile_ca_error") or https.get("error") or https.get("reason") or "not verified"
+        reasons.append(("HTTPS decrypt", f"profile-CA probe failed: {detail}"))
+    if https.get("system_trust_verified") is not True:
+        detail = https.get("system_trust_error") or https.get("error") or https.get("reason") or "not verified"
+        reasons.append(("curl trust", f"default trust probe failed: {detail}"))
     if isinstance(result.get("inspection_errors"), dict):
         for name, message in sorted(result["inspection_errors"].items()):
             reasons.append((name, message))
@@ -95,6 +102,8 @@ def _limitations(result):
     trust = result.get("ca_trust")
     if isinstance(trust, str) and trust.startswith("not_verified;"):
         items.append(("CA trust", trust.replace("not_verified;", "not verified —", 1)))
+    elif result.get("ca_trust_grant_recorded") is False:
+        items.append(("CA provenance", "live trust may pass, but no owned finish-setup grant is recorded"))
     bridge = result.get("bridge") if isinstance(result.get("bridge"), dict) else {}
     if (bridge.get("hub_liveness") == "not_checked"
             or bridge.get("control_liveness") == "not_checked"):
@@ -134,9 +143,11 @@ def terminal_doctor(result, *, color=False):
                        "present" if ca_file is True else
                        "missing" if ca_file is False else "not checked", color))
     trust = result.get("ca_trust")
-    trust_granted = isinstance(trust, str) and trust.startswith("granted;")
+    trust_granted = isinstance(trust, str) and trust.startswith(("granted;", "verified_live;"))
     if isinstance(trust, str):
-        trust = trust.replace("not_verified;", "not verified —", 1).replace("granted;", "granted —", 1)
+        trust = (trust.replace("not_verified;", "not verified —", 1)
+                 .replace("verified_live;", "verified live —", 1)
+                 .replace("granted;", "granted —", 1))
     lines.append(_line("  CA trust", "good" if trust_granted else "unknown",
                        trust or "not checked", color))
 
@@ -152,6 +163,18 @@ def terminal_doctor(result, *, color=False):
                        "bad" if probe is False else "unknown",
                        "probe passed" if probe is True else
                        "probe failed" if probe is False else "not checked", color))
+
+    https = result.get("https_decryption") if isinstance(result.get("https_decryption"), dict) else {}
+    decrypt = https.get("profile_ca_verified")
+    lines.append(_line("  HTTPS decrypt", "good" if decrypt is True else
+                       "bad" if decrypt is False else "unknown",
+                       "profile CA verified" if decrypt is True else
+                       "profile CA failed" if decrypt is False else "not checked", color))
+    curl_trust = https.get("system_trust_verified")
+    lines.append(_line("  curl trust", "good" if curl_trust is True else
+                       "bad" if curl_trust is False else "unknown",
+                       "default trust verified" if curl_trust is True else
+                       "default trust failed" if curl_trust is False else "not checked", color))
 
     limitations = _limitations(result)
     if limitations:

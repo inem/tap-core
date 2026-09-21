@@ -76,6 +76,11 @@ class ObservationTests(unittest.TestCase):
         adapter.port_open.return_value = True
         adapter.backend_version.return_value = "12.2.3"
         adapter.flows.return_value = True
+        adapter.https_decryption.return_value = {
+            "probe_url": "https://example.com/", "profile_ca_verified": True,
+            "system_trust_verified": True, "profile_ca_error": None,
+            "system_trust_error": None,
+            "browser_trust": "not_checked; browser trust is separate from curl"}
         return adapter
 
     def metric(self, **overrides):
@@ -229,6 +234,52 @@ class ObservationTests(unittest.TestCase):
         self.assertFalse(result["healthy"])
         self.assertIsNone(result["traffic_probe"])
         adapter.flows.assert_not_called()
+        adapter.https_decryption.assert_not_called()
+
+    def test_ca_present_but_not_in_default_trust_is_unhealthy(self):
+        adapter = self.adapter()
+        adapter.https_decryption.return_value = {
+            "probe_url": "https://example.com/", "profile_ca_verified": True,
+            "system_trust_verified": False, "profile_ca_error": None,
+            "system_trust_error": "SSL certificate problem",
+            "browser_trust": "not_checked; browser trust is separate from curl"}
+        self.metric()
+        result = doctor(self.profile, adapter)
+        self.assertTrue(result["https_decryption"]["profile_ca_verified"])
+        self.assertFalse(result["https_decryption"]["system_trust_verified"])
+        self.assertIn("default /usr/bin/curl does not trust", result["ca_trust"])
+        self.assertFalse(result["healthy"])
+
+    def test_traffic_success_cannot_hide_tunnel_only_https(self):
+        adapter = self.adapter()
+        adapter.https_decryption.return_value = {
+            "probe_url": "https://example.com/", "profile_ca_verified": False,
+            "system_trust_verified": True,
+            "profile_ca_error": "unable to get local issuer certificate",
+            "system_trust_error": None,
+            "browser_trust": "not_checked; browser trust is separate from curl"}
+        self.metric()
+        result = doctor(self.profile, adapter)
+        self.assertTrue(result["traffic_probe"])
+        self.assertFalse(result["https_decryption"]["profile_ca_verified"])
+        self.assertFalse(result["healthy"])
+
+    def test_trusted_record_with_proxy_off_does_not_claim_live_https(self):
+        adapter = self.adapter()
+        adapter.owns_port.return_value = False
+        result = doctor(self.profile, adapter)
+        self.assertEqual(result["https_decryption"]["profile_ca_verified"], "not_checked")
+        self.assertEqual(result["https_decryption"]["reason"], "proxy_not_owned")
+        self.assertFalse(result["healthy"])
+        adapter.https_decryption.assert_not_called()
+
+    def test_unowned_profile_with_ca_gets_exact_manual_remediation(self):
+        ca = self.profile.root / "certificates/mitmproxy-ca-cert.pem"
+        ca.write_text("fixture")
+        self.metric()
+        result = doctor(self.profile, self.adapter())
+        self.assertEqual(result["next"], ["open " + str(ca)])
+        self.assertTrue(result["healthy"])
 
     def test_probe_execution_error_is_structured(self):
         adapter = self.adapter()
@@ -339,7 +390,8 @@ class ObservationTests(unittest.TestCase):
         expected = [path_export_command(root), finish_setup_command(root)]
         result = doctor(profile, self.adapter())
         self.assertEqual(result["next"], expected)
-        self.assertIn("not_verified", result["ca_trust"])
+        self.assertIn("verified_live", result["ca_trust"])
+        self.assertFalse(result["ca_trust_grant_recorded"])
         self.assertEqual(finish_setup_next(profile), expected[1])
         text = pem.read_text()
         match = re.search(r"-----BEGIN CERTIFICATE-----(.*?)-----END CERTIFICATE-----", text, re.S)
@@ -351,7 +403,8 @@ class ObservationTests(unittest.TestCase):
         # PATH still missing from this process → keep export-only next.
         result = doctor(profile, self.adapter())
         self.assertEqual(result["next"], [path_export_command(root)])
-        self.assertIn("granted", result["ca_trust"])
+        self.assertIn("verified_live", result["ca_trust"])
+        self.assertTrue(result["ca_trust_grant_recorded"])
         # When bin is already on PATH, no next.
         with patch.dict(os.environ, {"PATH": str(bin_dir.resolve()) + os.pathsep + os.environ.get("PATH", "")}):
             result = doctor(profile, self.adapter())

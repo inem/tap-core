@@ -106,6 +106,23 @@ class RuntimeTests(unittest.TestCase):
             adapter.set_proxy("Wi-Fi", False, {"enabled": False, "server": "previous.test", "port": 8000})
         run.assert_called_once_with(["/usr/bin/sudo", "-n", "/usr/sbin/networksetup", "-setwebproxystate", "Wi-Fi", "off"])
 
+    def test_https_probe_separates_profile_ca_from_default_trust_without_k(self):
+        ca = self.profile.root / "certificates/mitmproxy-ca-cert.pem"
+        ca.write_text("fixture")
+        adapter = MacOS()
+        ok = SimpleNamespace(returncode=0, stdout="Issuer:CN = fixture-ca, O = fixture\n", stderr="")
+        failed = SimpleNamespace(returncode=60, stdout="", stderr="SSL certificate problem")
+        with patch("tap_core.runtime.certificate_common_name", return_value="fixture-ca"), \
+                patch.object(adapter, "run", side_effect=[ok, failed]) as run:
+            result = adapter.https_decryption(self.profile)
+        self.assertTrue(result["profile_ca_verified"])
+        self.assertFalse(result["system_trust_verified"])
+        first, second = run.call_args_list
+        self.assertIn("--cacert", first.args[0])
+        self.assertNotIn("--cacert", second.args[0])
+        self.assertNotIn("-k", first.args[0])
+        self.assertNotIn("-k", second.args[0])
+
     def test_active_service_maps_default_interface_through_service_order(self):
         adapter = MacOS()
         route = SimpleNamespace(stdout="   route to: default\ninterface: en8\n")
