@@ -94,7 +94,7 @@ def tier(state, ctx, policy):
     snapshot = state.get("last_authoritative_at")
     # Activity the last snapshot already accounts for does not make the target
     # active again: the provider's number cannot have moved because of it.
-    if seen is not None and now - seen <= policy["active_window"] \
+    if _believable(seen, now, policy) and now - seen <= policy["active_window"] \
             and (snapshot is None or seen > snapshot):
         return "active", policy["active_interval"]
     if ctx.get("dashboard_visible"):
@@ -113,6 +113,8 @@ def decide(state, ctx, policy=None):
     now = ctx["now"]
     name, interval = tier(state, ctx, policy)
     seen = state.get("last_authoritative_at")
+    if not _believable(seen, now, policy):
+        seen = None            # never observed, or a stored value that cannot be true
     age = INF if seen is None else max(0.0, now - seen)
     used = budget_used(state, now, policy)
     manual = state.get("manual_requested_at")
@@ -245,16 +247,26 @@ def _believable(observed_at, now, policy):
 def observed_quota(state, quota_observed_at, via, now, policy=None):
     """Provider-stated quota arrived without us asking (capture saw the client's
     own call, or the transitional scheduled producer wrote it)."""
-    if not _believable(quota_observed_at, now, policy or DEFAULT_POLICY):
+    policy = policy or DEFAULT_POLICY
+    if not _believable(quota_observed_at, now, policy):
         return state
-    if state.get("last_authoritative_at") is not None and quota_observed_at <= state["last_authoritative_at"]:
+    stored = state.get("last_authoritative_at")
+    if _believable(stored, now, policy) and quota_observed_at <= stored:
         return state
     return dict(state, last_authoritative_at=quota_observed_at, last_authoritative_via=via)
 
 
-def observed_activity(state, observed_at):
-    if state.get("last_activity_at") is not None and observed_at <= state["last_activity_at"]:
+def observed_activity(state, observed_at, now, policy=None):
+    """Passive activity was seen. The coordinator reads durable input, so it does
+    not rely on every stored row having been validated: a non-finite or
+    far-future time would satisfy `now - seen <= active_window` forever and pin
+    the target to the active tier."""
+    policy = policy or DEFAULT_POLICY
+    if not _believable(observed_at, now, policy):
         return state
+    stored = state.get("last_activity_at")
+    if _believable(stored, now, policy) and observed_at <= stored:
+        return state           # a stored value that cannot be true is overwritten, not kept
     return dict(state, last_activity_at=observed_at)
 
 

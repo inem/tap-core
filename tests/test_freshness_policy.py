@@ -121,7 +121,7 @@ class PassiveEvidenceSuppressesRefresh(unittest.TestCase):
         s = target(last_authoritative_at=now - 1000, last_activity_at=now - 60)
         self.assertEqual(fp.decide(s, ctx(now))["action"], "refresh")
         s = fp.observed_quota(s, now - 5, "passive-capture", now)   # the client asked; capture saw it
-        s = fp.observed_activity(s, now - 1)
+        s = fp.observed_activity(s, now - 1, now)
         r = fp.decide(s, ctx(now))
         self.assertEqual((r["action"], r["reason"]), ("skip", "passive_fresh"))
         self.assertEqual(r["inputs"]["last_authoritative_via"], "passive-capture")
@@ -138,9 +138,47 @@ class PassiveEvidenceSuppressesRefresh(unittest.TestCase):
     def test_passive_only_target_is_never_refreshed(self):
         now = at(14)
         kimi = fp.new_state("kimi", None, adapter=None)
-        kimi = fp.requested(fp.observed_activity(kimi, now - 10), now)
+        kimi = fp.requested(fp.observed_activity(kimi, now - 10, now), now)
         r = fp.decide(kimi, ctx(now, dashboard_visible=True))
         self.assertEqual((r["action"], r["reason"]), ("skip", "no_adapter"))
+
+
+class MalformedPersistedInput(unittest.TestCase):
+    """The coordinator reads durable input; one bad row must not steer it for good."""
+    BAD = (float("inf"), float("nan"), float("-inf"), None, "1790000000", True)
+
+    def test_non_finite_activity_cannot_make_a_target_permanently_active(self):
+        now = at(14)
+        s = target(last_authoritative_at=now - 1000)
+        for bad in self.BAD:
+            self.assertEqual(fp.observed_activity(s, bad, now), s, bad)
+        far = fp.observed_activity(s, now + 10 * 365 * 86400, now)      # finite, equally harmful
+        self.assertEqual(far, s)
+        ok = fp.observed_activity(s, now - 5, now)
+        self.assertEqual(fp.decide(ok, ctx(now))["tier"], "active")
+
+    def test_poisoned_state_already_on_disk_is_not_obeyed(self):
+        now = at(14)
+        for bad in (float("inf"), float("nan"), now + 10 * 365 * 86400):
+            s = target(last_authoritative_at=now - 1000, last_activity_at=bad)
+            for later in (0, 86400, 30 * 86400):
+                r = fp.decide(s, ctx(now + later, utc_offset_seconds=None))
+                self.assertNotEqual(r["tier"], "active", (bad, later))
+
+    def test_poisoned_snapshot_time_does_not_suppress_refresh_forever(self):
+        now = at(14)
+        for bad in (float("inf"), float("nan"), now + 10 * 365 * 86400):
+            r = fp.decide(target(last_authoritative_at=bad), ctx(now))
+            self.assertEqual((r["action"], r["inputs"]["age"]), ("refresh", None), bad)
+
+    def test_a_real_later_observation_replaces_a_poisoned_one(self):
+        now = at(14)
+        s = target(last_authoritative_at=now - 1000, last_activity_at=float("inf"))
+        s = fp.observed_activity(s, now - 5, now)
+        self.assertEqual(s["last_activity_at"], now - 5)        # the impossible value is overwritten
+        self.assertEqual(fp.decide(s, ctx(now))["tier"], "active")
+        q = fp.observed_quota(target(last_authoritative_at=float("inf")), now - 7, "passive-capture", now)
+        self.assertEqual(q["last_authoritative_at"], now - 7)
 
 
 class UiNeverCausesARequest(unittest.TestCase):

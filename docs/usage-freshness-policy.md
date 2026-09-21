@@ -4,7 +4,7 @@ Issue #225, parent #222. This is the **decision policy** for the future usage
 freshness coordinator, as executable code and deterministic tests:
 
 - `tap_core/freshness_policy.py` — pure functions, no clock, no I/O, no provider code.
-- `tests/test_freshness_policy.py` — 43 decision tests.
+- `tests/test_freshness_policy.py` — 47 decision tests.
 
 **The coordinator itself is not built.** Nothing in Core imports this module,
 no LaunchAgent, schedule or pack behaviour changes. What is fixed here is *who
@@ -86,6 +86,17 @@ When capture sees the client fetch its own quota (`observed_quota(…,
 (`"legacy-schedule"`), the age resets and no live refresh is due. Passive
 *activity* never resets the age — it is not quota — it only selects the tier.
 
+### Durable input is not trusted
+
+The coordinator reads stored rows and its own persisted state; it does not
+assume each was validated. `observed_activity()`, `observed_quota()` and
+`finished()` accept a time only if it is a finite number no more than
+`max_clock_skew` ahead of now, and `decide()` / `tier()` ignore a stored value
+that fails the same test. Otherwise one `Infinity` — which Python's JSON decoder
+accepts — would satisfy `now - seen <= active_window` forever and pin a target to
+the 15-minute tier, or make a snapshot look fresh for good. A later real
+observation overwrites an impossible stored value.
+
 ### Single flight, timeout, backoff, budget
 
 - One refresh in flight per provider/account; other accounts are independent.
@@ -129,6 +140,7 @@ explicit request pending, online, local hour, user idle, dashboard visible).
 | active versus idle, activity already covered by the snapshot, never observed | `ActiveVersusIdle` |
 | local night (timezone-aware), **unknown timezone**, user away, rare safety wake, explicit request at night | `LocalNight` |
 | captured provider answer / transitional producer suppress refresh; passive-only target | `PassiveEvidenceSuppressesRefresh` |
+| non-finite / far-future times in new input **and** in state already on disk | `MalformedPersistedInput` |
 | repaint and visibility flapping create no request; explicit requests coalesce | `UiNeverCausesARequest` |
 | single-flight per target, independence across accounts | `SingleFlight` |
 | timeout, **stale in-flight never approves**, `started()` guards, **success without quota is a failure**, future timestamps, exponential backoff and cap, rate-limit floor, success clears streak | `TimeoutAndBackoff` |
