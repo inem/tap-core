@@ -189,13 +189,13 @@ capture routing or global status.
 
 ## 10. Missing Core APIs / contracts (ordered by what they unblock)
 
-1. **Request-body retention policy** independent of response retention.
-2. **Generalized `session.observe`** + Core-provided replay client settings.
-3. **Pack-served same-origin routes** under a Core-mediated prefix.
-4. **Legacy/foreign journal replay** for installed readers.
-5. **Passthrough with provenance**, editable live, pack-proposable (#6).
-6. **Bridge events**: handler→page push, subscriptions, durable journal.
-7. **Pack `service` role** (versioned, integrity-checked long-running process).
+1. **Request-body retention policy** independent of response retention — #198.
+2. **Generalized `session.observe`** + Core-provided replay client settings — #199.
+3. **Pack-served same-origin routes** under a Core-mediated prefix — #200.
+4. **Legacy/foreign journal replay** for installed readers — #201.
+5. **Passthrough with provenance**, editable live, pack-proposable — #202 (extends #6).
+6. **Bridge events**: handler→page push, subscriptions, durable journal — #203.
+7. **Pack `service` role** (versioned, integrity-checked long-running process) — #204.
 8. **One-command reload/recovery** (#119).
 9. **Installable `mutator` role** (#10, #157) — lowest priority: no surveyed
    legacy behaviour strictly needs it once 3 exists.
@@ -209,7 +209,30 @@ lags the installed set; the legacy CLI hash pinned in
 [legacy-cli-lifecycle.md](legacy-cli-lifecycle.md) no longer matches (the
 retirement gate changed the script).
 
-## 11. Rollback and retirement
+## 11. Follow-up tickets
+
+| Ticket | What | Blocked on |
+|---|---|---|
+| #198 | Capture: request-body retention | — |
+| #199 | `session.observe` generalization + replay client settings | — |
+| #200 | Pack-served same-origin routes | — |
+| #201 | Legacy/foreign journal replay | — |
+| #202 | Passthrough with provenance (legacy bypass table import) | — |
+| #203 | Bridge events + durable journal | — |
+| #204 | Pack `service` role | — |
+| #205 | Pack `claude.sessions` (replaces the live LaunchAgent) | wire part: #198 |
+| #206 | ChatGPT command parity (search, fork, rename, work rename) | nicer with #199 |
+| #207 | ChatGPT historical backfill as a pack command | — |
+| #208 | `chatgpt.files`: blobs, linked copies, bundles | — |
+| #209 | `legacy.chain` compatibility pack | #200, #203, #204 |
+| #210 | Decide: port or retire the two small readers | — |
+| #211 | Final retirement checklist | all of the above |
+
+Already tracked elsewhere: reload/recovery #119, mutator role #10/#157, policy
+layers #6, `where` #96/#100, status/doctor truthfulness #189–#193, archive
+layout #184.
+
+## 12. Rollback and retirement
 
 Legacy stays on disk as reference and rollback until the rows above marked
 `missing` with target `pack`/`compat` are `ported` or explicitly `retired`.
