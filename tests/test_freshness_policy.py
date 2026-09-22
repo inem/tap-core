@@ -358,6 +358,15 @@ class Budget(unittest.TestCase):
         s = target(attempts=[now - P["budget"]["window"] - 1] * 100)
         self.assertEqual(fp.decide(s, ctx(now))["inputs"]["budget_used"], 0)
 
+    def test_corrupt_future_attempts_do_not_consume_budget(self):
+        now = at(14)
+        future = now + 10 * 365 * 86400
+        s = target(attempts=[future] * P["budget"]["max"], last_authoritative_at=now - 7 * 3600)
+        receipt = fp.decide(s, ctx(now))
+        self.assertEqual((receipt["action"], receipt["inputs"]["budget_used"]), ("refresh", 0))
+        started = fp.started(s, receipt, now)
+        self.assertEqual(started["attempts"], [now])
+
 
 class WakeDoesNotFanOut(unittest.TestCase):
     def providers(self, now):

@@ -6,10 +6,18 @@ freshness coordinator, as executable code and deterministic tests:
 - `tap_core/freshness_policy.py` — pure functions, no clock, no I/O, no provider code.
 - `tests/test_freshness_policy.py` — 47 decision tests.
 
-**The coordinator itself is not built.** Nothing in Core imports this module,
-no LaunchAgent, schedule or pack behaviour changes. What is fixed here is *who
-decides and by which rules*, so that adapters (#228) and the dashboard (#223)
-can be written against a stable boundary.
+Core now has a deliberately narrow first coordinator in `background.py`. It
+admits only `usage.meters:usage collect` for the local Codex app-server; the
+old 180-second provider poll is replaced by a 15-minute **policy wake**. The
+wake reads the durable Codex freshness sidecar, applies the idle/night/backoff/
+budget/single-flight rules, and invokes the adapter only when the policy permits
+it. Decisions and executions are appended to `logs/usage-freshness-decisions.jsonl`;
+state lives in `state/background.json` under `usage_freshness`.
+
+This is intentionally not the final adapter contract: Core has no passive
+activity, UI visibility, idle, or online signal wired yet, so Codex is treated
+as idle (six-hour interval) unless the safety policy applies. Other providers
+remain passive-only until #228 gives them an explicit adapter declaration.
 
 ## Boundary
 
@@ -151,17 +159,14 @@ explicit request pending, online, local hour, user idle, dashboard visible).
 
 ## Transitional state
 
-`usage.meters` keeps its fixed 180 s `usage collect` schedule for Codex. It is
-not replaced here. Once it writes `refresh` rows (trigger `legacy-schedule`) the
-coordinator sees them as authoritative observations and would simply never find
-Codex due — so the two can run side by side until the coordinator path is proven
-and the fixed schedule is removed.
+The background host still wakes for its other scheduled commands. For the one
+admitted Codex adapter it skips the legacy 180-second provider invocation and
+uses the coordinator's 15-minute safety wake instead. The compatibility map is
+explicit and temporary; #228 replaces it with pack-declared adapters.
 
 ## Open
 
-1. Where coordinator state lives and which process owns the wake (background
-   host tick vs a dedicated job). Deliberately undecided.
-2. Inputs Core cannot supply yet: user idle time, dashboard visibility, online.
+1. Inputs Core cannot supply yet: user idle time, dashboard visibility, online.
    All three are optional (`None` = unknown, treated as "not away / not visible /
    not offline").
 3. Interval values are defaults to be tuned against the refresh receipts, not
