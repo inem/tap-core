@@ -16,7 +16,9 @@ state lives in `state/background.json` under `usage_freshness`.
 
 This is intentionally not the final adapter contract: Core has no passive
 activity, UI visibility, idle, or online signal wired yet, so Codex is treated
-as idle (six-hour interval) unless the safety policy applies. Other providers
+as idle (five-and-a-half-hour interval) unless the safety policy applies. This
+leaves the coordinator's 15-minute wake and the adapter deadline before the
+six-hour stale boundary presented by `client-usage`. Other providers
 remain passive-only until #228 gives them an explicit adapter declaration.
 
 ## Boundary
@@ -72,7 +74,7 @@ carrying the receipt's `decision_id`.
 | `away` | user idle ≥ 1 h | 24 h |
 | `active` | passive activity within 30 min **and newer than the last quota snapshot** | 15 min |
 | `watched` | dashboard visible | 30 min |
-| `idle` | none of the above | 6 h |
+| `idle` | none of the above | 5 h 30 min |
 
 Night and away outrank activity on purpose: agents keep working at 3 am, the
 person reading the dashboard does not. Activity that the last snapshot already

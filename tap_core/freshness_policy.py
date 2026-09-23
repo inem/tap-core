@@ -18,7 +18,10 @@ DEFAULT_POLICY = {
     "active_window": 1800,
     "active_interval": 900,      # active client: quota is moving
     "watched_interval": 1800,    # dashboard visible, client not active
-    "idle_interval": 21600,      # nothing happening here: decay to 6 h
+    # Keep one coarse coordinator wake plus one adapter deadline before the
+    # usage client marks its six-hour snapshot stale.  This narrow coordinator
+    # has no visibility input yet, so idle is its normal operating tier.
+    "idle_interval": 19800,      # 5 h 30 min; presentation stale boundary is 6 h
     "safety_interval": 86400,    # night, or user away: one look a day at most
     "night": {"start_hour": 1, "end_hour": 8},   # local hours, [start, end)
     "away_after": 3600,          # user idle this long counts as away

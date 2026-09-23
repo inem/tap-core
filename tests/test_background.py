@@ -111,6 +111,18 @@ class BackgroundTests(unittest.TestCase):
         target = next(iter(background.read_state(self.profile)['usage_freshness']['targets'].values()))
         self.assertEqual((target['last_authoritative_at'], target['failures']), (later, 0))
 
+    def test_idle_refresh_has_slack_before_the_usage_view_turns_stale(self):
+        # client-usage shows "seen ... ago" at six hours.  The coordinator
+        # checks every 15 minutes and grants the adapter its 60-second timeout,
+        # so its idle deadline must leave enough room for both.
+        presentation_stale_after = 6 * 3600
+        latest_possible_refresh = (
+            background.freshness_policy.DEFAULT_POLICY['idle_interval']
+            + background.FRESHNESS_WAKE_SECONDS
+            + background.freshness_policy.DEFAULT_POLICY['timeout']
+        )
+        self.assertLess(latest_possible_refresh, presentation_stale_after)
+
     def test_freshness_coordinator_backs_off_when_adapter_reports_no_quota(self):
         self.install_usage_adapter()
         now = 1_000_000.0
