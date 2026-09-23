@@ -321,8 +321,10 @@ def dispatch(profile_root, words):
     # Execution and profile mutation are distinct authorities. Hold the former
     # across the provider child, and the latter only while validating the
     # selected immutable command snapshot. The execution lease is scoped to
-    # this provider so an unrelated pack's command never blocks this run.
-    with command_execution_lock(profile_root, key=command.provider_id) as lease:
+    # this provider so an unrelated pack's command never blocks this run, and
+    # it is shared: another command of the same pack (a scheduled refresh, a
+    # second terminal) runs alongside instead of failing as "still running".
+    with command_execution_lock(profile_root, key=command.provider_id, shared=True) as lease:
         with profile_lock(profile_root):
             current = discover(profile_root).commands.get(command.path)
             if current is None or (current.provider_id, current.provider_version) != (

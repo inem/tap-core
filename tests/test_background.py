@@ -176,6 +176,9 @@ class BackgroundTests(unittest.TestCase):
             with self.assertRaisesRegex(TapError, "still running"):
                 with command_execution_lock(self.profile, key='fixture.command'):
                     pass
+            # Another command of the same pack runs alongside the scheduled one.
+            with command_execution_lock(self.profile, key='fixture.command', shared=True):
+                pass
             # A different pack's lease is unaffected by this run.
             with command_execution_lock(self.profile, key='other.pack'):
                 pass
@@ -192,6 +195,18 @@ class BackgroundTests(unittest.TestCase):
             with self.assertRaisesRegex(TapError, 'still running'):
                 with command_execution_lock(self.profile, key='pack.a'):
                     pass
+
+    def test_commands_share_the_lease_and_mutation_waits_for_all(self):
+        with command_execution_lock(self.profile, key='pack.a', shared=True):
+            with command_execution_lock(self.profile, key='pack.a', shared=True):
+                pass  # two commands of one pack run concurrently
+            with self.assertRaisesRegex(TapError, 'still running'):
+                with command_execution_lock(self.profile, key='pack.a'):
+                    pass  # mutation is refused while any command runs
+        with command_execution_lock(self.profile, key='pack.a'):
+            with self.assertRaisesRegex(TapError, 'still running'):
+                with command_execution_lock(self.profile, key='pack.a', shared=True):
+                    pass  # no command starts while the pack is being changed
 
     def test_schedule_requires_permission_and_finite_bounds(self):
         bad = copy.deepcopy(self.manifest)

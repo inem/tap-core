@@ -180,6 +180,24 @@ class CommandHostTests(unittest.TestCase):
         _stdout, stderr = process.communicate(timeout=5)
         self.assertEqual(process.returncode, 130, stderr)
 
+    def test_commands_of_one_pack_run_concurrently(self):
+        self.install_enable()
+        release = self.root / "concurrent-release"
+        process = subprocess.Popen(
+            [sys.executable, "-B", str(ROOT / "tap"), "--profile", str(self.profile),
+             "fixture", "wait", str(release)], text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        self.addCleanup(release.touch)
+        self.addCleanup(lambda: process.poll() is None and process.kill())
+        self.assertEqual(process.stdout.readline().strip(), "ready")
+        alongside = self.run_tap("fixture", "echo", "while-another-runs")
+        self.assertEqual(alongside.returncode, 0, alongside.stderr)
+        self.assertEqual(json.loads(alongside.stdout)["argv"], ["while-another-runs"])
+        release.touch()
+        _stdout, stderr = process.communicate(timeout=5)
+        self.assertEqual(process.returncode, 0, stderr)
+
     def test_running_invocation_holds_version_lease_against_disable(self):
         self.install_enable()
         release = self.root / "release"
