@@ -23,7 +23,7 @@ DEFAULT_POLICY = {
     # has no visibility input yet, so idle is its normal operating tier.
     "idle_interval": 19800,      # 5 h 30 min; presentation stale boundary is 6 h
     "safety_interval": 86400,    # night, or user away: one look a day at most
-    "night": {"start_hour": 1, "end_hour": 8},   # local hours, [start, end)
+    "night": {"start_hour": 1, "end_hour": 5},   # local hours, [start, end)
     "away_after": 3600,          # user idle this long counts as away
     "min_manual_interval": 60,   # explicit refresh requests inside this coalesce
     "timeout": 60,
