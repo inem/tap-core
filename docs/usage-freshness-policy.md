@@ -21,6 +21,19 @@ leaves the coordinator's 15-minute wake and the adapter deadline before the
 six-hour stale boundary presented by `client-usage`. Other providers
 remain passive-only until #228 gives them an explicit adapter declaration.
 
+## Implemented vs not wired (#222)
+
+| Piece | Status |
+|---|---|
+| Schema-2 observation contract (`activity` / `quota` / `refresh`) | implemented in `tap-pack-usage` (#230) |
+| Activity projection (capture + Kimi local wire) | implemented in `tap-pack-usage` (#226) |
+| Kimi discovery | implemented, **passive-only** (#227) |
+| Freshness policy functions | implemented here (#225); not imported by Core runtime |
+| Adapter contract | **not wired** (#228) |
+| Coordinator runtime | **not wired** (no wake, LaunchAgent, or pack loop) |
+| Copilot discovery | **not wired** (#224) |
+| Provenance UI | **not wired** (#223) |
+
 ## Boundary
 
 ```
