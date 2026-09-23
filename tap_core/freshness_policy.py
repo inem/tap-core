@@ -18,7 +18,10 @@ DEFAULT_POLICY = {
     "active_window": 1800,
     "active_interval": 900,      # active client: quota is moving
     "watched_interval": 1800,    # dashboard visible, client not active
-    "idle_interval": 21600,      # nothing happening here: decay to 6 h
+    # Keep one coarse coordinator wake plus one adapter deadline before the
+    # usage client marks its six-hour snapshot stale.  This narrow coordinator
+    # has no visibility input yet, so idle is its normal operating tier.
+    "idle_interval": 19800,      # 5 h 30 min; presentation stale boundary is 6 h
     "safety_interval": 86400,    # night, or user away: one look a day at most
     "night": {"start_hour": 1, "end_hour": 8},   # local hours, [start, end)
     "away_after": 3600,          # user idle this long counts as away
@@ -103,8 +106,19 @@ def tier(state, ctx, policy):
 
 
 def budget_used(state, now, policy):
+    return len(_budget_attempts(state, now, policy))
+
+
+def _budget_attempts(state, now, policy):
+    """Return durable attempts that are plausible for the current budget window.
+
+    A corrupted future timestamp must not lock the coordinator out of refreshes
+    until that fictitious point in time, nor remain in state forever.
+    """
     since = now - policy["budget"]["window"]
-    return sum(1 for at in state.get("attempts") or [] if at > since)
+    latest = now + policy["max_clock_skew"]
+    return [at for at in state.get("attempts") or []
+            if type(at) in (int, float) and math.isfinite(at) and since < at <= latest]
 
 
 def decide(state, ctx, policy=None):
@@ -144,7 +158,7 @@ def decide(state, ctx, policy=None):
         return verdict(SKIP, "backoff", state["retry_at"])
     limit = policy["budget"]["max"] + (policy["budget"]["manual_reserve"] if manual_pending else 0)
     if used >= limit:
-        oldest = min(at for at in state["attempts"] if at > now - policy["budget"]["window"])
+        oldest = min(_budget_attempts(state, now, policy))
         return verdict(SKIP, "budget", oldest + policy["budget"]["window"])
     if manual_pending:
         if age < policy["min_manual_interval"]:
@@ -191,14 +205,15 @@ def _overdue(receipt):
 
 
 # --- state transitions (pure: each returns a new state) -----------------------
-def started(state, receipt, now):
+def started(state, receipt, now, policy=None):
+    policy = policy or DEFAULT_POLICY
     if receipt.get("action") != REFRESH:
         raise ValueError("started() needs an approved refresh receipt, got %r" % receipt.get("reason"))
     if state.get("in_flight"):
         raise ValueError("a refresh is already in flight for this target")
     out = dict(state)
     out["in_flight"] = {"started_at": now, "decision_id": receipt["decision_id"]}
-    out["attempts"] = list(state.get("attempts") or []) + [now]
+    out["attempts"] = _budget_attempts(state, now, policy) + [now]
     if receipt["reason"] == "manual":
         out["manual_requested_at"] = None
     return out

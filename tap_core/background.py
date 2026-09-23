@@ -14,6 +14,7 @@ from tap_core.runtime import TapError, atomic_json, command_execution_lock, prof
 from tap_core.pack_store import PackStore
 from tap_core.packs import PackError
 from tap_core.commands import discover, _run_pack
+from tap_core import freshness_policy
 
 
 def paths(root):
@@ -23,6 +24,17 @@ def paths(root):
 
 
 VERIFY_QUARANTINE_THRESHOLD = 5
+FRESHNESS_WAKE_SECONDS = 15 * 60
+
+# Transitional admission while #228 defines a pack-declared adapter contract.
+# Only this local, credential-free adapter is allowed to refresh. Every other
+# scheduled command keeps its existing schedule unchanged.
+FRESHNESS_ADAPTERS = {
+    ("usage.meters", ("usage", "collect")): {
+        "provider": "codex",
+        "freshness": ("data", "readers", "usage.meters", "freshness.json"),
+    },
+}
 
 
 def tasks(root, *, account=None):
@@ -98,6 +110,134 @@ def task_fingerprint(command, schedule):
         [command.provider_version, command.config, schedule], sort_keys=True).encode()).hexdigest()
 
 
+def freshness_adapter(command):
+    return FRESHNESS_ADAPTERS.get((command.provider_id, command.path))
+
+
+def _local_utc_offset_seconds(now):
+    local = time.localtime(now)
+    offset = getattr(local, "tm_gmtoff", None)
+    if type(offset) is int:
+        return offset
+    return int(time.mktime(local) - time.mktime(time.gmtime(now)))
+
+
+def _freshness_at(root, adapter):
+    path = Path(root).joinpath(*adapter["freshness"])
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(payload, dict) or payload.get("version") != 1:
+        return None
+    observed = payload.get("observed_at")
+    value = observed.get(adapter["provider"]) if isinstance(observed, dict) else None
+    return value if type(value) in (int, float) else None
+
+
+def _append_freshness_receipts(root, rows):
+    if not rows:
+        return
+    path = Path(root) / "logs/usage-freshness-decisions.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with path.open("a", encoding="utf-8") as fh:
+        for row in rows:
+            fh.write(json.dumps(row, sort_keys=True) + "\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+    path.chmod(0o600)
+
+
+def _freshness_account(state):
+    account = state.setdefault("usage_freshness", {"version": 1, "next_wake_at": 0, "targets": {}})
+    if account.get("version") != 1 or not isinstance(account.get("targets"), dict):
+        account.clear()
+        account.update({"version": 1, "next_wake_at": 0, "targets": {}})
+    return account
+
+
+def run_freshness_once(root, commands):
+    """Coarse, policy-driven wake for the one admitted live usage adapter.
+
+    This is deliberately narrow: it converts the old 180-second Codex poll into
+    an idle-tier refresh with persisted policy state.  Passive activity and more
+    adapters arrive through #223/#228; no command is inferred as refreshable.
+    """
+    root = Path(root).resolve()
+    admitted = [(command, freshness_adapter(command)) for command, _ in commands
+                if freshness_adapter(command) is not None]
+    if not admitted:
+        return []
+    now = time.time()
+    with profile_lock(root):
+        state = read_state(root)
+        account = _freshness_account(state)
+        if account.get("next_wake_at", 0) > now:
+            return []
+        names = {command.provider_id + ":" + command.label for command, _ in admitted}
+        account["targets"] = {name: value for name, value in account["targets"].items()
+                              if name in names}
+        policy_states, metadata = [], []
+        for command, adapter in admitted:
+            name = command.provider_id + ":" + command.label
+            target = account["targets"].get(name)
+            if not isinstance(target, dict):
+                target = freshness_policy.new_state(adapter["provider"], adapter=command.provider_id + ":" + command.label)
+            seen = _freshness_at(root, adapter)
+            target = freshness_policy.observed_quota(target, seen, "legacy-schedule", now)
+            policy_states.append(target)
+            metadata.append((name, command, adapter, seen))
+        context = freshness_policy.context(now, utc_offset_seconds=_local_utc_offset_seconds(now), online=None)
+        policy_states, receipts = freshness_policy.plan(policy_states, context)
+        account["targets"] = {name: target for (name, _, _, _), target in zip(metadata, policy_states)}
+        account["next_wake_at"] = now + FRESHNESS_WAKE_SECONDS
+        atomic_json(root / "state/background.json", state)
+        _append_freshness_receipts(root, receipts)
+
+    for index, receipt in enumerate(receipts):
+        if receipt["action"] != freshness_policy.REFRESH:
+            continue
+        name, expected, adapter, previous = metadata[index]
+        with command_execution_lock(root, key=expected.provider_id,
+                                    busy_message=f"A command from pack '{expected.provider_id}' is still running") as lease:
+            with profile_lock(root):
+                current = {command.provider_id + ":" + command.label: command for command, _ in tasks(root)}.get(name)
+                if current is None or current.provider_version != expected.provider_version:
+                    continue
+                state = read_state(root)
+                account = _freshness_account(state)
+                target = account["targets"].get(name, policy_states[index])
+                target = freshness_policy.started(target, receipt, time.time())
+                account["targets"][name] = target
+                atomic_json(root / "state/background.json", state)
+            try:
+                code = _run_pack(current, root, [], lease_fd=lease.fileno(), timeout=60)
+            except (TapError, OSError):
+                code = 125
+            finished_at = time.time()
+            observed = _freshness_at(root, adapter)
+            success = (code == 0 and type(observed) in (int, float)
+                       and (previous is None or observed > previous))
+            outcome = "unchanged" if success else "error"
+            with profile_lock(root):
+                state = read_state(root)
+                account = _freshness_account(state)
+                target = account["targets"].get(name)
+                if target is not None:
+                    target = freshness_policy.finished(
+                        target, outcome, finished_at,
+                        quota_observed_at=observed if success else None)
+                    account["targets"][name] = target
+                    outcome = "unchanged" if target.get("last_error") is None else "error"
+                    atomic_json(root / "state/background.json", state)
+            _append_freshness_receipts(root, [{
+                "receipt": "tap.usage-freshness-execution/v1", "decision_id": receipt["decision_id"],
+                "at": finished_at, "target": receipt["target"], "exit_code": code,
+                "outcome": outcome,
+            }])
+    return receipts
+
+
 def run_once(root):
     root = Path(root).resolve()
     # Discovery and schedule selection are a short profile snapshot. Provider
@@ -106,10 +246,12 @@ def run_once(root):
     with profile_lock(root):
         state = read_state(root)
         active = tasks(root, account=state)
-        keys = {task_key(command) for command, _ in active}
-        state['jobs'] = {k: v for k, v in state['jobs'].items() if k in keys}
+        scheduled = [(command, schedule) for command, schedule in active if freshness_adapter(command) is None]
+        active_by_key = {task_key(command): command for command, _ in active}
+        state['jobs'] = {k: v for k, v in state['jobs'].items()
+                         if k in active_by_key and freshness_adapter(active_by_key[k]) is None}
         due = []
-        for command, schedule in active:
+        for command, schedule in scheduled:
             key = task_key(command)
             previous = state['jobs'].get(key, {})
             fingerprint = task_fingerprint(command, schedule)
@@ -181,6 +323,8 @@ def run_once(root):
         state = read_state(root)
         state['checked_at'] = time.time()
         atomic_json(root / 'state/background.json', state)
+
+    run_freshness_once(root, active)
 
 
 def reconcile(root, adapter, remove=False):

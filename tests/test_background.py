@@ -39,6 +39,28 @@ class BackgroundTests(unittest.TestCase):
         self.store.install(artifact)
         self.store.enable('fixture.command', version, origins=['https://fixture.example'], capabilities=['command.execute', 'background.run'])
 
+    def install_usage_adapter(self, version='0.1.0'):
+        source = self.root / 'usage-source'
+        shutil.copytree(self.source, source)
+        manifest = json.loads((source / 'pack.json').read_text())
+        manifest['id'] = 'usage.meters'
+        manifest['version'] = version
+        declaration = manifest['entrypoints']['command']['commands'][0]
+        declaration.update({'path': ['usage', 'collect'], 'summary': 'collect usage', 'usage': '(no arguments)',
+                            'schedule': {'interval_seconds': 180, 'timeout_seconds': 60}})
+        manifest['access']['capabilities'].append('background.run')
+        (source / 'pack.json').write_text(json.dumps(manifest))
+        artifact = self.root / ('usage-' + version + '.tap-pack')
+        build_artifact(source, artifact)
+        self.store.install(artifact)
+        self.store.enable('usage.meters', version, origins=['https://fixture.example'],
+                          capabilities=['command.execute', 'background.run'])
+
+    def write_usage_freshness(self, observed_at):
+        path = self.profile / 'data/readers/usage.meters/freshness.json'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({'version': 1, 'observed_at': {'codex': observed_at}}))
+
     def test_due_selected_version_disable_and_retained_data_without_capture(self):
         self.install()
         background.run_once(self.profile)
@@ -64,6 +86,64 @@ class BackgroundTests(unittest.TestCase):
         self.assertEqual(row['exit_code'], 124)
         self.store.disable('fixture.command')
         background.run_once(self.profile)
+
+    def test_freshness_coordinator_only_runs_stale_codex_adapter(self):
+        self.install_usage_adapter()
+        now = 1_000_000.0
+        self.write_usage_freshness(now)
+        commands = background.tasks(self.profile)
+        with patch.object(background.time, 'time', return_value=now), \
+                patch.object(background, '_run_pack') as run:
+            receipts = background.run_freshness_once(self.profile, commands)
+        self.assertEqual(receipts[0]['reason'], 'idle_decay')
+        run.assert_not_called()
+
+        later = now + background.freshness_policy.DEFAULT_POLICY['idle_interval'] + 1
+        def collect(*_args, **_kwargs):
+            self.write_usage_freshness(later)
+            return 0
+
+        with patch.object(background.time, 'time', return_value=later), \
+                patch.object(background, '_run_pack', side_effect=collect) as run:
+            receipts = background.run_freshness_once(self.profile, commands)
+        self.assertEqual((receipts[0]['action'], receipts[0]['reason']), ('refresh', 'due_idle'))
+        run.assert_called_once()
+        target = next(iter(background.read_state(self.profile)['usage_freshness']['targets'].values()))
+        self.assertEqual((target['last_authoritative_at'], target['failures']), (later, 0))
+
+    def test_idle_refresh_has_slack_before_the_usage_view_turns_stale(self):
+        # client-usage shows "seen ... ago" at six hours.  The coordinator
+        # checks every 15 minutes and grants the adapter its 60-second timeout,
+        # so its idle deadline must leave enough room for both.
+        presentation_stale_after = 6 * 3600
+        latest_possible_refresh = (
+            background.freshness_policy.DEFAULT_POLICY['idle_interval']
+            + background.FRESHNESS_WAKE_SECONDS
+            + background.freshness_policy.DEFAULT_POLICY['timeout']
+        )
+        self.assertLess(latest_possible_refresh, presentation_stale_after)
+
+    def test_freshness_coordinator_backs_off_when_adapter_reports_no_quota(self):
+        self.install_usage_adapter()
+        now = 1_000_000.0
+        commands = background.tasks(self.profile)
+        with patch.object(background.time, 'time', return_value=now), \
+                patch.object(background, '_run_pack', return_value=0) as run:
+            receipts = background.run_freshness_once(self.profile, commands)
+        self.assertEqual((receipts[0]['action'], receipts[0]['reason']), ('refresh', 'due_idle'))
+        run.assert_called_once()
+        target = next(iter(background.read_state(self.profile)['usage_freshness']['targets'].values()))
+        self.assertEqual((target['failures'], target['last_error']), (1, 'error'))
+        self.assertEqual(target['retry_at'], now + background.freshness_policy.DEFAULT_POLICY['backoff']['base'])
+
+    def test_background_does_not_also_run_the_legacy_usage_interval(self):
+        self.install_usage_adapter()
+        now = 1_000_000.0
+        self.write_usage_freshness(now)
+        with patch.object(background.time, 'time', return_value=now), \
+                patch.object(background, '_run_pack') as run:
+            background.run_once(self.profile)
+        run.assert_not_called()
 
     def test_running_job_holds_execution_but_not_lifecycle_lease(self):
         self.install()
