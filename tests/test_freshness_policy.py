@@ -68,6 +68,12 @@ class LocalNight(unittest.TestCase):
         r = fp.decide(s, ctx(now))
         self.assertEqual((r["action"], r["reason"], r["tier"]), ("skip", "night_quiet", "night"))
 
+    def test_night_gate_ends_at_five_local(self):
+        now = at(5)
+        s = target(last_authoritative_at=now - 7 * 3600)
+        r = fp.decide(s, ctx(now))
+        self.assertEqual((r["action"], r["reason"], r["tier"]), ("refresh", "due_idle", "idle"))
+
     def test_night_is_local_not_utc(self):
         now = at(23, 30)                       # 23:30 UTC = 01:30 at +02:00
         s = target(last_authoritative_at=now - 2 * 3600, last_activity_at=now - 60)

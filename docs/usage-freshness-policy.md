@@ -70,7 +70,7 @@ carrying the receipt's `decision_id`.
 
 | Tier | When | Default interval |
 |---|---|---|
-| `night` | local hour in `[01, 08)` — **only when the local UTC offset is known** | 24 h (safety wake only) |
+| `night` | local hour in `[01, 05)` — **only when the local UTC offset is known** | 24 h (safety wake only) |
 | `away` | user idle ≥ 1 h | 24 h |
 | `active` | passive activity within 30 min **and newer than the last quota snapshot** | 15 min |
 | `watched` | dashboard visible | 30 min |
