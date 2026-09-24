@@ -441,5 +441,38 @@ class Receipt(unittest.TestCase):
             self.assertNotIn(forbidden, source, forbidden)
 
 
+class CorruptedInFlight(unittest.TestCase):
+    def test_non_numeric_started_at_does_not_approve_or_hang(self):
+        now = at(14)
+        s = target(last_authoritative_at=now - 7 * 3600,
+                   in_flight={"started_at": "soon", "decision_id": "x"})
+        r = fp.decide(s, ctx(now))
+        self.assertEqual((r["action"], r["reason"]), ("skip", "in_flight"))
+        self.assertIsNotNone(s["in_flight"])
+        out = fp.expire_in_flight(s, now)
+        self.assertIsNone(out.get("in_flight"))
+        self.assertEqual(out["last_error"], "timeout")
+
+    def test_future_started_at_is_settled_without_a_second_refresh(self):
+        now = at(14)
+        s = target(last_authoritative_at=now - 7 * 3600,
+                   in_flight={"started_at": now + 10 ** 9, "decision_id": "x"})
+        r = fp.decide(s, ctx(now))
+        self.assertEqual((r["action"], r["reason"]), ("skip", "in_flight"))
+        with self.assertRaises(ValueError):
+            fp.started(s, fp.decide(target(last_authoritative_at=now - 7 * 3600), ctx(now)), now)
+        out = fp.expire_in_flight(s, now)
+        self.assertIsNone(out.get("in_flight"))
+        self.assertEqual(out["last_error"], "timeout")
+
+    def test_missing_decision_id_still_blocks_started(self):
+        now = at(14)
+        s = target(last_authoritative_at=now - 7 * 3600, in_flight={"started_at": now})
+        approved = fp.decide(target(last_authoritative_at=now - 7 * 3600), ctx(now))
+        self.assertEqual(fp.decide(s, ctx(now))["reason"], "in_flight")
+        with self.assertRaises(ValueError):
+            fp.started(s, approved, now)
+
+
 if __name__ == "__main__":
     unittest.main()
