@@ -124,6 +124,8 @@ class Profile:
                 self.capture = capture_limits(self.capture)
             except ValueError as error:
                 raise TapError(str(error)) from error
+            if self.capture.get('live_routes') and (not self.bridge or not self.bridge['enabled'] or self.components is None):
+                raise TapError('Live capture requires an enabled managed bridge/Hub')
         from .passthrough import configuration as passthrough_configuration
         try:
             self.passthrough = passthrough_configuration(self.passthrough)
