@@ -303,6 +303,28 @@ class BridgeTests(unittest.TestCase):
         self.assertNotIn('tap-probe-bootstrap', app.response.body)
         self.assertEqual(app.response.body, '<html><body>sample</body></html>')
 
+    def test_injection_skipped_for_challenge_interstitial(self):
+        interstitial = ('<!DOCTYPE html><html lang="en-US"><head><title>Just a moment...</title>'
+                        '<meta http-equiv="Content-Security-Policy" content="default-src &#x27;none&#x27;; '
+                        'script-src &#x27;nonce-FEUIXTUPSY8oyf1VphUbH8&#x27; https://challenges.cloudflare.com">'
+                        '</head><body><script nonce="FEUIXTUPSY8oyf1VphUbH8">(function(){window._cf_chl_opt = {'
+                        "cType: 'non-interactive', cZone: 'example.test'};var a = document.createElement('script');"
+                        "a.src = '/cdn-cgi/challenge-platform/h/g/orchestrate/chl_page/v1?ray=a48bb378e92555ad';"
+                        "document.getElementsByTagName('head')[0].appendChild(a);}());</script></body></html>")
+        marked = flow(response=Response())
+        marked.response.headers['cf-mitigated'] = 'challenge'
+        unmarked = flow(response=Response(interstitial))
+        for f in (marked, unmarked):
+            before, headers = f.response.body, dict(f.response.headers)
+            with patch('builtins.print') as diagnostic:
+                self.bridge.response(f)
+            self.assertEqual(f.response.body, before)
+            self.assertEqual(f.response.headers, headers)
+            diagnostic.assert_called_once_with('[tap bridge] challenge interstitial; injection skipped', flush=True)
+        mention = flow(response=Response('<html><body>window._cf_chl_opt is set by Cloudflare</body></html>'))
+        self.bridge.response(mention)
+        self.assertIn('id="tap-probe-bootstrap"', mention.response.body)
+
     def test_exclude_user_agents_is_optional_and_validated(self):
         self.assertNotIn('exclude_user_agents', configuration(config()))
         self.assertEqual(configuration(config(exclude_user_agents=['Claude-Desktop', 'claude-code']))
