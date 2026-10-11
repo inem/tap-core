@@ -1,0 +1,3 @@
+github: https://github.com/inem/tap-core
+pull_requests: https://github.com/inem/tap-core/pulls
+live_checkout: ~/.local/share/tap-core-linkedin/checkout
