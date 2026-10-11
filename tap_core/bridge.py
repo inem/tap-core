@@ -72,6 +72,24 @@ class HTMLScanError(ValueError):
     """Markup cannot be safely scanned for this limited injection operation."""
 
 
+CHALLENGE_MARKERS = ('window._cf_chl_opt', '/cdn-cgi/challenge-platform/')
+
+
+def challenge_interstitial(headers, body):
+    """Cloudflare served its "Just a moment..." page instead of the document.
+
+    The interstitial verifies the browser against the page it was given; with
+    TAP's script elements and an extended policy added, the verification did not
+    complete and the page kept reloading (app.welltory.com, 2026-10-11). No pack
+    has work on an interstitial either. Cloudflare marks these responses with
+    `cf-mitigated: challenge`; the body markers cover a response that lost the
+    header on its way here. This gate only narrows injection.
+    """
+    if (headers.get('cf-mitigated') or '').strip().lower() == 'challenge':
+        return True
+    return body is not None and all(marker in body for marker in CHALLENGE_MARKERS)
+
+
 def authorize_script_policy(value, nonce):
     """Extend script elements only; keep other directives and each policy."""
     policies = []
@@ -881,6 +899,9 @@ class Bridge:
         body = response.get_text(strict=False)
         if body is None:
             print('[tap bridge] HTML unavailable; injection skipped', flush=True)
+            return
+        if challenge_interstitial(response.headers, body):
+            print('[tap bridge] challenge interstitial; injection skipped', flush=True)
             return
         try:
             parsed = DocumentScripts(body)

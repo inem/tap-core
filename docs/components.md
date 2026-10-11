@@ -133,6 +133,7 @@ Resolved this cycle:
 - Installer test collided with a live profile's proxy port. [#143](https://github.com/inem/tap-core/issues/143) → [PR #154](https://github.com/inem/tap-core/pull/154).
 - Packs without a repository, and versions ahead of release, are recovered/released; the running code is backed. [#144](https://github.com/inem/tap-core/issues/144).
 - Page injection reached desktop apps rendering a site (e.g. the Claude Code app on claude.ai). Mitigated by the bridge `exclude_user_agents` gate. [PR #153](https://github.com/inem/tap-core/pull/153).
+- Page injection reached Cloudflare challenge interstitials, which then never completed (app.welltory.com). The bridge now leaves `cf-mitigated: challenge` / `_cf_chl_opt` pages intact. [PR #242](https://github.com/inem/tap-core/pull/242).
 
 Open:
 

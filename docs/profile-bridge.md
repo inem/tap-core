@@ -89,7 +89,12 @@ Token-bearing bootstrap and script
 URLs are absolute URLs from the intercepted request origin, independent of the
 document base URL. It leaves CSP intact and prevents another
 bootstrap when the marker is present, and invalidates response validators/cache.
-Streamed bodies are not read or injected. Capture runs before response injection;
+Streamed bodies are not read or injected. A Cloudflare challenge interstitial
+(`cf-mitigated: challenge`, or both `window._cf_chl_opt` and
+`/cdn-cgi/challenge-platform/` in the body) is left intact: with TAP's scripts
+and an extended policy the verification did not complete and the page kept
+reloading (app.welltory.com, 2026-10-11). That gate is a fixed rule, not
+configuration, and only narrows injection. Capture runs before response injection;
 additional trusted addons run afterward. Only this order is defined; arbitrary
 mutator priorities/conflict resolution remain #10 work.
 
