@@ -410,6 +410,40 @@ class PackStoreTests(unittest.TestCase):
         installed = self.store.effective_bridge(bridge())["page_scripts"]
         self.assertTrue(all(str(self.profile / "resources/page") in path for path in installed))
 
+    def test_live_reader_cli_notifies_existing_controller_without_off(self):
+        import signal
+        import sys
+        from tap_core.components import Job
+
+        components = {
+            "version": 1, "python": sys.executable, "bun": "/usr/bin/true",
+            "readers": {}, "handlers": {},
+        }
+        profile = Profile(self.profile, "/fixture/mitmdump", 19001, "explicit",
+                          "http://example.test", [], bridge=dict(bridge(), enabled=False),
+                          components=components)
+        profile.save()
+        reader_source = Path(__file__).resolve().parent.parent / "fixtures/packs/reader"
+        artifact = self.artifact(reader_source, "live-cli.tap-pack")
+        self.store.install(artifact)
+        base = ["--profile", str(self.profile), "pack"]
+
+        with patch("tap_core.cli.platform.system", return_value="Darwin"), \
+                patch("tap_core.cli.MacOS.service_loaded", side_effect=lambda job: isinstance(job, Job)), \
+                patch("tap_core.cli.MacOS.service_pid", return_value=45678), \
+                patch("tap_core.cli.os.kill") as notify, \
+                patch("tap_core.background.reconcile"), \
+                redirect_stdout(io.StringIO()):
+            enabled = cli.main([*base, "enable", "example.reader",
+                                "--version", "0.1.0",
+                                "--grant-origin", "https://fixture.example",
+                                "--grant-capability", "capture.read"])
+            disabled = cli.main([*base, "disable", "example.reader"])
+        self.assertEqual((enabled, disabled), (0, 0))
+        self.assertEqual([call.args for call in notify.call_args_list],
+                         [(45678, signal.SIGUSR1), (45678, signal.SIGUSR1)])
+        self.assertFalse(self.store.load()['packs']['example.reader']['enabled'])
+
     def test_linked_pack_projects_reader_handler_and_hub_origins(self):
         import sys
         linked = Path(__file__).resolve().parent.parent / "fixtures/packs/installed-linked"

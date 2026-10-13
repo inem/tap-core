@@ -157,7 +157,13 @@ class ComponentTests(unittest.TestCase):
             else:
                 self.fail('Fresh capture was not materialized')
             self.assertIn('new', rows[:3])
-            replay = json.loads((self.root / 'state/readers/fixture.fresh/checkpoint.json').read_text())
+            # Fresh delivery can complete before recovery creates its checkpoint.
+            # Check recovery independently instead of assuming these lanes are ordered.
+            replay_path = self.root / 'state/readers/fixture.fresh/checkpoint.json'
+            while not replay_path.exists() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertTrue(replay_path.exists(), 'recovery reader never started')
+            replay = json.loads(replay_path.read_text())
             self.assertLess(replay['processed'], 30)
         finally:
             process.terminate()

@@ -1,0 +1,35 @@
+# Opt-in real macOS acceptance for hot-adding TAP readers. No system proxy changes.
+name: Live reader smoke (macOS)
+on:
+  pull_request:
+    paths:
+      - 'tools/check_hot_reader_live.py'
+      - '.github/workflows/live-reader-smoke.yml'
+      - 'tap_core/service.py'
+      - 'tap_core/readers.py'
+      - 'tap_core/pack_store.py'
+      - 'tap_core/cli.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live-reader:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.11'
+      - name: Install real capture backend
+        run: python3 -m pip install 'mitmproxy==12.2.3'
+      - name: Verify hot reader add/detach/reattach against real proxied HTTP
+        run: |
+          python3 -B tools/check_hot_reader_live.py \
+            --backend "$(command -v mitmdump)" \
+            --bun "$(command -v bun)" \
+            --output "$RUNNER_TEMP/hot-reader.json"
