@@ -214,6 +214,9 @@ def main():
                     f'pid={process.pid} port={port}')
             sync_readers(components, reader_origins, fresh_readers)
             hub_failures = 0
+            refresh_retry_at = 0.0
+            refresh_failures = 0
+            refresh_error = None
             service_failures = {name: 0 for name in service_processes}
             service_starts = {name: [time.monotonic()] for name in service_processes}
 
@@ -237,7 +240,10 @@ def main():
             log(f'controller ready hub_pid={hub_pid} services={sorted(service_processes)} '
                 f'readers={sorted(components["readers"])}')
             while not stopping.is_set():
-                if refresh_requested.is_set():
+                if refresh_requested.is_set() and time.monotonic() >= refresh_retry_at:
+                    # Consume the signal only for this attempt. A failure re-queues
+                    # the request; another signal arriving during reconciliation
+                    # remains pending rather than being cleared on success.
                     refresh_requested.clear()
                     try:
                         from tap_core.components import configuration as validate_components, prepare
@@ -253,9 +259,19 @@ def main():
                         # The existing runtime snapshot and health identity must agree.
                         prepare(profile)
                         configuration = identity(profile)
+                        refresh_failures = 0
+                        refresh_retry_at = 0.0
+                        refresh_error = None
                         log(f'live reader reconciliation: {sorted(reader_jobs)}')
                     except Exception as error:
-                        log(f'live reader reconciliation failed: {type(error).__name__}: {error}')
+                        # A saved registry change must remain actionable after a
+                        # transient filesystem, lock or worker shutdown failure.
+                        # Bounded backoff avoids a hot loop on permanent errors.
+                        refresh_failures += 1
+                        refresh_retry_at = time.monotonic() + min(30, 2 ** min(refresh_failures, 5))
+                        refresh_error = f'Live reader reconciliation pending: {type(error).__name__}: {error}'
+                        refresh_requested.set()
+                        log(f'{refresh_error}; retrying')
                 # The Hub is core infrastructure: only its own process exit tears
                 # the controller down. Transient health-probe failures are
                 # tolerated (5 in a row) so a busy machine or a heavy managed
@@ -296,7 +312,7 @@ def main():
                         if service_failures[name] >= 5 and within_restart_budget(name):
                             service_failures[name] = 0
                             restart_service(name)
-                report('ready', hub_pid)
+                report('ready', hub_pid, error=refresh_error)
                 stopping.wait(0.5)
         except Exception as error:
             report('failed', error=str(error))
