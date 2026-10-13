@@ -91,6 +91,16 @@ class LiveReaderReconcileTests(unittest.TestCase):
                     handle.write(encoded(capture_record(body='live-two')))
                 time.sleep(0.7)
                 self.assertEqual(len(output.read_text().splitlines()), count)
+                # Reattaching the same reader must skip events seen while detached.
+                store.enable(PACK, '0.1.0', origins=[ORIGIN],
+                             capabilities=['capture.read'], live=True)
+                os.kill(process.pid, signal.SIGUSR1)
+                self.assertTrue(until(lambda: PACK in state().get('readers', {})))
+                with stream.open('ab') as handle:
+                    handle.write(encoded(capture_record(body='live-three')))
+                self.assertTrue(until(lambda: len(output.read_text().splitlines()) == 2))
+                events = [json.loads(line)['body'] for line in output.read_text().splitlines()]
+                self.assertEqual(events, ['live-one', 'live-three'])
                 self.assertEqual(state()['pid'], original_pid)
             finally:
                 process.terminate()
