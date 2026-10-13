@@ -36,11 +36,11 @@ class LiveReaderReconcileTests(unittest.TestCase):
             source = root / 'pack-source'
             source.mkdir()
             (source / 'reader.py').write_text(
-                "import json, os, pathlib, sys\\n"
-                "event = json.loads(sys.stdin.readline())\\n"
-                "context = json.loads(os.environ['TAP_PACK_CONTEXT'])\\n"
-                "target = pathlib.Path(context['output_dir']) / 'events.jsonl'\\n"
-                "with target.open('a') as out: out.write(json.dumps(event) + '\\\\n')\\n"
+                "import json, os, pathlib, sys\n"
+                "event = json.loads(sys.stdin.readline())\n"
+                "context = json.loads(os.environ['TAP_PACK_CONTEXT'])\n"
+                "target = pathlib.Path(context['output_dir']) / 'events.jsonl'\n"
+                "with target.open('a') as out: out.write(json.dumps(event) + '\\n')\n"
             )
             (source / 'pack.json').write_text(json.dumps({
                 'manifest_version': 1, 'id': PACK, 'version': '0.1.0',
