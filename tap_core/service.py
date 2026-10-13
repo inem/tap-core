@@ -134,6 +134,9 @@ def main():
         for name, (spec, origins, fresh) in desired.items():
             if name in reader_jobs:
                 continue
+            # Subscription starts NOW, not from retained journal history.
+            # Do this before starting its worker to avoid a tail/worker race.
+            Reader(profile, name).begin_now(spec)
             stop_reader = threading.Event()
             thread = threading.Thread(target=reader_loop,
                                       args=(name, spec, origins, fresh, stop_reader),
