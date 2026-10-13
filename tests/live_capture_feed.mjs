@@ -1,0 +1,58 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {LiveCaptureFeed,validateObservation} from '../tap_core/live-capture.mjs';
+const schema = 'tap.capture.live/v1';
+for (const line of readFileSync(new URL('../fixtures/capture-live/v1.jsonl', import.meta.url),'utf8').trim().split('\n')) validateObservation(JSON.parse(line));
+const observation = (flow=crypto.randomUUID(), sequence=1) => ({schema,record_id:crypto.randomUUID(),flow_id:flow,
+  sequence,ts:1,transport:'http',direction:'response',phase:'data',data:Buffer.from('synthetic').toString('base64')});
+const decode = new TextDecoder();
+const next = async reader => decode.decode((await reader.read()).value);
+const feed = new LiveCaptureFeed({retained:3,queue:5,subscribers:2});
+let response = feed.subscribe(null), reader = response.body.getReader();
+assert.match(await next(reader), /event: ready/);
+let first = observation();
+feed.publish(first);
+assert.match(await next(reader), /event: observation/);
+const cursor = feed.cursor();
+assert.equal(feed.publish(first),1); // Same bounded replay record is idempotent.
+assert.equal(feed.sequence,1);
+assert.throws(()=>feed.publish({...first,data:Buffer.from('changed').toString('base64')}),/record_conflict/);
+await reader.cancel();
+feed.publish(observation());
+response = feed.subscribe(cursor); reader = response.body.getReader();
+assert.match(await next(reader),/event: ready/);
+assert.match(await next(reader),/event: observation/);
+await reader.cancel();
+feed.publish(observation()); feed.publish(observation()); feed.publish(observation());
+reader = feed.subscribe(cursor).body.getReader();
+await next(reader); assert.match(await next(reader),/retention_gap/); await reader.cancel();
+reader = feed.subscribe(crypto.randomUUID()+':1').body.getReader();
+await next(reader); assert.match(await next(reader),/epoch_changed/); await reader.cancel();
+reader = feed.subscribe(feed.cursor(100)).body.getReader();
+await next(reader); assert.match(await next(reader),/future_cursor/); await reader.cancel();
+reader = feed.subscribe(null).body.getReader();
+await next(reader);
+feed.publish({...observation(),dropped_before:2});
+assert.match(await next(reader),/publisher_loss/);
+assert.match(await next(reader),/event: observation/);
+await reader.cancel();
+const slow = new LiveCaptureFeed({queue:3});
+reader = slow.subscribe(null).body.getReader();
+for(let i=0;i<4;i++) slow.publish(observation());
+let chunks=''; for (;;) {const n=await reader.read(); if(n.done) break; chunks+=decode.decode(n.value);}
+assert.match(chunks,/subscriber_overflow/);
+assert.equal(slow.clients.size,0);
+assert.throws(()=>validateObservation({...observation(),data:'***'}),/invalid_data/);
+assert.throws(()=>validateObservation({...observation(),schema:'invented'}),/invalid_observation/);
+assert.throws(()=>validateObservation({...observation(),record_id:[crypto.randomUUID()]}),/invalid_observation/);
+const missing={...observation(),phase:'start'};delete missing.data;
+assert.throws(()=>validateObservation(missing),/missing_metadata/);
+const metadata={method:'POST',origin:'https://fixture.example',path:'/responses',headers:{authorization:'secret'},
+  path_truncated:false,headers_omitted:false,content_type:'',content_encoding:'',body_available:true};
+const start={...observation(),phase:'start',direction:'request',metadata}; delete start.data;
+assert.throws(()=>validateObservation(start),/credential/);
+const saturated = new LiveCaptureFeed({subscribers:1});
+const a=saturated.subscribe(null);
+assert.equal(saturated.subscribe(null).status,503);
+await a.body.cancel();
+console.log('PASS live capture validation, replay, loss, backpressure and client bounds');

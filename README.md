@@ -63,6 +63,11 @@ and explicit errors when retention removes a saved position.
 [Independent reader runs](docs/readers.md) add per-reader progress, resume and
 explicit replay over retained capture, with synthetic subprocess examples.
 
+[Opt-in live wire observations](docs/live-capture.md) add a bounded authenticated
+feed of HTTP stream fragments and WebSocket message payloads before completion.
+Provider parsing stays in packs; this feed has explicit loss/volatile replay
+semantics and does not replace the completed HTTP journal.
+
 [The first live vertical slice](docs/live-slice.md) connects captured data to a
 reader projection and an injected browser page through the existing WS bridge.
 

@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { timingSafeEqual } from 'node:crypto';
+import { LiveCaptureFeed, MAX_LIVE_BYTES } from './live-capture.mjs';
 const root = process.argv[2];
 const profile = JSON.parse(readFileSync(join(root, 'profile.json'), 'utf8'));
 let effective = null;
@@ -15,6 +16,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const VERSION = 'tap.bridge/v1';
 const peers = new Set();
 const pages = new Map(), commands = new Map();
+const liveCapture = new LiveCaptureFeed();
 let active = 0;
 let planRevision = null;
 const equal = (a, b) => typeof a === 'string' && Buffer.byteLength(a) === Buffer.byteLength(b) && timingSafeEqual(Buffer.from(a), Buffer.from(b));
@@ -59,6 +61,20 @@ function controllerAllowed(request) { return equal(request.headers.get('authoriz
 function publicPage(ws) { return {page:ws.data.page, origin:ws.data.origin, connected:true}; }
 async function controller(request, url) {
   if (!controllerAllowed(request)) return new Response('Denied', {status:403});
+  if (url.pathname === '/v1/capture/live') {
+    if (request.method === 'GET') {
+      if (request.headers.get('accept') !== 'text/event-stream') return Response.json(liveCapture.health());
+      return liveCapture.subscribe(request.headers.get('last-event-id'));
+    }
+    if (request.method === 'POST') {
+      try {
+        const value = JSON.parse(await bounded(request.body, MAX_LIVE_BYTES));
+        const sequence = liveCapture.publish(value);
+        return Response.json({ok:true,cursor:liveCapture.cursor(sequence)}, {status:202});
+      } catch { return Response.json({ok:false,error:{code:'invalid_observation'}},{status:400}); }
+    }
+    return new Response('Method not allowed', {status:405});
+  }
   if (request.method === 'GET' && url.pathname === '/v1/pages')
     return Response.json({version:VERSION, pages:[...pages.values()].map(publicPage)});
   const match = url.pathname.match(/^\/v1\/pages\/([^/]+)\/commands$/);
