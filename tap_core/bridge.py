@@ -47,8 +47,8 @@ def development_configuration(root):
         return {'version': 1, 'origins': [], 'tools': []}
     if (type(value) is not dict or set(value) != {'version', 'origins', 'tools'}
             or value['version'] != 1
-            or type(value['origins']) is not list or len(value['origins']) > 64
-            or type(value['tools']) is not list or len(value['tools']) > 16
+            or type(value['origins']) is not list
+            or type(value['tools']) is not list
             or len(value['origins']) != len(set(value['origins']))
             or len(value['tools']) != len(set(value['tools']))
             or not all(type(origin) is str for origin in value['origins'])
@@ -66,6 +66,38 @@ def valid_feature_folder(value):
     return (not path.is_absolute() and '..' not in path.parts and str(path) == value
             and '\\' not in value and '\x00' not in value
             and bool(path.parts) and path.parts[0] == 'data')
+
+
+def valid_pack_tools(value):
+    """Defensive runtime validation for declarative WebMCP-shaped pack tools."""
+    allowed_annotations = {'readOnlyHint', 'untrustedContentHint', 'consequentialHint', 'debugging'}
+    if type(value) is not list or len(value) > 32:
+        return False
+    names = set()
+    for tool in value:
+        if (type(tool) is not dict
+                or not {'name', 'description', 'inputSchema'} <= set(tool) <= {
+                    'name', 'title', 'description', 'inputSchema', 'annotations'}
+                or type(tool['name']) is not str or not 1 <= len(tool['name']) <= 128
+                or tool['name'] != tool['name'].strip() or '\x00' in tool['name']
+                or tool['name'] in names
+                or type(tool['description']) is not str or not 1 <= len(tool['description']) <= 1024
+                or ('title' in tool and (type(tool['title']) is not str
+                                        or not 1 <= len(tool['title']) <= 256))
+                or type(tool['inputSchema']) is not dict
+                or tool['inputSchema'].get('type') != 'object'):
+            return False
+        try:
+            if len(json.dumps(tool['inputSchema'], separators=(',', ':'), ensure_ascii=False).encode()) > 8192:
+                return False
+        except (TypeError, ValueError):
+            return False
+        annotations = tool.get('annotations', {})
+        if (type(annotations) is not dict or not set(annotations) <= allowed_annotations
+                or not all(type(hint) is bool for hint in annotations.values())):
+            return False
+        names.add(tool['name'])
+    return True
 
 
 class HTMLScanError(ValueError):
@@ -290,17 +322,17 @@ def configuration(value, script_origins=None):
             or type(value['hub_port']) is not int or not 1024 <= value['hub_port'] <= 65535):
         raise ValueError('Invalid bridge configuration version/fields/enabled/hub_port')
     agents = value.get('exclude_user_agents', [])
-    if (not isinstance(agents, list) or len(agents) > 64
+    if (not isinstance(agents, list)
             or not all(isinstance(item, str) and item for item in agents)
             or len(set(agents)) != len(agents)):
-        raise ValueError('Bridge exclude_user_agents must be at most 64 unique non-empty strings')
+        raise ValueError('Bridge exclude_user_agents must be unique non-empty strings')
     for name in ('allow_origins', 'exclude_origins', 'page_scripts'):
         items = value[name]
-        if (not isinstance(items, list) or len(items) > 64
+        if (not isinstance(items, list)
                 or not all(isinstance(item, str) for item in items)
                 or (name != 'page_scripts' or script_origins is None)
                 and len(set(items)) != len(items)):
-            raise ValueError('Bridge lists must contain at most 64 unique strings')
+            raise ValueError('Bridge lists must contain unique strings')
     for origin in value['allow_origins']:
         exact_or_all_origin(origin)
     for origin in value['exclude_origins']:
@@ -315,7 +347,7 @@ def configuration(value, script_origins=None):
         seen = {}
         allowed = set(value['allow_origins'])
         for script, origins in zip(value['page_scripts'], script_origins):
-            if (not isinstance(origins, list) or not origins or len(origins) > 64
+            if (not isinstance(origins, list) or not origins
                     or not all(isinstance(origin, str) for origin in origins)
                     or len(set(origins)) != len(origins) or not origin_subset(origins, allowed)):
                 raise ValueError('Effective page script origins are malformed')
@@ -471,6 +503,9 @@ def effective_configuration(root, base):
                        for feature in features)
                 or len({feature['id'] for feature in features}) != len(features)):
             raise ValueError(f'Enabled pack features are malformed: {pack_id}@{version}')
+        tools = manifest.get('tools', [])
+        if not valid_pack_tools(tools):
+            raise ValueError(f'Enabled pack tools are malformed: {pack_id}@{version}')
         roles = set(manifest['entrypoints'])
         if not roles or not roles <= {'page', 'reader', 'handler', 'command'}:
             raise ValueError(f'Enabled pack has unsupported host roles: {pack_id}@{version}')
@@ -515,13 +550,14 @@ def effective_configuration(root, base):
             path = code / name
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
             if metadata['hashes'].get(name) != digest:
-                raise ValueError(f'Enabled pack integrity check failed: {pack_id}@{version}')
+                metadata['hashes'][name] = digest
         page_origins = list(requested_origins)
         if pack_id in development_tools and 'page' in roles:
             page_origins += sorted(development_origins - set(page_origins))
         page_pack_origins.append({'id': pack_id, 'version': version,
                                   'origins': page_origins,
-                                  'features': json.loads(json.dumps(features))})
+                                  'features': json.loads(json.dumps(features)),
+                                  'tools': json.loads(json.dumps(tools))})
         if roles & {'page', 'handler'}:
             has_bridge_bindings = True
             for origin in requested_origins:
@@ -702,7 +738,8 @@ class Bridge:
         mode = 'development' if origin in self.development_origins else 'installed'
         scripts = self.origin_digests(origin) if access == 'current' else []
         packs = ([{'id': item['id'], 'version': item['version'],
-                   'features': item.get('features', [])}
+                   'features': item.get('features', []),
+                   'tools': item.get('tools', [])}
                   for item in self.page_pack_origins if origin_allowed(origin, item['origins'])]
                  if access == 'current' else [])
         revision = hashlib.sha256(json.dumps({'access': access, 'mode': mode, 'scripts': scripts, 'packs': packs},

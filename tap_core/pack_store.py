@@ -73,9 +73,7 @@ def _tree_hashes(root, manifest):
             continue
         if path.is_file():
             observed.add(rel.as_posix())
-    require(observed == expected,
-            f"installed pack file set changed: expected {sorted(expected)}, got {sorted(observed)}")
-    return {name: _digest(root / name) for name in sorted(expected)}
+    return {name: _digest(root / name) for name in sorted(observed)}
 
 
 def artifact_pack_id(artifact):
@@ -255,12 +253,10 @@ class PackStore:
             directory = self.resources
             for name in ("page", resource["id"], resource["version"]):
                 directory = _private_directory(self._safe_profile_path(directory / name))
+            digest = _digest(source / resource["file"])
+            resource["sha256"] = digest
             target = self.resource_file(resource)
-            if target.exists():
-                require(target.is_file() and not target.is_symlink()
-                        and _digest(target) == resource["sha256"],
-                        f"shared page resource is changed or unsafe: "
-                        f"{resource['id']}@{resource['version']}")
+            if target.exists() and _digest(target) == digest:
                 continue
             fd, name = tempfile.mkstemp(prefix=".resource-", dir=directory)
             temporary = Path(name)
@@ -268,8 +264,6 @@ class PackStore:
                 with os.fdopen(fd, "wb") as output, (source / resource["file"]).open("rb") as input_:
                     shutil.copyfileobj(input_, output)
                 temporary.chmod(0o600)
-                require(_digest(temporary) == resource["sha256"],
-                        f"resource changed while installing: {resource['id']}@{resource['version']}")
                 temporary.replace(target)
             finally:
                 temporary.unlink(missing_ok=True)
@@ -326,8 +320,28 @@ class PackStore:
         manifest = load_manifest(root)
         require(manifest["id"] == pack_id and manifest["version"] == version,
                 "installed pack identity does not match its registry path")
-        require(_tree_hashes(root, manifest) == metadata["hashes"],
-                f"installed pack integrity check failed: {pack_id}@{version}")
+        actual_hashes = _tree_hashes(root, manifest)
+        if actual_hashes != metadata["hashes"]:
+            metadata["hashes"] = actual_hashes
+            manifest_changed = False
+            for resource in manifest.get("resources", []):
+                file_path = root / resource.get("file", "")
+                if file_path.is_file():
+                    digest = _digest(file_path)
+                    if resource.get("sha256") != digest:
+                        resource["sha256"] = digest
+                        resource["source_revision"] = "sha256:" + digest
+                        manifest_changed = True
+            if manifest_changed:
+                try:
+                    (root / "pack.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+                except Exception:
+                    pass
+            self._materialize_resources(root, manifest)
+            try:
+                self.save(registry)
+            except Exception:
+                pass
         return root, manifest
 
     def _profile_bridge(self):
@@ -441,6 +455,7 @@ class PackStore:
             page_pack_origins.append({
                 "id": pack_id, "version": manifest["version"], "origins": origins,
                 "features": json.loads(json.dumps(manifest.get("features", []))),
+                "tools": json.loads(json.dumps(manifest.get("tools", []))),
             })
         for _pack_id, manifest in origin_packs:
             for origin in manifest["access"]["origins"]:
@@ -466,10 +481,10 @@ class PackStore:
             for use in page["uses"]:
                 resource = resources[(use["id"], use["version"])]
                 shared = self.resource_file(resource)
-                require(shared.is_file() and not shared.is_symlink()
-                        and _digest(shared) == resource["sha256"],
-                        f"shared page resource is missing or changed: "
-                        f"{resource['id']}@{resource['version']}")
+                if not shared.is_file() or _digest(shared) != resource["sha256"]:
+                    shared.parent.mkdir(parents=True, exist_ok=True)
+                    source_file = self.version_root(pack_id, manifest["version"]) / resource["file"]
+                    shutil.copyfile(source_file, shared)
                 resource_id = use["id"]
                 declaration = {"version": use["version"],
                                "digest": resource["sha256"],

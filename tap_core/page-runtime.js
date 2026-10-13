@@ -7,6 +7,7 @@
   const websocketEnabled = bootstrap.dataset.tapWs !== 'false';
   let appliedMode = bootstrap.dataset.tapMode === 'development' ? 'development' : 'installed';
   const version = 'tap.bridge/v1', page = crypto.randomUUID();
+  const MAX_MESSAGE_BYTES = 5 * 1024 * 1024;
   const planVersion = 'tap.page-plan/v1';
   let appliedPlan = bootstrap.dataset.tapPlan, appliedPacks = [];
   const pending = new Map();
@@ -29,8 +30,8 @@
     let encoded;
     try { encoded = JSON.stringify({version, session, ...result}); }
     catch { result = {kind:'CommandResult', id, ok:false, error:{code:'output_invalid', message:'Command result is not JSON'}}; encoded = JSON.stringify({version, session, ...result}); }
-    if (new TextEncoder().encode(encoded).length > 262144)
-      encoded = JSON.stringify({version, session, kind:'CommandResult', id, ok:false, error:{code:'output_limit', message:'Command result exceeds 256 KiB'}});
+    if (new TextEncoder().encode(encoded).length > MAX_MESSAGE_BYTES)
+      encoded = JSON.stringify({version, session, kind:'CommandResult', id, ok:false, error:{code:'output_limit', message:'Command result exceeds 5 MiB'}});
     if (socket?.readyState === WebSocket.OPEN) socket.send(encoded);
   }
   function inspectPage(args) {
@@ -317,13 +318,18 @@
       exposed.set(operation, handler);
       return () => { if (exposed.get(operation) === handler) exposed.delete(operation); };
     },
+    emit(name, payload) {
+      if (typeof name !== 'string' || !name) return false;
+      send({ kind: 'Signal', name, payload: payload ?? null, ts: Date.now() / 1000 });
+      return true;
+    },
     async request(handler, args, options = {}) {
       const timeoutMs = Number.isInteger(options.timeout_ms) && options.timeout_ms >= 1000 && options.timeout_ms <= 60000
         ? options.timeout_ms : 6500;
       if (!ready() && !await waitForReady(Math.min(3000, timeoutMs))) throw error('not_connected');
       if (pending.size >= 4) throw error('busy');
       const id = crypto.randomUUID(), value = JSON.stringify({version, kind: 'Request', session, id, handler, args});
-      if (new TextEncoder().encode(value).length > 65536) throw error('input_limit');
+      if (new TextEncoder().encode(value).length > MAX_MESSAGE_BYTES) throw error('input_limit');
       activitySequence++;
       return new Promise((resolve, reject) => {
         const timeout = setTimeout(() => { pending.delete(id); reject(error('request_timeout')); }, timeoutMs);
@@ -334,6 +340,8 @@
   });
   addEventListener('pagehide', () => { closed = true; clearTimeout(planTimer); indicatorObserver?.disconnect(); stop(); state = websocketEnabled ? (paused ? 'paused' : 'suspended') : 'disabled'; updateIndicator(); });
   addEventListener('pageshow', event => { if (event.persisted) { closed = false; attempt = 0; schedulePlan(0); if (!paused) connect(); } });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && (!socket || socket.readyState >= 2)) { attempt = 0; connect(); } });
+  window.addEventListener('focus', () => { if (!socket || socket.readyState >= 2) { attempt = 0; connect(); } });
   renderIndicator();
   log('page runtime ' + version + ' attached · ' + location.origin + (websocketEnabled ? '' : ' · bridge disabled'));
   schedulePlan(0);

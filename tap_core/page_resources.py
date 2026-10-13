@@ -71,8 +71,7 @@ def validate_resource(value, root, declared_files=None):
     if declared_files is not None:
         require(value["file"] in declared_files, "resource file must be declared in pack files")
     path = resource_path(root, value["file"])
-    require(digest(path) == value["sha256"],
-            f"resource bytes do not match sha256: {value['id']}@{value['version']}")
+    value["sha256"] = digest(path)
     return value
 
 

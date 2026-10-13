@@ -3,6 +3,7 @@
 Internal storage API for #9; no scheduler, automatic acknowledgements or replay.
 """
 import base64
+from collections import OrderedDict
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 import hashlib
@@ -11,6 +12,18 @@ import os
 import stat as stat_mode
 from pathlib import Path
 import re
+import threading
+
+
+# Shared by independent reader lanes; keep only identities, never record bodies.
+_segment_cache = OrderedDict()
+_segment_cache_lock = threading.Lock()
+_SEGMENT_CACHE_LIMIT = 128
+
+
+def file_revision(status):
+    return (status.st_dev, status.st_ino, status.st_size,
+            status.st_mtime_ns, status.st_ctime_ns)
 
 from .records import MAX_RECORD_BYTES, RecordError, decode_record
 
@@ -184,11 +197,9 @@ class Journal:
             # Identify every segment before yielding: identical legacy first
             # lines are ambiguous, rather than grounds for silently skipping one.
             for path, handle, stat in selected:
-                lines = self.lines(path, handle, stat.st_size)
-                first = next(lines, None)
-                if first is None:
+                segment = self.segment_identity(path, handle, stat)
+                if segment is None:
                     continue
-                segment = digest(first)
                 if segment in seen:
                     raise JournalGap("Ambiguous capture segments have identical first records")
                 seen.add(segment)
@@ -231,3 +242,25 @@ class Journal:
                     yield Entry(record, self.cursor(segment, index, line, offset=handle.tell() - len(line)))
                 if not anchored:
                     raise JournalGap("Saved capture position was truncated; refusing to advance")
+
+    def segment_identity(self, path, handle, status):
+        """Reuse a first-record hash only while its pinned file revision matches.
+
+        ctime detects same-size edits even when mtime is restored. Anchor validation
+        and snapshot/rotation checks still run on every scan. A changing file is
+        not cached, so partial tails and concurrent writes are checked again.
+        """
+        key = (self.scope, self.max_record_bytes, file_revision(status))
+        with _segment_cache_lock:
+            if key in _segment_cache:
+                _segment_cache.move_to_end(key)
+                return _segment_cache[key]
+        first = next(self.lines(path, handle, status.st_size), None)
+        segment = digest(first) if first is not None else None
+        if file_revision(os.fstat(handle.fileno())) == file_revision(status):
+            with _segment_cache_lock:
+                _segment_cache[key] = segment
+                _segment_cache.move_to_end(key)
+                while len(_segment_cache) > _SEGMENT_CACHE_LIMIT:
+                    _segment_cache.popitem(last=False)
+        return segment

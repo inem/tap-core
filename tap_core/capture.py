@@ -17,6 +17,7 @@ import uuid
 # Load the adjacent stdlib-only contract without relying on cwd or PYTHONPATH.
 import runpy
 MAX_RECORD_BYTES = runpy.run_path(str(Path(__file__).with_name("records.py")))["MAX_RECORD_BYTES"]
+_live = runpy.run_path(str(Path(__file__).with_name("live_capture.py")))
 
 # Defaults match previously hardcoded writer/backend bounds.
 # Distinct owners: backend stream cutoff ≠ retained body ≠ queue ≠ disk rolls.
@@ -82,14 +83,14 @@ def capture_limits(value=None):
     existing profiles keep validating unchanged.
     """
     if value is None:
-        return dict(DEFAULT_CAPTURE, binary_paths=(), request_body_paths=())
+        return dict(DEFAULT_CAPTURE, binary_paths=(), request_body_paths=(), live_routes=())
     if type(value) is not dict or value.get("version") != 1:
         raise ValueError("capture limits require version 1 object")
     required = set(DEFAULT_CAPTURE)
-    optional = {"binary_paths", "request_body_paths"}
+    optional = {"binary_paths", "request_body_paths", "live_routes"}
     if not required <= set(value) or not set(value) <= required | optional:
         raise ValueError("capture limits keys must be exactly: " + ", ".join(sorted(required))
-                         + " (optional: binary_paths, request_body_paths)")
+                         + " (optional: binary_paths, request_body_paths, live_routes)")
     for name in ("stream_large_bodies", "segment_bytes", "queue_slots", "queue_bytes", "max_body_bytes"):
         number = value[name]
         if type(number) is not int or number < 1:
@@ -123,6 +124,7 @@ def capture_limits(value=None):
     if 2 * value["max_body_bytes"] + 1024 * 1024 > MAX_RECORD_BYTES:
         raise ValueError("capture.max_body_bytes cannot fit request+response under journal record limit")
     return dict(value,
+                live_routes=tuple(_live['validate_routes'](value.get('live_routes', []))),
                 binary_paths=tuple(p.strip() for p in binary_paths),
                 request_body_paths=tuple(p.strip() for p in request_body_paths))
 
@@ -471,6 +473,7 @@ class Capture:
     def __init__(self, writer=None, limits=None):
         self.writer = writer
         self.limits = limits
+        self.live = None
 
     def load(self, loader):
         # Fail closed rather than falling back to the existing user's journal.
@@ -479,6 +482,32 @@ class Capture:
         if self.writer is None:
             self.writer = Writer(os.environ["TAP_CORE_DATA"], os.environ["TAP_CORE_STATE"],
                                  limits=self.limits)
+        if self.limits.get('live_routes'):
+            root = Path(os.environ['TAP_CORE_PROFILE'])
+            profile = json.loads((root / 'profile.json').read_text())
+            bridge = profile.get('bridge') or {}
+            publisher = _live['Publisher'](root, bridge['hub_port'])
+            self.live = _live['Observer'](publisher, self.limits['live_routes'])
+
+    def request(self, flow):
+        if self.live:
+            self.live.request(flow)
+
+    def error(self, flow):
+        if self.live:
+            self.live.error(flow)
+
+    def websocket_start(self, flow):
+        if self.live:
+            self.live.websocket_start(flow)
+
+    def websocket_message(self, flow):
+        if self.live:
+            self.live.websocket_message(flow)
+
+    def websocket_end(self, flow):
+        if self.live:
+            self.live.websocket_end(flow)
 
     def responseheaders(self, flow):
         response = flow.response
@@ -495,6 +524,8 @@ class Capture:
                                       "force_stream": force_stream, "size": size})
         if not keep and (force_stream or reason == "media_type") and not binary:
             response.stream = True
+        if self.live:
+            self.live.responseheaders(flow)
 
     def response(self, flow):
         response = flow.response
@@ -582,6 +613,8 @@ class Capture:
         self.writer.submit(record)
 
     def done(self):
+        if self.live:
+            self.live.publisher.close()
         if self.writer:
             self.writer.close()
 

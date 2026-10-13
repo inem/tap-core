@@ -138,6 +138,40 @@ class JournalTests(unittest.TestCase):
     def write(self, *records):
         self.stream.write_bytes(b''.join(map(encoded, records)))
 
+    def test_segment_hash_is_shared_between_reader_instances(self):
+        first, second = capture_record(body='x' * 10000), capture_record()
+        self.write(first, second)
+        tail = self.journal.tail()
+        from tap_core import journal
+        original = journal.digest
+        first_line = encoded(first)
+        with patch.object(journal, 'digest', wraps=original) as hashed:
+            self.assertEqual(list(self.journal.scan(tail)), [])
+            count = sum(call.args == (first_line,) for call in hashed.call_args_list)
+            self.assertEqual(count, 1)
+            self.assertEqual(list(Journal(self.root).scan(tail)), [])
+            self.assertEqual(sum(call.args == (first_line,) for call in hashed.call_args_list), 1)
+
+    def test_cached_identity_invalidates_on_same_size_edit_with_restored_mtime(self):
+        self.write(capture_record(body='first'), capture_record(body='last'))
+        tail = self.journal.tail()
+        self.assertEqual(list(self.journal.scan(tail)), [])
+        status = self.stream.stat()
+        self.stream.write_bytes(self.stream.read_bytes().replace(b'first', b'other'))
+        os.utime(self.stream, ns=(status.st_atime_ns, status.st_mtime_ns))
+        with self.assertRaises(JournalGap):
+            list(self.journal.scan(tail))
+
+    def test_cached_empty_file_and_partial_first_record_are_rechecked(self):
+        self.stream.write_bytes(b'')
+        self.assertEqual(list(self.journal.scan()), [])
+        line = encoded(capture_record())
+        self.stream.write_bytes(line[:-1])
+        self.assertEqual(list(self.journal.scan()), [])
+        with self.stream.open('ab') as handle:
+            handle.write(b'\n')
+        self.assertEqual(len(list(self.journal.scan())), 1)
+
     def append_with_writer(self, *records, **settings):
         writer = Writer(self.root, self.root, **settings)
         for record in records:
