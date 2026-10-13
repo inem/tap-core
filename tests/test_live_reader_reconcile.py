@@ -60,6 +60,9 @@ class LiveReaderReconcileTests(unittest.TestCase):
             profile.save()
             store = PackStore(root)
             store.install(artifact)
+            # Already retained before this subscriber exists: must not be delivered.
+            stream = root / 'data/stream.jsonl'
+            stream.write_bytes(encoded(capture_record(body='old-before-attach')))
             process = subprocess.Popen(
                 [sys.executable, '-B', '-m', 'tap_core.service', str(root)],
                 cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -75,7 +78,6 @@ class LiveReaderReconcileTests(unittest.TestCase):
                              capabilities=['capture.read'], live=True)
                 os.kill(process.pid, signal.SIGUSR1)
                 self.assertTrue(until(lambda: PACK in state().get('readers', {})))
-                stream = root / 'data/stream.jsonl'
                 with stream.open('ab') as handle:
                     handle.write(encoded(capture_record(body='live-one')))
                 output = root / 'data/readers' / PACK / 'events.jsonl'
