@@ -105,3 +105,55 @@ class LiveReaderReconcileTests(unittest.TestCase):
             finally:
                 process.terminate()
                 process.communicate(timeout=8)
+
+    def test_failed_refresh_retries_without_another_signal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / 'reader.tap-pack'
+            build_artifact(ROOT / 'fixtures/packs/reader', artifact)
+            profile = Profile(root, '/fixture/backend', 19000, 'explicit',
+                              'http://fixture.test', [],
+                              bridge=dict(bridge_config(), enabled=False),
+                              components={'version': 1, 'python': sys.executable,
+                                          'bun': '/usr/bin/true', 'readers': {}, 'handlers': {}})
+            profile.save()
+            store = PackStore(root)
+            store.install(artifact)
+            process = subprocess.Popen(
+                [sys.executable, '-B', '-m', 'tap_core.service', str(root)],
+                cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+            def state():
+                try:
+                    return json.loads((root / 'state/components.json').read_text())
+                except (OSError, ValueError):
+                    return {}
+
+            try:
+                self.assertTrue(until(lambda: state().get('phase') == 'ready'))
+                pid = state()['pid']
+                name = 'example.reader'
+                store.enable(name, '0.1.0', origins=[ORIGIN],
+                             capabilities=['capture.read'], live=True)
+                installed = store.version_root(name, '0.1.0') / 'reader.py'
+                original = installed.read_bytes()
+                installed.write_bytes(original + b'\n# deliberately invalidates hash\n')
+                os.kill(process.pid, signal.SIGUSR1)
+                self.assertTrue(until(lambda: 'reconciliation pending' in
+                                      (state().get('error') or '')),
+                                'failed refresh must be exposed in controller health')
+                self.assertNotIn(name, state().get('readers', {}))
+                installed.write_bytes(original)
+                # No second signal, CLI command or restart: controller retries.
+                self.assertTrue(until(lambda: name in state().get('readers', {}) and
+                                      state().get('error') is None, timeout=12),
+                                'controller did not reconcile after repairing pack bytes')
+                self.assertEqual(state()['pid'], pid)
+                stream = root / 'data/stream.jsonl'
+                stream.write_bytes(encoded(capture_record(body='after-repair')))
+                self.assertTrue(until(lambda: (state().get('readers', {}).get(name, {})
+                                                .get('progress') or {}).get('processed', 0) >= 1))
+                self.assertEqual(state()['pid'], pid)
+            finally:
+                process.terminate()
+                process.communicate(timeout=8)
