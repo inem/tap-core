@@ -185,8 +185,9 @@ For a compatible new page-only artifact while the profile is running:
 Reader-only pack enable/disable now reconciles on the running component
 controller after the registry is saved: the CLI sends SIGUSR1, and the controller
 adds or removes only the affected reader worker. Capture, network routing and Hub
-remain running. Existing reader checkpoints are retained; an incompatible reader
-definition is still rejected before activation (rebind/replay is separate work).
+remain running. Each attachment begins at the current journal tail: retained events
+and events missed while detached are not replayed. An incompatible reader
+definition is still rejected before activation (rebind is separate work).
 Handler/service bindings and request-body capture policy still require a stopped
 profile. A page-only edit must never use global `off`/`on` as its development loop.
 
