@@ -155,6 +155,24 @@ class Reader:
             result['fresh_progress'] = Reader(self.profile, self.name, lane='fresh').load()
         return result
 
+    def begin_now(self, spec):
+        """Activate a detached live reader at the current tail, without backfill.
+
+        Each new attachment starts a fresh generation. The prior checkpoint stays
+        untouched until this validated, locked transition completes; no reader
+        worker may be running under the same name when this is called.
+        """
+        validate_definition(spec)
+        self.prepare()
+        with profile_lock(self.state, busy_message=f"Reader '{self.name}' is busy"):
+            previous = self.load()
+            if previous is not None and previous['definition'] != fingerprint(spec):
+                raise ReaderError('Reader definition changed; progress was not rebound')
+            state = self.initial(spec, previous['generation'] + 1 if previous else 1)
+            state['cursor'] = Journal(self.profile.root / 'data').tail()
+            self.store(state)
+        return self.status()
+
     def follow_tail(self, spec):
         """Start once at the tail; resume the saved fresh cursor after restarts."""
         if self.lane != 'fresh':
