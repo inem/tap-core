@@ -24,9 +24,12 @@ def main():
     os.umask(0o077)
     profile = Profile.load(Path(sys.argv[1]))
     stopping = threading.Event()
+    refresh_requested = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stopping.set())
     signal.signal(signal.SIGINT, lambda *_: stopping.set())
-    rows, services, threads = {}, {}, []
+    # A pack mutation signals this controller, not the capture proxy or Hub.
+    signal.signal(signal.SIGUSR1, lambda *_: refresh_requested.set())
+    rows, services, reader_jobs = {}, {}, {}
     mutex = threading.Lock()
     health_path = profile.root / 'state/components.json'
     configuration = identity(profile)
@@ -39,14 +42,17 @@ def main():
                      'workloads_healthy': workloads_healthy, 'readers': dict(rows),
                      'services': dict(services)}
         atomic_json(health_path, state)
-    def reader_loop(name, spec, allowed_origins, fresh_enabled):
+    def reader_loop(name, spec, allowed_origins, fresh_enabled, stop_reader):
+        def cancelled():
+            return stopping.is_set() or stop_reader.is_set()
+
         reader, failures, first = Reader(profile, name), 0, True
         if fresh_enabled:
-            return fresh_reader_loop(name, spec, allowed_origins)
-        while not stopping.is_set():
+            return fresh_reader_loop(name, spec, allowed_origins, stop_reader, cancelled)
+        while not cancelled():
             try:
                 reader.run(spec, max_records=1 if first else 50, timeout=10, guard_parent=True,
-                           cancelled=stopping.is_set, allowed_origins=allowed_origins)
+                           cancelled=cancelled, allowed_origins=allowed_origins)
                 failures, first = 0, False
                 row = {'healthy': True, 'phase': 'waiting', 'progress': reader.load(), 'error': None}
             except Exception as error:
@@ -57,15 +63,15 @@ def main():
                 rows[name] = row
             if failures >= 3:
                 return  # Explicit off/on resumes; no infinite failed replay loop.
-            stopping.wait(min(4, 2 ** (failures - 1)) if failures else 0.25)
+            stop_reader.wait(min(4, 2 ** (failures - 1)) if failures else 0.25)
 
-    def fresh_reader_loop(name, spec, allowed_origins):
+    def fresh_reader_loop(name, spec, allowed_origins, stop_reader, cancelled):
         replay = Reader(profile, name)
         fresh = Reader(profile, name, lane='fresh')
         initialized = False
         replay_failures = fresh_failures = 0
         replay_error = fresh_error = None
-        while not stopping.is_set():
+        while not cancelled():
             if not initialized:
                 try:
                     fresh.follow_tail(spec)
@@ -77,7 +83,7 @@ def main():
             if initialized:
                 try:
                     fresh.run(spec, max_records=500, max_invocations=5, timeout=10, guard_parent=True,
-                              cancelled=stopping.is_set, allowed_origins=allowed_origins)
+                              cancelled=cancelled, allowed_origins=allowed_origins)
                     fresh_failures = 0
                     if not any(fresh.state.glob('fresh-failure-*.json')):
                         fresh_error = None
@@ -93,7 +99,7 @@ def main():
             if replay_failures < 3:
                 try:
                     replay.run(spec, max_records=1, timeout=10,
-                               guard_parent=True, cancelled=stopping.is_set,
+                               guard_parent=True, cancelled=cancelled,
                                allowed_origins=allowed_origins)
                     replay_failures = 0
                     replay_error = None
@@ -107,7 +113,43 @@ def main():
                    'fresh_skipped': len(list(fresh.state.glob('fresh-failure-*.json'))), 'error': error}
             with mutex:
                 rows[name] = row
-            stopping.wait(0.25 if fresh_failures == 0 else min(4, 2 ** (fresh_failures - 1)))
+            stop_reader.wait(0.25 if fresh_failures == 0 else min(4, 2 ** (fresh_failures - 1)))
+
+    def sync_readers(desired_components, reader_origins, fresh_readers, *, live_attach=False):
+        """Change only reader workers; never restart the controller, Hub or proxy."""
+        desired = {name: (spec, reader_origins.get(name), name in fresh_readers)
+                   for name, spec in desired_components['readers'].items()}
+        # Stop changed workers before starting replacements: no duplicate writes.
+        for name, (spec, origins, fresh, stop_reader, thread) in list(reader_jobs.items()):
+            if desired.get(name) == (spec, origins, fresh):
+                continue
+            stop_reader.set()
+            thread.join(timeout=4)
+            if thread.is_alive():
+                raise RuntimeError(f'Reader {name} did not stop; replacement was not started')
+            reader_jobs.pop(name)
+            with mutex:
+                rows.pop(name, None)
+            log(f'reader {name} detached')
+        for name, (spec, origins, fresh) in desired.items():
+            if name in reader_jobs:
+                continue
+            # Newly attached readers are subscriptions to future events only.
+            # Startup readers retain the existing persisted recovery behavior.
+            if live_attach:
+                Reader(profile, name).begin_now(spec)
+                if fresh:
+                    Reader(profile, name, lane='fresh').begin_now(spec)
+            stop_reader = threading.Event()
+            thread = threading.Thread(target=reader_loop,
+                                      args=(name, spec, origins, fresh, stop_reader),
+                                      daemon=True)
+            with mutex:
+                rows[name] = {'healthy': False, 'phase': 'starting', 'error': None}
+            reader_jobs[name] = (spec, origins, fresh, stop_reader, thread)
+            thread.start()
+            log(f'reader {name} attached')
+
     with profile_lock(profile.root / 'state/component-service', busy_message='Component controller already running'):
         starts_path = profile.root / 'state/component-starts.json'
         try:
@@ -170,14 +212,11 @@ def main():
                                       'error': 'not ready at startup'}
                 log(f'service {name} {"ready" if services[name]["healthy"] else "not ready at startup"} '
                     f'pid={process.pid} port={port}')
-            for name, spec in components['readers'].items():
-                rows[name] = {'healthy': False, 'phase': 'starting', 'error': None}
-                thread = threading.Thread(target=reader_loop,
-                                          args=(name, spec, reader_origins.get(name), name in fresh_readers),
-                                          daemon=True)
-                threads.append(thread)
-                thread.start()
+            sync_readers(components, reader_origins, fresh_readers)
             hub_failures = 0
+            refresh_retry_at = 0.0
+            refresh_failures = 0
+            refresh_error = None
             service_failures = {name: 0 for name in service_processes}
             service_starts = {name: [time.monotonic()] for name in service_processes}
 
@@ -201,6 +240,38 @@ def main():
             log(f'controller ready hub_pid={hub_pid} services={sorted(service_processes)} '
                 f'readers={sorted(components["readers"])}')
             while not stopping.is_set():
+                if refresh_requested.is_set() and time.monotonic() >= refresh_retry_at:
+                    # Consume the signal only for this attempt. A failure re-queues
+                    # the request; another signal arriving during reconciliation
+                    # remains pending rather than being cleared on success.
+                    refresh_requested.clear()
+                    try:
+                        from tap_core.components import configuration as validate_components, prepare
+                        updated = store.effective_components(profile.components)
+                        validate_components(updated, profile)
+                        # Handler/service/host changes still need a controlled stopped-profile update.
+                        unchanged = lambda c: {k: v for k, v in c.items() if k != 'readers'}
+                        if unchanged(updated) != unchanged(components):
+                            raise RuntimeError('Live refresh supports reader changes only')
+                        sync_readers(updated, store.reader_origins(), store.fresh_readers(),
+                                     live_attach=True)
+                        components = updated
+                        # The existing runtime snapshot and health identity must agree.
+                        prepare(profile)
+                        configuration = identity(profile)
+                        refresh_failures = 0
+                        refresh_retry_at = 0.0
+                        refresh_error = None
+                        log(f'live reader reconciliation: {sorted(reader_jobs)}')
+                    except Exception as error:
+                        # A saved registry change must remain actionable after a
+                        # transient filesystem, lock or worker shutdown failure.
+                        # Bounded backoff avoids a hot loop on permanent errors.
+                        refresh_failures += 1
+                        refresh_retry_at = time.monotonic() + min(30, 2 ** min(refresh_failures, 5))
+                        refresh_error = f'Live reader reconciliation pending: {type(error).__name__}: {error}'
+                        refresh_requested.set()
+                        log(f'{refresh_error}; retrying')
                 # The Hub is core infrastructure: only its own process exit tears
                 # the controller down. Transient health-probe failures are
                 # tolerated (5 in a row) so a busy machine or a heavy managed
@@ -241,14 +312,16 @@ def main():
                         if service_failures[name] >= 5 and within_restart_budget(name):
                             service_failures[name] = 0
                             restart_service(name)
-                report('ready', hub_pid)
+                report('ready', hub_pid, error=refresh_error)
                 stopping.wait(0.5)
         except Exception as error:
             report('failed', error=str(error))
             log(str(error))
         finally:
             stopping.set()
-            for thread in threads:
+            for _spec, _origins, _fresh, stop_reader, _thread in reader_jobs.values():
+                stop_reader.set()
+            for _spec, _origins, _fresh, _stop_reader, thread in reader_jobs.values():
                 thread.join(timeout=4)
             if hub is not None:
                 try:

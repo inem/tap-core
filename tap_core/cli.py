@@ -538,6 +538,10 @@ def main(argv=None):
                         profile is not None
                         and (adapter.service_loaded(profile)
                              or (profile.components is not None and adapter.service_loaded(Job(profile)))))
+                    # Capture only reader projection; avoid touching the live Hub or
+                    # proxy for a reader pack registration.
+                    before_readers = (store.effective_components(profile.components)['readers']
+                                      if live and profile is not None and profile.components else None)
                     if args.pack_action == 'add':
                         from .pack_add import add
                         output = add(root, args.source, assume_yes=args.yes, live=live)
@@ -559,6 +563,15 @@ def main(argv=None):
                         output = store.disable(args.id, live=live)
                     else:
                         output = store.uninstall(args.id, args.version)
+                    # SIGUSR1 requests an in-process refresh; the controller
+                    # decides which reader workers need changing. No off/on.
+                    if before_readers is not None:
+                        after_readers = store.effective_components(profile.components)['readers']
+                        if before_readers != after_readers:
+                            controller_pid = adapter.service_pid(Job(profile))
+                            if controller_pid is None:
+                                raise TapError('Pack state saved but component controller is absent; run tap on')
+                            os.kill(controller_pid, __import__('signal').SIGUSR1)
                     from .background import reconcile
                     try:
                         reconcile(root, adapter)

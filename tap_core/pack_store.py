@@ -28,7 +28,7 @@ HOST_ROLES = frozenset({"page", "reader", "handler", "command"})
 PAGE_APPLIES = ("immediately for new documents; already bootstrapped pages reconcile "
                 "the plan and reload classic scripts; documents loaded before the Core "
                 "bootstrap existed require one reload")
-LIVE_PACK_APPLIES = PAGE_APPLIES + "; reader/handler bindings still require profile on"
+LIVE_PACK_APPLIES = PAGE_APPLIES + "; reader changes reconcile live; handler changes require profile off/on"
 
 
 def _private_directory(path):
@@ -602,10 +602,15 @@ class PackStore:
             return
         before = self._effective_components(before_registry, base)
         after = self._effective_components(candidate, base)
-        if before != after:
-            raise PackError(
-                'Stop this profile with off before changing reader/handler packs; '
-                'page-only pack changes may apply while the proxy is running')
+        if before is None or after is None:
+            if before != after:
+                raise PackError('Live reader changes require configured components')
+            return
+        # Readers are reconciled by the running controller; handler bindings still
+        # belong to the Hub's separate lifecycle.
+        if {k: v for k, v in before.items() if k != 'readers'} != {
+                k: v for k, v in after.items() if k != 'readers'}:
+            raise PackError('Stop this profile with off before changing handler bindings')
 
     def _refuse_live_capture_change(self, before_registry, candidate):
         base = self._profile_capture()
