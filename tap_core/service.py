@@ -115,7 +115,7 @@ def main():
                 rows[name] = row
             stop_reader.wait(0.25 if fresh_failures == 0 else min(4, 2 ** (fresh_failures - 1)))
 
-    def sync_readers(desired_components, reader_origins, fresh_readers):
+    def sync_readers(desired_components, reader_origins, fresh_readers, *, live_attach=False):
         """Change only reader workers; never restart the controller, Hub or proxy."""
         desired = {name: (spec, reader_origins.get(name), name in fresh_readers)
                    for name, spec in desired_components['readers'].items()}
@@ -134,9 +134,12 @@ def main():
         for name, (spec, origins, fresh) in desired.items():
             if name in reader_jobs:
                 continue
-            # Subscription starts NOW, not from retained journal history.
-            # Do this before starting its worker to avoid a tail/worker race.
-            Reader(profile, name).begin_now(spec)
+            # Newly attached readers are subscriptions to future events only.
+            # Startup readers retain the existing persisted recovery behavior.
+            if live_attach:
+                Reader(profile, name).begin_now(spec)
+                if fresh:
+                    Reader(profile, name, lane='fresh').begin_now(spec)
             stop_reader = threading.Event()
             thread = threading.Thread(target=reader_loop,
                                       args=(name, spec, origins, fresh, stop_reader),
@@ -244,7 +247,8 @@ def main():
                         unchanged = lambda c: {k: v for k, v in c.items() if k != 'readers'}
                         if unchanged(updated) != unchanged(components):
                             raise RuntimeError('Live refresh supports reader changes only')
-                        sync_readers(updated, store.reader_origins(), store.fresh_readers())
+                        sync_readers(updated, store.reader_origins(), store.fresh_readers(),
+                                     live_attach=True)
                         components = updated
                         # The existing runtime snapshot and health identity must agree.
                         prepare(profile)
