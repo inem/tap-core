@@ -150,7 +150,7 @@ class LiveReaderReconcileTests(unittest.TestCase):
                                 'controller did not reconcile after repairing pack bytes')
                 self.assertEqual(state()['pid'], pid)
                 stream = root / 'data/stream.jsonl'
-                stream.write_bytes(encoded(capture_record(body='after-repair')))
+                stream.write_bytes(encoded(capture_record(body='{"marker":"after-repair"}')))
                 self.assertTrue(until(lambda: (state().get('readers', {}).get(name, {})
                                                 .get('progress') or {}).get('processed', 0) >= 1))
                 self.assertEqual(state()['pid'], pid)
