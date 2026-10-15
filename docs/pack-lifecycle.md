@@ -188,8 +188,8 @@ adds or removes only the affected reader worker. Capture, network routing and Hu
 remain running. Each attachment begins at the current journal tail: retained events
 and events missed while detached are not replayed. An incompatible reader
 definition is still rejected before activation (rebind is separate work).
-Handler/service bindings and request-body capture policy still require a stopped
-profile. A page-only edit must never use global `off`/`on` as its development loop.
+Handler/service bindings and pack request-body capture policy still require a stopped
+profile (profile-edited capture allowlists reload live with `tap capture reload`, #247). A page-only edit must never use global `off`/`on` as its development loop.
 
 This slice is deliberately **not** a live source-file watcher or a hot handler
 upgrade. Installed reader code still comes from verified immutable artifacts.
