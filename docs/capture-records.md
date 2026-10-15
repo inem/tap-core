@@ -150,6 +150,30 @@ startup snapshot: stop the profile before enabling, disabling, updating or
 rolling back a pack that changes it, then run `tap on`. The same
 `max_body_bytes` limit applies. `TAP_CAPTURE_REQUEST_BODY_PATHS` is a debugging
 override.
+
+**Live retention reload (#247).** After editing `capture.binary_paths` or
+`capture.request_body_paths` in `profile.json`, `tap --profile <root> capture
+reload` applies the effective allowlists (profile plus enabled pack request-body
+paths) to the running proxy without `off`/`on`. The CLI validates the policy with
+the same `capture_limits` validator and writes the versioned document
+`state/capture-policy.json` (`{version: 1, revision, binary_paths,
+request_body_paths}`, `revision` = content hash). The capture addon polls that
+file every 0.5 s, re-validates it, and replaces its limits reference in one
+assignment, so each flow sees either the old or the new allowlists; a flow whose
+headers were already decided keeps that decision. The CLI waits up to 5 s for the
+revision to appear in `state/capture.json` under `policy` and fails if the proxy
+rejects it or never acknowledges it (an addon older than #247). An invalid
+document keeps the previous policy; the rejection is logged and recorded.
+Every applied or rejected policy, including the startup policy, is a line in
+`data/capture-policy.jsonl` (`capture.policy.applied` / `capture.policy.rejected`
+with revision, previous revision and added/removed patterns) and a `[tap] capture
+policy ...` line in `logs/capture.log`. Only these two allowlists reload: size
+bounds, queue, segments, routing, ports and passthrough remain restart-only, and
+a pending difference in them is listed under `restart_required`. A launchd
+KeepAlive restart keeps the reloaded policy; `tap on` deletes the file and
+the profile is authoritative again. The `TAP_CAPTURE_*_PATHS` debugging overrides
+still win over both. Pack enable/disable that changes request-body paths is still
+refused while the profile runs (follow-up: route it through this reload).
 Bodies are omitted before decode for a known oversized length (`oversize`), or
 after decoding when retained UTF-8 text exceeds the limit (`oversize_decoded`).
 This does not bound decompression work. Unknown Content-Length alone is allowed;

@@ -3,8 +3,11 @@
 No readers, site declarations, global paths or consumer offset mutations.
 Loaded by mitmdump with explicit TAP_CORE_DATA and TAP_CORE_STATE directories.
 Optional TAP_CORE_CAPTURE JSON supplies profile storage limits (#8).
+The retention allowlists may later be replaced at runtime from
+TAP_CORE_STATE/capture-policy.json (#247); see PolicyWatcher.
 """
 import base64
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -139,6 +142,178 @@ def limits_from_env():
         raise SystemExit(f"tap-core: invalid TAP_CORE_CAPTURE: {error}") from error
 
 
+# Retention policy reload (#247). Only the URL allowlists that choose which
+# bodies are kept may change while the proxy runs. Size bounds, queue, segment
+# rolls, routing, ports and passthrough stay restart-only: they shape the
+# backend argv or the writer, and changing them in place has no single owner.
+RELOADABLE_KEYS = ("binary_paths", "request_body_paths")
+POLICY_FILE = "capture-policy.json"
+POLICY_EVENTS = "capture-policy.jsonl"
+POLICY_VERSION = 1
+POLICY_MAX_BYTES = 256 * 1024
+
+
+def retention_policy(limits):
+    return {key: list((limits or {}).get(key) or ()) for key in RELOADABLE_KEYS}
+
+
+def policy_revision(limits):
+    """Content address of the retention allowlists (order-sensitive, as matched)."""
+    canonical = json.dumps(retention_policy(limits), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
+def policy_document(limits):
+    """The versioned handoff written by `tap capture reload`."""
+    return {"version": POLICY_VERSION, "revision": policy_revision(limits),
+            **retention_policy(limits)}
+
+
+def apply_policy_document(document, base):
+    """Validate a reload document over `base` limits and return new limits.
+
+    Raises ValueError for any invalid document; `base` is never mutated, so a
+    rejected reload leaves the running policy exactly as it was.
+    """
+    expected = {"version", "revision", *RELOADABLE_KEYS}
+    if type(document) is not dict or document.get("version") != POLICY_VERSION:
+        raise ValueError("capture policy requires a version 1 object")
+    if set(document) != expected:
+        extra = sorted(set(document) - expected)
+        if extra:
+            raise ValueError("capture policy reload accepts only " + ", ".join(RELOADABLE_KEYS)
+                             + "; restart-only keys: " + ", ".join(extra))
+        raise ValueError("capture policy requires keys: " + ", ".join(sorted(expected)))
+    if type(document["revision"]) is not str:
+        raise ValueError("capture policy revision must be a string")
+    merged = dict(base)
+    for key in RELOADABLE_KEYS:
+        merged[key] = document[key]
+    result = capture_limits(merged)
+    if document["revision"] != policy_revision(result):
+        raise ValueError("capture policy revision does not match its content")
+    return result
+
+
+class PolicyWatcher:
+    """Swap Capture.limits when TAP_CORE_STATE/capture-policy.json changes.
+
+    The CLI validates and writes the file atomically; the proxy re-validates it
+    with the same validator. Replacing `Capture.limits` is a single reference
+    assignment, and each hook reads that reference once, so a flow never sees a
+    half-applied policy. Every applied or rejected document is appended to
+    TAP_CORE_DATA/capture-policy.jsonl and logged to capture.log, and the
+    current state is published in the writer health record (capture.json).
+    """
+
+    def __init__(self, capture, state, data, interval=0.5):
+        self.capture = capture
+        self.path = Path(state) / POLICY_FILE
+        self.events = Path(data) / POLICY_EVENTS
+        self.interval = interval
+        self.seen = None
+        self.status = None
+        self.stopping = threading.Event()
+        self.thread = None
+
+    def publish(self, status):
+        self.status = status
+        writer = self.capture.writer
+        if writer is not None:
+            writer.policy_status = status
+
+    def event(self, kind, **fields):
+        record = {"event": "capture.policy." + kind, "ts": time.time(), "pid": os.getpid(), **fields}
+        try:
+            with self.events.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except OSError as error:
+            print(f"[tap] cannot record capture policy event: {error}", flush=True)
+
+    def started(self):
+        limits = self.capture.limits
+        revision = policy_revision(limits)
+        self.publish({"revision": revision, "source": "startup", "applied_at": time.time(),
+                      "binary_paths": len(limits.get("binary_paths") or ()),
+                      "request_body_paths": len(limits.get("request_body_paths") or ()),
+                      "error": None, "rejected_revision": None})
+        self.event("applied", source="startup", revision=revision, **retention_policy(limits))
+
+    def signature(self):
+        try:
+            stat = self.path.stat()
+        except FileNotFoundError:
+            return None
+        return (stat.st_ino, stat.st_mtime_ns, stat.st_size)
+
+    def check(self):
+        """Apply a changed policy file once. True applied, False rejected, None no-op."""
+        signature = self.signature()
+        if signature is None or signature == self.seen:
+            return None
+        current = self.capture.limits
+        revision = None
+        try:
+            raw = self.path.read_bytes()
+        except FileNotFoundError:
+            return None
+        except OSError as error:
+            # Transient: leave `seen` unchanged so the next poll retries.
+            print(f"[tap] cannot read capture policy: {error}", flush=True)
+            return None
+        self.seen = signature
+        try:
+            if len(raw) > POLICY_MAX_BYTES:
+                raise ValueError("capture policy file exceeds 256 KiB")
+            document = json.loads(raw)
+            if type(document) is dict and type(document.get("revision")) is str:
+                revision = document["revision"][:64]
+            updated = apply_policy_document(document, current)
+        except ValueError as error:
+            message = f"capture policy rejected; keeping revision {policy_revision(current)}: {error}"
+            print(f"[tap] {message}", flush=True)
+            self.publish(dict(self.status or {}, error=message, rejected_revision=revision))
+            self.event("rejected", revision=revision, kept=policy_revision(current), error=str(error))
+            return False
+        before, after = retention_policy(current), retention_policy(updated)
+        changes = {key: {"added": [p for p in after[key] if p not in before[key]],
+                         "removed": [p for p in before[key] if p not in after[key]]}
+                   for key in RELOADABLE_KEYS}
+        # Atomic swap: hooks read this reference once per flow.
+        self.capture.limits = updated
+        self.publish({"revision": revision, "source": "reload", "applied_at": time.time(),
+                      "binary_paths": len(after["binary_paths"]),
+                      "request_body_paths": len(after["request_body_paths"]),
+                      "error": None, "rejected_revision": None})
+        summary = " ".join(f"{key}={len(after[key])}(+{len(changes[key]['added'])}"
+                           f"/-{len(changes[key]['removed'])})" for key in RELOADABLE_KEYS)
+        print(f"[tap] capture policy applied revision={revision} previous="
+              f"{policy_revision(current)} {summary}", flush=True)
+        self.event("applied", source="reload", revision=revision,
+                   previous=policy_revision(current), changes=changes, **after)
+        return True
+
+    def run(self):
+        while not self.stopping.wait(self.interval):
+            try:
+                self.check()
+            except Exception as error:  # never let the watcher die silently
+                print(f"[tap] capture policy watcher error: {error}", flush=True)
+
+    def start(self):
+        self.started()
+        # A KeepAlive restart after a reload keeps the reloaded policy; `tap on`
+        # removes the file so the profile is authoritative again.
+        self.check()
+        self.thread = threading.Thread(target=self.run, daemon=True, name="tap-policy")
+        self.thread.start()
+
+    def stop(self):
+        self.stopping.set()
+        if self.thread is not None:
+            self.thread.join(timeout=2)
+
+
 class Writer:
     def __init__(self, data, state, max_bytes=None, keep_rolls=None, *,
                  queue_slots=None, queue_bytes=None, limits=None):
@@ -162,6 +337,7 @@ class Writer:
         self.lock = threading.Lock()
         self.queued_bytes = self.dropped = self.written = self.errors = 0
         self.last_error = None
+        self.policy_status = None
         self.closed = False
         self.stopping = threading.Event()
         self.abandon = threading.Event()
@@ -195,6 +371,8 @@ class Writer:
             values = {"pid": os.getpid(), "updated_at": time.time(), "writer_alive": not self.closed,
                       "written": self.written, "dropped": self.dropped, "write_errors": self.errors,
                       "last_error": self.last_error, "queued_bytes": self.queued_bytes}
+            if self.policy_status is not None:
+                values["policy"] = dict(self.policy_status)
         temporary = self.health.with_suffix(".tmp")
         temporary.write_text(json.dumps(values) + "\n")
         temporary.replace(self.health)
@@ -474,6 +652,7 @@ class Capture:
         self.writer = writer
         self.limits = limits
         self.live = None
+        self.policy = None
 
     def load(self, loader):
         # Fail closed rather than falling back to the existing user's journal.
@@ -488,6 +667,9 @@ class Capture:
             bridge = profile.get('bridge') or {}
             publisher = _live['Publisher'](root, bridge['hub_port'])
             self.live = _live['Observer'](publisher, self.limits['live_routes'])
+        if self.policy is None:
+            self.policy = PolicyWatcher(self, os.environ["TAP_CORE_STATE"], os.environ["TAP_CORE_DATA"])
+            self.policy.start()
 
     def request(self, flow):
         if self.live:
@@ -613,6 +795,8 @@ class Capture:
         self.writer.submit(record)
 
     def done(self):
+        if self.policy:
+            self.policy.stop()
         if self.live:
             self.live.publisher.close()
         if self.writer:

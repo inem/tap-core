@@ -15,6 +15,20 @@ from tap_core.components import ROOT, identity, hub_health, needs_hub
 from tap_core.readers import Reader
 
 
+def service_startup_seconds():
+    """Readiness grace for each managed service start (#247).
+
+    Services are workloads, not infrastructure: the controller reports ready
+    without waiting for them, and a service still closed after this grace is
+    marked degraded and left to the bounded restart supervisor.
+    TAP_SERVICE_STARTUP_SECONDS overrides the default; a bad value falls back.
+    """
+    try:
+        return max(0.0, float(os.environ.get('TAP_SERVICE_STARTUP_SECONDS', 10)))
+    except ValueError:
+        return 10.0
+
+
 def log(message):
     """One timestamped controller line into components.log (see #145)."""
     print(stamped(message), flush=True)
@@ -191,30 +205,21 @@ def main():
                 if hub_pid is None:
                     raise RuntimeError('Hub exited before readiness')
                 log(f'hub ready pid={hub_pid}')
+            # Managed services start in parallel and are probed by the steady
+            # loop below. Waiting for each here serialized their readiness in
+            # front of the controller's own and could exhaust the lifecycle's
+            # 15 s window, aborting the whole profile start (#247).
+            startup_grace = service_startup_seconds()
+            service_deadline = {}
+            service_announced = {}
             for name, spec in components.get('services', {}).items():
                 command = [components['python'], '-B', str(ROOT / 'guardian.py'), str(os.getpid()), *spec['command']]
                 process = subprocess.Popen(command, start_new_session=True)
                 service_processes[name] = (process, spec['port'])
+                service_deadline[name] = time.monotonic() + startup_grace
+                service_announced[name] = False
                 services[name] = {'healthy': False, 'phase': 'starting', 'port': spec['port'], 'error': None}
-            for name, (process, port) in service_processes.items():
-                deadline = time.monotonic() + 10
-                while not stopping.is_set() and process.poll() is None:
-                    try:
-                        with socket.create_connection(('127.0.0.1', port), timeout=1.0):
-                            services[name] = {'healthy': True, 'phase': 'ready', 'port': port, 'error': None}
-                            break
-                    except OSError:
-                        if time.monotonic() >= deadline:
-                            break
-                        stopping.wait(0.1)
-                if not services[name]['healthy']:
-                    # A managed service that is not ready at startup is left
-                    # unhealthy for the steady-state loop to restart; a service
-                    # must never tear down the Hub or its peers.
-                    services[name] = {'healthy': False, 'phase': 'backoff', 'port': port,
-                                      'error': 'not ready at startup'}
-                log(f'service {name} {"ready" if services[name]["healthy"] else "not ready at startup"} '
-                    f'pid={process.pid} port={port}')
+                log(f'service {name} starting pid={process.pid} port={spec["port"]}')
             sync_readers(components, reader_origins, fresh_readers)
             hub_failures = 0
             refresh_retry_at = 0.0
@@ -239,6 +244,8 @@ def main():
                 service_processes[name] = (subprocess.Popen(command, start_new_session=True), port)
                 service_starts[name] = ([t for t in service_starts[name]
                                          if time.monotonic() - 120 < t] + [time.monotonic()])
+                service_deadline[name] = time.monotonic() + startup_grace
+                service_announced[name] = False
 
             log(f'controller ready hub_pid={hub_pid} services={sorted(service_processes)} '
                 f'readers={sorted(components["readers"])}')
@@ -309,7 +316,18 @@ def main():
                         with socket.create_connection(('127.0.0.1', port), timeout=1.0):
                             service_failures[name] = 0
                             services[name] = {'healthy': True, 'phase': 'ready', 'port': port, 'error': None}
+                            if not service_announced[name]:
+                                service_announced[name] = True
+                                log(f'service {name} ready pid={process.pid} port={port}')
                     except OSError as error:
+                        if not service_announced[name] and time.monotonic() < service_deadline[name]:
+                            # Still inside its startup grace: not a failure yet.
+                            services[name] = {'healthy': False, 'phase': 'starting', 'port': port, 'error': None}
+                            continue
+                        if not service_announced[name]:
+                            service_announced[name] = True
+                            log(f'service {name} not ready within {startup_grace:g}s startup grace; '
+                                f'degraded, supervisor retries pid={process.pid} port={port}')
                         service_failures[name] += 1
                         services[name] = {'healthy': False, 'phase': 'backoff', 'port': port, 'error': str(error)}
                         if service_failures[name] >= 5 and within_restart_budget(name):

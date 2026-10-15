@@ -127,7 +127,7 @@ failed or hung Hub cannot become healthy just because injection is loaded.
 The controller's own lines in `components.log` and the background host's in
 `background-host.log` carry an ISO-8601 UTC prefix (millisecond precision), so
 the log answers *when* on its own: the controller stamps Hub readiness (with
-PID), each managed service becoming ready or failing to at startup, a service
+PID), each managed service starting, becoming ready or degrading after its startup grace, a service
 restart, a service's restart budget being exhausted, controller readiness, and
 any teardown error; the background host stamps each task's run outcome
 (`<pack>:<path> exit=<code> <phase>`) and any skipped-pack line. Raw stdout that
@@ -143,7 +143,15 @@ There is one scheduling thread per declared reader, at most eight readers.
 No second cursor store, capture bus or workflow scheduler is introduced.
 
 A controller and its required Hub must become live before infrastructure startup
-reports ready. Startup readiness is bounded to 15 seconds. Reader health is a
+reports ready. Startup readiness is bounded to 15 seconds. Managed services are
+workloads, not part of that readiness: the controller starts them and reports
+ready without waiting for their ports (#247). Each service has a startup grace
+(10 s, `TAP_SERVICE_STARTUP_SECONDS`) during which it is `starting`; a service
+whose port is still closed after the grace is logged as degraded, reported in
+`backoff`, and retried by the bounded restart supervisor. Before #247 the
+controller waited for each service in turn, so one slow service (seen:
+`codex-app-server`) could exhaust the 15-second window and roll back the whole
+`on`. Reader health is a
 separate workload aggregate: a reader may report backoff or failure while capture
 and the owned Hub continue serving current traffic. `status` retains each failed
 workload, while `doctor` continues to report the usable control plane as healthy;

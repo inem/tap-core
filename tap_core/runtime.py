@@ -329,6 +329,10 @@ class MacOS:
                                           "TAP_CORE_CAPTURE": json.dumps(limits, separators=(",", ":"))},
                  "StandardOutPath": str(profile.root / "logs/capture.log"),
                  "StandardErrorPath": str(profile.root / "logs/capture.log")}
+        # `on` makes the profile authoritative again: drop a policy handed to a
+        # previous proxy by `tap capture reload` (#247).
+        from .capture import POLICY_FILE
+        (profile.root / "state" / POLICY_FILE).unlink(missing_ok=True)
         profile.plist.parent.mkdir(parents=True, exist_ok=True)
         temporary = profile.plist.with_suffix(".tmp")
         temporary.write_bytes(plistlib.dumps(plist))

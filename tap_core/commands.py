@@ -18,6 +18,7 @@ CORE_PROVIDER_VERSION = "development"
 CORE_ROOTS = frozenset({
     "install", "on", "off", "status", "doctor", "where", "uninstall",
     "routing", "components", "bridge", "reader", "pack", "pages", "page", "dev",
+    "capture",
 })
 
 
