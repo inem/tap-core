@@ -9,6 +9,8 @@ on:
       - 'tap_core/readers.py'
       - 'tap_core/pack_store.py'
       - 'tap_core/cli.py'
+      - 'tap_core/capture.py'
+      - 'tap_core/capture_policy.py'
   workflow_dispatch:
 
 permissions:

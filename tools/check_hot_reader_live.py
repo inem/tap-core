@@ -4,6 +4,8 @@
 Runs exclusively in a new temporary profile with explicit loopback routing.
 Never changes the system proxy or touches an installed production profile.
 Starts a real capture proxy and Hub; checks their PIDs across reader changes.
+Then reloads capture.binary_paths with `tap capture reload` (#247) and checks
+that a binary body is retained only after the reload, with the same PIDs.
 """
 import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -28,8 +30,18 @@ NEIGHBOR = "fixture.hot-neighbor"
 TARGET = "fixture.hot-target"
 
 
+PROTO_BODY = b"\x08\x01\x12\x05hello"
+
+
 class Origin(BaseHTTPRequestHandler):
     def do_GET(self):
+        if self.path.startswith("/proto/"):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-protobuf")
+            self.send_header("Content-Length", str(len(PROTO_BODY)))
+            self.end_headers()
+            self.wfile.write(PROTO_BODY)
+            return
         phase = urlsplit(self.path).path.strip("/")
         body = json.dumps({"phase": phase}, separators=(",", ":")).encode()
         self.send_response(200)
@@ -251,6 +263,34 @@ def main():
             assert set(("before", "attached", "detached", "reattached")).issubset(
                 captured_phases), captured_phases
             assert not state().get("error"), state().get("error")
+
+            # Live capture retention reload (#247): same proxy, new allowlist.
+            def proto_record(name):
+                for line in (profile_root / "data/stream.jsonl").read_text().splitlines():
+                    record = json.loads(line)
+                    if record.get("url") == origin + "/proto/" + name:
+                        return record
+                return None
+
+            request("proto/before-reload")
+            before_reload = wait(lambda: proto_record("before-reload"), "proto before reload")
+            assert before_reload["body_reason"] == "media_type", before_reload
+            from tap_core.capture import capture_limits
+            edited = Profile.load(profile_root)
+            edited.capture = dict(capture_limits(edited.capture), binary_paths=[origin + "/proto/"])
+            edited.save()
+            reloaded = json.loads(run(prefix + ["capture", "reload"]))
+            assert reloaded["applied"] and reloaded["applies"] == "live", reloaded
+            request("proto/after-reload")
+            after_reload = wait(lambda: proto_record("after-reload"), "proto after reload")
+            assert after_reload.get("body_encoding") == "base64" and after_reload["body_kept"], after_reload
+            events = [json.loads(line) for line in
+                      (profile_root / "data/capture-policy.jsonl").read_text().splitlines()]
+            assert [e["source"] for e in events if e["event"] == "capture.policy.applied"][-1] == "reload"
+            check_pids()
+            report["capture_policy_reload"] = {"revision": reloaded["revision"],
+                                               "before": before_reload["body_reason"],
+                                               "after": after_reload["body_encoding"]}
             report["neighbor"] = phases(NEIGHBOR)
             report["target"] = phases(TARGET)
             report["capture_phases"] = captured_phases
