@@ -5,7 +5,10 @@ Loaded by mitmdump with explicit TAP_CORE_DATA and TAP_CORE_STATE directories.
 Optional TAP_CORE_CAPTURE JSON supplies profile storage limits (#8).
 The retention allowlists may later be replaced at runtime from
 TAP_CORE_STATE/capture-policy.json (#247); see PolicyWatcher.
+Allowlisted streamed responses and WebSocket messages are teed, chunk by chunk,
+into the sibling journal TAP_CORE_DATA/wire.jsonl (#250); see Wire.
 """
+import asyncio
 import base64
 import hashlib
 import json
@@ -19,7 +22,8 @@ import uuid
 # mitmproxy loads this file by absolute path outside the tap_core package.
 # Load the adjacent stdlib-only contract without relying on cwd or PYTHONPATH.
 import runpy
-MAX_RECORD_BYTES = runpy.run_path(str(Path(__file__).with_name("records.py")))["MAX_RECORD_BYTES"]
+_RECORDS = runpy.run_path(str(Path(__file__).with_name("records.py")))
+MAX_RECORD_BYTES = _RECORDS["MAX_RECORD_BYTES"]
 
 # Defaults match previously hardcoded writer/backend bounds.
 # Distinct owners: backend stream cutoff ≠ retained body ≠ queue ≠ disk rolls.
@@ -62,6 +66,27 @@ def request_body_retain_patterns(limits):
     return tuple((limits or {}).get("request_body_paths") or ())
 
 
+def stream_retain_patterns(limits):
+    """URL substrings whose streamed responses / WebSocket messages are teed (#250)."""
+    raw = os.environ.get("TAP_CAPTURE_STREAM_PATHS")
+    if raw is not None:
+        return tuple(p for p in (s.strip() for s in raw.split(",")) if p)
+    return tuple((limits or {}).get("stream_paths") or ())
+
+
+def streaming_media(ctype):
+    """Media types whose responses are open-ended by protocol (#250).
+
+    Server-sent events, Connect streaming (`application/connect+*`; unary
+    Connect uses `application/proto` / `application/json`) and gRPC framing.
+    Missing Content-Length alone is not this signal: unary HTTP/2 bodies often
+    omit it and must stay bufferable for `binary_paths`.
+    """
+    media = ctype.split(";", 1)[0].strip().lower()
+    return (media == "text/event-stream" or media.startswith("application/connect+")
+            or media.startswith("application/grpc"))
+
+
 def wants_binary(url, patterns):
     return any(pattern in url for pattern in patterns)
 
@@ -82,17 +107,19 @@ def capture_limits(value=None):
 
     `binary_paths` is optional (default empty): URL substrings whose binary
     (non-JSON/text) response bodies are retained as base64 (#171). Optional so
-    existing profiles keep validating unchanged.
+    existing profiles keep validating unchanged. `stream_paths` (#250) is
+    optional in the same way: URL substrings whose streamed responses and
+    WebSocket messages are teed into wire.jsonl.
     """
     if value is None:
-        return dict(DEFAULT_CAPTURE, binary_paths=(), request_body_paths=())
+        return dict(DEFAULT_CAPTURE, binary_paths=(), request_body_paths=(), stream_paths=())
     if type(value) is not dict or value.get("version") != 1:
         raise ValueError("capture limits require version 1 object")
     required = set(DEFAULT_CAPTURE)
-    optional = {"binary_paths", "request_body_paths"}
+    optional = {"binary_paths", "request_body_paths", "stream_paths"}
     if not required <= set(value) or not set(value) <= required | optional:
         raise ValueError("capture limits keys must be exactly: " + ", ".join(sorted(required))
-                         + " (optional: binary_paths, request_body_paths)")
+                         + " (optional: binary_paths, request_body_paths, stream_paths)")
     for name in ("stream_large_bodies", "segment_bytes", "queue_slots", "queue_bytes", "max_body_bytes"):
         number = value[name]
         if type(number) is not int or number < 1:
@@ -111,6 +138,10 @@ def capture_limits(value=None):
                    for p in request_body_paths):
         raise ValueError(
             "capture.request_body_paths must be a list of up to 64 non-empty URL substrings")
+    stream_paths = value.get("stream_paths", [])
+    if not isinstance(stream_paths, (list, tuple)) or len(stream_paths) > 64 \
+            or any(type(p) is not str or not p.strip() or len(p) > 512 for p in stream_paths):
+        raise ValueError("capture.stream_paths must be a list of up to 64 non-empty URL substrings")
     if value["stream_large_bodies"] > 64 * 1024 * 1024:
         raise ValueError("capture.stream_large_bodies exceeds supported maximum (64 MiB)")
     if value["segment_bytes"] > 512 * 1024 * 1024:
@@ -127,7 +158,8 @@ def capture_limits(value=None):
         raise ValueError("capture.max_body_bytes cannot fit request+response under journal record limit")
     return dict(value,
                 binary_paths=tuple(p.strip() for p in binary_paths),
-                request_body_paths=tuple(p.strip() for p in request_body_paths))
+                request_body_paths=tuple(p.strip() for p in request_body_paths),
+                stream_paths=tuple(p.strip() for p in stream_paths))
 
 
 def limits_from_env():
@@ -144,7 +176,11 @@ def limits_from_env():
 # bodies are kept may change while the proxy runs. Size bounds, queue, segment
 # rolls, routing, ports and passthrough stay restart-only: they shape the
 # backend argv or the writer, and changing them in place has no single owner.
-RELOADABLE_KEYS = ("binary_paths", "request_body_paths")
+RELOADABLE_KEYS = ("binary_paths", "request_body_paths", "stream_paths")
+# Keys added after #247 are left out of the handoff document and its revision
+# while empty, so a policy that does not use them keeps the revision it had and
+# stays acceptable to a proxy started before the key existed.
+OMIT_WHEN_EMPTY = ("stream_paths",)
 POLICY_FILE = "capture-policy.json"
 POLICY_EVENTS = "capture-policy.jsonl"
 POLICY_VERSION = 1
@@ -155,16 +191,25 @@ def retention_policy(limits):
     return {key: list((limits or {}).get(key) or ()) for key in RELOADABLE_KEYS}
 
 
+def addressed_policy(limits):
+    """The allowlists as written to the handoff document and hashed into its revision."""
+    policy = retention_policy(limits)
+    for key in OMIT_WHEN_EMPTY:
+        if not policy[key]:
+            del policy[key]
+    return policy
+
+
 def policy_revision(limits):
     """Content address of the retention allowlists (order-sensitive, as matched)."""
-    canonical = json.dumps(retention_policy(limits), sort_keys=True, separators=(",", ":"))
+    canonical = json.dumps(addressed_policy(limits), sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 
 def policy_document(limits):
     """The versioned handoff written by `tap capture reload`."""
     return {"version": POLICY_VERSION, "revision": policy_revision(limits),
-            **retention_policy(limits)}
+            **addressed_policy(limits)}
 
 
 def apply_policy_document(document, base):
@@ -173,11 +218,12 @@ def apply_policy_document(document, base):
     Raises ValueError for any invalid document; `base` is never mutated, so a
     rejected reload leaves the running policy exactly as it was.
     """
-    expected = {"version", "revision", *RELOADABLE_KEYS}
+    allowed = {"version", "revision", *RELOADABLE_KEYS}
+    expected = allowed - set(OMIT_WHEN_EMPTY)
     if type(document) is not dict or document.get("version") != POLICY_VERSION:
         raise ValueError("capture policy requires a version 1 object")
-    if set(document) != expected:
-        extra = sorted(set(document) - expected)
+    if not expected <= set(document) <= allowed:
+        extra = sorted(set(document) - allowed)
         if extra:
             raise ValueError("capture policy reload accepts only " + ", ".join(RELOADABLE_KEYS)
                              + "; restart-only keys: " + ", ".join(extra))
@@ -186,7 +232,7 @@ def apply_policy_document(document, base):
         raise ValueError("capture policy revision must be a string")
     merged = dict(base)
     for key in RELOADABLE_KEYS:
-        merged[key] = document[key]
+        merged[key] = document.get(key, [])
     result = capture_limits(merged)
     if document["revision"] != policy_revision(result):
         raise ValueError("capture policy revision does not match its content")
@@ -232,8 +278,7 @@ class PolicyWatcher:
         limits = self.capture.limits
         revision = policy_revision(limits)
         self.publish({"revision": revision, "source": "startup", "applied_at": time.time(),
-                      "binary_paths": len(limits.get("binary_paths") or ()),
-                      "request_body_paths": len(limits.get("request_body_paths") or ()),
+                      **{key: len(limits.get(key) or ()) for key in RELOADABLE_KEYS},
                       "error": None, "rejected_revision": None})
         self.event("applied", source="startup", revision=revision, **retention_policy(limits))
 
@@ -280,8 +325,7 @@ class PolicyWatcher:
         # Atomic swap: hooks read this reference once per flow.
         self.capture.limits = updated
         self.publish({"revision": revision, "source": "reload", "applied_at": time.time(),
-                      "binary_paths": len(after["binary_paths"]),
-                      "request_body_paths": len(after["request_body_paths"]),
+                      **{key: len(after[key]) for key in RELOADABLE_KEYS},
                       "error": None, "rejected_revision": None})
         summary = " ".join(f"{key}={len(after[key])}(+{len(changes[key]['added'])}"
                            f"/-{len(changes[key]['removed'])})" for key in RELOADABLE_KEYS)
@@ -313,8 +357,15 @@ class PolicyWatcher:
 
 
 class Writer:
+    """Bounded off-hook JSONL appender with rolls and a health record.
+
+    One instance per journal: `stream.jsonl` (+ `state/capture.json`) for v1
+    records, `wire.jsonl` (+ `state/wire.json`) for stream parts (#250).
+    """
+
     def __init__(self, data, state, max_bytes=None, keep_rolls=None, *,
-                 queue_slots=None, queue_bytes=None, limits=None):
+                 queue_slots=None, queue_bytes=None, limits=None,
+                 journal="stream.jsonl", health="capture.json", encode=None):
         limits = dict(limits or capture_limits())
         if max_bytes is not None:
             limits["segment_bytes"] = max_bytes
@@ -326,8 +377,11 @@ class Writer:
             limits["queue_bytes"] = queue_bytes
         limits = capture_limits(limits)
         self.limits = limits
-        self.stream = Path(data) / "stream.jsonl"
-        self.health = Path(state) / "capture.json"
+        self.stream = Path(data) / journal
+        self.health = Path(state) / health
+        self.encode = encode or (lambda record: encode_record(fit_record(record)))
+        # Optional callable adding fields to the health record (read on the writer thread).
+        self.extra = None
         self.max_bytes = limits["segment_bytes"]
         self.keep_rolls = limits["keep_rolls"]
         self.queue_bytes_limit = limits["queue_bytes"]
@@ -344,18 +398,23 @@ class Writer:
         self.thread = threading.Thread(target=self.run, daemon=True, name="tap-writer")
         self.thread.start()
 
-    def submit(self, record):
+    def submit(self, record, size=None):
+        """Queue without blocking; False when the record was dropped (counted)."""
         # Conservative estimate without JSON serialization or encoding in hooks.
-        size = sum(len(value) * 6 if isinstance(value, str) else 64 for value in record.values()) + 1024
+        if size is None:
+            size = sum(len(value) * 6 if isinstance(value, str) else 64
+                       for value in record.values()) + 1024
         with self.lock:
             if self.closed or self.stopping.is_set() or self.queued_bytes + size > self.queue_bytes_limit:
                 self.dropped += 1
-                return
+                return False
             try:
                 self.queue.put_nowait((record, size))
                 self.queued_bytes += size
             except queue.Full:
                 self.dropped += 1
+                return False
+        return True
 
     def error(self, message, dropped=0):
         with self.lock:
@@ -371,6 +430,8 @@ class Writer:
                       "last_error": self.last_error, "queued_bytes": self.queued_bytes}
             if self.policy_status is not None:
                 values["policy"] = dict(self.policy_status)
+        if self.extra is not None:
+            values.update(self.extra())
         temporary = self.health.with_suffix(".tmp")
         temporary.write_text(json.dumps(values) + "\n")
         temporary.replace(self.health)
@@ -384,9 +445,10 @@ class Writer:
             self.error(f"cannot report writer health: {error}")
 
     def archives(self):
-        archives = [path for path in self.stream.parent.glob("stream.jsonl.*")
-                    if path.name.removeprefix("stream.jsonl.").isdigit()]
-        archives.sort(key=lambda path: int(path.name.removeprefix("stream.jsonl.")))
+        prefix = self.stream.name + "."
+        archives = [path for path in self.stream.parent.glob(prefix + "*")
+                    if path.name.removeprefix(prefix).isdigit()]
+        archives.sort(key=lambda path: int(path.name.removeprefix(prefix)))
         return archives
 
     def prune(self):
@@ -400,7 +462,7 @@ class Writer:
         if archives:
             # A clock adjustment must not make the newest archive the first
             # retention victim. Numeric archive names remain monotonically newer.
-            stamp = max(stamp, int(archives[-1].name.removeprefix("stream.jsonl.")) + 1)
+            stamp = max(stamp, int(archives[-1].name.removeprefix(self.stream.name + ".")) + 1)
         archive = self.stream.with_name(self.stream.name + f".{stamp}")
         while archive.exists():
             stamp += 1
@@ -511,7 +573,7 @@ class Writer:
                         with self.lock:
                             self.dropped += 1
                         continue
-                    line = encode_record(fit_record(record))
+                    line = self.encode(record)
                     if len(line) > MAX_RECORD_BYTES:
                         self.error("capture record exceeds journal reader limit", dropped=1)
                         continue
@@ -645,11 +707,234 @@ def fit_record(record):
     return record
 
 
+# Streamed response and WebSocket retention (#250). Opt-in by URL substring
+# (capture.stream_paths, reloadable). The client keeps receiving every chunk
+# unbuffered; a copy of the raw bytes (content-encoding not decoded) with chunk
+# boundaries and times goes to the sibling journal data/wire.jsonl as parts.
+# stream.jsonl and its v1 contract do not change: the v1 record of a teed flow
+# stays `streamed: true, body_kept: false` and its record_id is the parts'
+# flow_id. Hooks only append to a per-flow buffer and enqueue; base64 and JSON
+# encoding happen on the wire writer thread.
+WIRE_SCHEMA = _RECORDS["WIRE_SCHEMA"]
+WIRE_PART_BYTES = 256 * 1024       # flush a part at this many kept bytes...
+WIRE_PART_SECONDS = 2.0            # ...or this long after its first chunk
+WIRE_PART_CHUNKS = 4096            # bounds chunk metadata once data is capped
+WIRE_FLOW_BYTES = 8 * 1024 * 1024  # kept bytes per flow; then boundaries only
+WIRE_MAX_FLOWS = 64                # flows tracked at once; more are refused
+WIRE_LIMITS = dict(DEFAULT_CAPTURE, segment_bytes=128 * 1024 * 1024, keep_rolls=7,
+                   queue_slots=1024, queue_bytes=32 * 1024 * 1024)
+_WIRE = "_tap_wire_flow"
+
+
+def encode_wire_part(record):
+    """Writer-thread encoding: raw bytes become base64 only here."""
+    data = record.get("data")
+    if isinstance(data, (bytes, bytearray)):
+        record = dict(record, data=base64.b64encode(data).decode("ascii"))
+    return encode_record(record)
+
+
+def flow_key(flow):
+    return getattr(flow, "id", None) or id(flow)
+
+
+class WireFlow:
+    """Per-flow tee state; touched only on the proxy event-loop thread."""
+
+    def __init__(self, flow_id, flow, transport, now):
+        request, response = flow.request, flow.response
+        self.key = flow_key(flow)
+        self.flow_id = flow_id
+        self.meta = {"transport": transport, "method": request.method, "url": request.url,
+                     "status": response.status_code,
+                     "ctype": response.headers.get("content-type", ""),
+                     "content_encoding": response.headers.get("content-encoding", ""),
+                     "ua": request.headers.get("user-agent", ""),
+                     "t_request": getattr(request, "timestamp_start", None), "t_headers": now}
+        self.t_headers = now
+        self.part = 0
+        self.buffer = bytearray()
+        self.chunks = []
+        self.t_first = self.t_last = None
+        self.bytes_seen = self.bytes_kept = 0
+        self.lost = 0
+        self.truncated = False
+        self.timer = None
+
+
+class Wire:
+    """Tee allowlisted streams into data/wire.jsonl through its own Writer.
+
+    The Writer (and state/wire.json) is created on the first teed flow, so a
+    profile without stream_paths never creates either file. Every loss is
+    explicit: a dropped part shows up as `parts_lost_before` on the flow's next
+    part and in the health counters; the per-flow cap ends the flow
+    `truncated`; a flow over the tracked-flow bound gets a single `refused`
+    part; an aborted flow ends `error`; proxy shutdown ends open flows
+    `shutdown`.
+    """
+
+    def __init__(self, data, state, writer=None, *, part_bytes=WIRE_PART_BYTES,
+                 part_seconds=WIRE_PART_SECONDS, part_chunks=WIRE_PART_CHUNKS,
+                 flow_bytes=WIRE_FLOW_BYTES, max_flows=WIRE_MAX_FLOWS):
+        self.data_dir, self.state_dir = data, state
+        self.writer = writer
+        self.part_bytes, self.part_seconds, self.part_chunks = part_bytes, part_seconds, part_chunks
+        self.flow_bytes, self.max_flows = flow_bytes, max_flows
+        self.flows = {}
+        self.counters = {"flows_started": 0, "flows_refused": 0, "flows_truncated": 0,
+                         "flows_error": 0, "flows_shutdown": 0, "parts_submitted": 0,
+                         "parts_dropped": 0, "bytes_seen": 0, "bytes_kept": 0}
+
+    def health(self):
+        return {"schema": WIRE_SCHEMA, "flows_open": len(self.flows), **self.counters}
+
+    def ensure_writer(self):
+        if self.writer is None:
+            self.writer = Writer(self.data_dir, self.state_dir, limits=capture_limits(WIRE_LIMITS),
+                                 journal="wire.jsonl", health="wire.json", encode=encode_wire_part)
+            self.writer.extra = self.health
+        return self.writer
+
+    def start(self, flow, flow_id, transport):
+        """Track a flow, or record its refusal explicitly and return None."""
+        self.ensure_writer()
+        state = WireFlow(flow_id, flow, transport, time.time())
+        if len(self.flows) >= self.max_flows:
+            self.counters["flows_refused"] += 1
+            self.submit(state, final=True, outcome="refused")
+            return None
+        self.counters["flows_started"] += 1
+        self.flows[state.key] = state
+        return state
+
+    def lookup(self, flow):
+        return self.flows.get(flow_key(flow))
+
+    def data(self, state, chunk, direction=None, opcode=None):
+        now = time.time()
+        if state.t_first is None:
+            state.t_first = now
+            self.schedule(state)
+        state.t_last = now
+        size = len(chunk)
+        entry = [int((now - state.t_headers) * 1000), size]
+        if direction is not None:
+            entry += [direction, opcode]
+        state.chunks.append(entry)
+        state.bytes_seen += size
+        self.counters["bytes_seen"] += size
+        room = self.flow_bytes - state.bytes_kept
+        if size > room:
+            state.truncated = True
+        kept = chunk if size <= room else chunk[:max(0, room)]
+        if kept:
+            state.buffer += kept
+            state.bytes_kept += len(kept)
+            self.counters["bytes_kept"] += len(kept)
+        if (len(state.buffer) >= self.part_bytes or len(state.chunks) >= self.part_chunks
+                or now - state.t_first >= self.part_seconds):
+            self.submit(state)
+
+    def schedule(self, state):
+        # On the proxy event loop a timer flushes an idle part; without a
+        # running loop (unit tests) the next chunk or the end flushes it.
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        part = state.part
+        state.timer = loop.call_later(self.part_seconds, self.due, state, part)
+
+    def due(self, state, part):
+        state.timer = None
+        if state.part == part and state.chunks and self.flows.get(state.key) is state:
+            self.submit(state)
+
+    def submit(self, state, final=False, outcome=None, **extra):
+        if state.timer is not None:
+            state.timer.cancel()
+            state.timer = None
+        record = {"schema": WIRE_SCHEMA, "record_id": str(uuid.uuid4()),
+                  "flow_id": state.flow_id, "part": state.part, "final": final, **state.meta,
+                  "t_first": state.t_first, "t_last": state.t_last, "chunks": state.chunks,
+                  "data": bytes(state.buffer), "bytes_seen": state.bytes_seen,
+                  "bytes_kept": state.bytes_kept, "parts_lost_before": state.lost,
+                  "outcome": outcome, **extra}
+        size = len(state.buffer) * 4 // 3 + 32 * len(state.chunks) + len(state.meta["url"]) * 6 + 4096
+        if self.writer is not None and self.writer.submit(record, size):
+            state.lost = 0
+            self.counters["parts_submitted"] += 1
+        else:
+            state.lost += 1
+            self.counters["parts_dropped"] += 1
+        state.part += 1
+        state.buffer = bytearray()
+        state.chunks = []
+        state.t_first = state.t_last = None
+
+    def finish(self, flow, outcome, **extra):
+        """Close a tracked flow once; later calls for the same flow are no-ops."""
+        state = self.flows.pop(flow_key(flow), None)
+        if state is None:
+            return
+        if outcome == "complete" and state.truncated:
+            outcome = "truncated"
+        if outcome in ("truncated", "error", "shutdown"):
+            self.counters["flows_" + outcome] += 1
+        self.submit(state, final=True, outcome=outcome, **extra)
+
+    def tee(self, flow, state, previous=None):
+        """A response.stream callable: return every chunk unchanged, keep a copy.
+
+        Composes with a transform another addon installed first and observes
+        the bytes after it, i.e. what the client receives.
+        """
+        def keep(fragment):
+            try:
+                if fragment:
+                    self.data(state, bytes(fragment))
+            except Exception as error:  # never break the client's stream
+                print(f"[tap] wire tee error: {error}", flush=True)
+
+        def end():
+            try:
+                self.finish(flow, "complete")
+            except Exception as error:
+                print(f"[tap] wire tee error: {error}", flush=True)
+
+        def observe(chunk):
+            result = previous(chunk) if previous else chunk
+            if isinstance(result, (bytes, bytearray)):
+                keep(result)
+                if not chunk:
+                    end()
+                return result
+
+            def fragments():
+                for fragment in result:
+                    keep(fragment)
+                    yield fragment
+                if not chunk:
+                    end()
+            return fragments()
+        return observe
+
+    def close(self):
+        for key in list(self.flows):
+            state = self.flows.pop(key)
+            self.counters["flows_shutdown"] += 1
+            self.submit(state, final=True, outcome="shutdown")
+        if self.writer is not None:
+            self.writer.close()
+
+
 class Capture:
-    def __init__(self, writer=None, limits=None):
+    def __init__(self, writer=None, limits=None, wire=None):
         self.writer = writer
         self.limits = limits
         self.policy = None
+        self.wire = wire
 
     def load(self, loader):
         # Fail closed rather than falling back to the existing user's journal.
@@ -658,6 +943,8 @@ class Capture:
         if self.writer is None:
             self.writer = Writer(os.environ["TAP_CORE_DATA"], os.environ["TAP_CORE_STATE"],
                                  limits=self.limits)
+        if self.wire is None:
+            self.wire = Wire(os.environ["TAP_CORE_DATA"], os.environ["TAP_CORE_STATE"])
         if self.policy is None:
             self.policy = PolicyWatcher(self, os.environ["TAP_CORE_STATE"], os.environ["TAP_CORE_DATA"])
             self.policy.start()
@@ -669,14 +956,50 @@ class Capture:
         limits = self.limits or limits_from_env()
         keep, reason, force_stream, size = decide_body(response, limits["max_body_bytes"])
         # Allowlisted binary bodies (#171): keep them bufferable (do not stream)
-        # so response() can retain the raw bytes as base64.
-        binary = (not keep and reason == "media_type" and 0 <= size <= limits["max_body_bytes"]
+        # so response() can retain the raw bytes as base64. Never for an
+        # open-ended stream (#250): an SSE / Connect / gRPC response without
+        # Content-Length has size 0, and buffering it would hold every byte
+        # from the client until upstream ends or passes stream_large_bodies.
+        binary = (not keep and reason == "media_type"
+                  and not streaming_media(response.headers.get("content-type", ""))
+                  and 0 <= size <= limits["max_body_bytes"]
                   and wants_binary(flow.request.url, binary_retain_patterns(limits)))
         setattr(response, _BINARY, binary)
         setattr(response, _DECISION, {"keep": keep, "reason": reason,
                                       "force_stream": force_stream, "size": size})
         if not keep and (force_stream or reason == "media_type") and not binary:
-            response.stream = True
+            state = self.start_wire(flow, limits, reason)
+            if state is not None and state.meta["transport"] == "http":
+                previous = response.stream if callable(response.stream) else None
+                response.stream = self.wire.tee(flow, state, previous)
+            else:
+                response.stream = True
+
+    def start_wire(self, flow, limits, reason):
+        """Pin the stream retention decision for this flow at header time (#250).
+
+        Only responses v1 does not retain qualify: a media-type decision
+        (SSE, Connect, gRPC, other binary streams) or a 101 upgrade. The
+        decision and the v1 record_id are fixed here, so a later policy reload
+        never changes a flow that is already open.
+        """
+        response = flow.response
+        if (self.wire is None or reason != "media_type"
+                or not wants_binary(flow.request.url, stream_retain_patterns(limits))):
+            return None
+        flow_id = str(uuid.uuid4())
+        transport = "websocket" if response.status_code == 101 else "http"
+        try:
+            state = self.wire.start(flow, flow_id, transport)
+        except Exception as error:  # a broken wire sink must not break capture
+            print(f"[tap] wire start failed: {error}", flush=True)
+            return None
+        if state is not None:
+            setattr(response, _WIRE, flow_id)
+            metadata = getattr(flow, "metadata", None)
+            if isinstance(metadata, dict):
+                metadata["tap_wire"] = flow_id
+        return state
 
     def response(self, flow):
         response = flow.response
@@ -729,7 +1052,10 @@ class Capture:
                     size = encoded
                 elif size <= 0:
                     size = encoded
-        record = {"record_version": 1, "record_id": str(uuid.uuid4()),
+        wire_id = getattr(response, _WIRE, None)
+        if not isinstance(wire_id, str):
+            wire_id = None
+        record = {"record_version": 1, "record_id": wire_id or str(uuid.uuid4()),
                   "ts": time.time(), "method": flow.request.method, "url": flow.request.url,
                   "status": response.status_code, "ctype": response.headers.get("content-type", ""),
                   "size": max(0, size), "body_kept": keep, "body_reason": reason, "streamed": streamed,
@@ -739,7 +1065,9 @@ class Capture:
             record["body_encoding"] = body_encoding
         if keep:
             record["body"] = body
-        retain_request = (keep and not body_encoding) or wants_binary(
+        # A teed flow (#250) keeps its request with it: the request is what
+        # the streamed parts answer, and the decision was pinned per flow.
+        retain_request = (keep and not body_encoding) or bool(wire_id) or wants_binary(
             flow.request.url, request_body_retain_patterns(limits))
         if retain_request:
             request_streamed = bool(getattr(flow.request, "stream", False))
@@ -762,10 +1090,51 @@ class Capture:
             # decoded unless their URL was explicitly allowlisted.
             record["req_body_reason"] = "unavailable"
         self.writer.submit(record)
+        if wire_id and self.wire is not None:
+            if response.status_code != 101:
+                # Normally closed by the tee's end-of-message call already;
+                # an empty body never reaches the tee.
+                self.wire.finish(flow, "complete")
+            elif not getattr(flow, "websocket", None):
+                # 101 without a WebSocket layer: no messages will follow.
+                self.wire.finish(flow, "complete")
+
+    def error(self, flow):
+        if self.wire is not None:
+            self.wire.finish(flow, "error", error=str(getattr(flow, "error", "") or "")[:512])
+
+    def websocket_message(self, flow):
+        if self.wire is None:
+            return
+        state = self.wire.lookup(flow)
+        websocket = getattr(flow, "websocket", None)
+        if state is None or not websocket or not websocket.messages:
+            return
+        message = websocket.messages[-1]
+        try:
+            self.wire.data(state, bytes(message.content), "c" if message.from_client else "s",
+                           int(message.type))
+        except Exception as error:
+            print(f"[tap] wire websocket error: {error}", flush=True)
+
+    def websocket_end(self, flow):
+        if self.wire is None:
+            return
+        websocket = getattr(flow, "websocket", None)
+        close_code = getattr(websocket, "close_code", None)
+        # wsproto reports a CloseReason (an IntEnum) or a plain int.
+        if isinstance(close_code, int) and not isinstance(close_code, bool):
+            close_code = int(close_code)
+        else:
+            close_code = None
+        self.wire.finish(flow, "error" if getattr(flow, "error", None) else "complete",
+                         close_code=close_code)
 
     def done(self):
         if self.policy:
             self.policy.stop()
+        if self.wire:
+            self.wire.close()
         if self.writer:
             self.writer.close()
 

@@ -56,7 +56,7 @@ def reload(profile, adapter, *, wait_seconds=5.0, poll=0.1):
         document = policy_document(desired)
         revision = document["revision"]
         result = {"version": RESULT_VERSION, "revision": revision,
-                  **{key: document[key] for key in RELOADABLE_KEYS}}
+                  **{key: document.get(key, []) for key in RELOADABLE_KEYS}}
         pid = adapter.service_pid(profile)
         if not pid:
             # Nothing to hand over: the next `on` starts from the profile anyway.
