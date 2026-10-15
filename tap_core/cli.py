@@ -420,6 +420,10 @@ def parser():
         command.add_argument("id")
         if action == "uninstall":
             command.add_argument("--version")
+    capture = commands.add_parser("capture", help="Change capture retention policy on a running proxy")
+    capture_actions = capture.add_subparsers(dest="capture_action", required=True)
+    capture_actions.add_parser(
+        "reload", help="Apply profile capture.binary_paths/request_body_paths without restarting")
     commands.add_parser("pages", help="List live pages connected to the local WebSocket bridge")
     page = commands.add_parser("page", help="Send an opaque command to an operation exposed by a page pack")
     page_actions = page.add_subparsers(dest="page_action", required=True)
@@ -608,6 +612,10 @@ def main(argv=None):
                     profile.components = configuration(read_json(args.components_config), profile)
         else:
             profile = Profile.load(root)
+        if args.command == "capture":
+            from .capture_policy import reload
+            print(json.dumps(reload(profile, adapter), indent=2))
+            return 0
         if args.command == "pages":
             from .page_control import pages
             print(json.dumps(pages(root), indent=2))
