@@ -187,21 +187,25 @@ class Profile:
 
 
 @contextmanager
-def profile_lock(root, *, busy_message="Another command is changing this profile", wait_seconds=0):
+def profile_lock(root, *, busy_message="Another command is changing this profile", wait_seconds=0,
+                 shared=False):
     """Acquire a profile lease, optionally waiting for a bounded drain.
 
     Ordinary commands keep fail-fast semantics. Safety operations such as
     network recovery may restore the host first and then wait briefly for a
-    running command to release the profile before process cleanup.
+    running command to release the profile before process cleanup. A shared
+    lease coexists with other shared holders and is refused only while an
+    exclusive one is held; an exclusive lease is refused while any holder exists.
     """
     if type(wait_seconds) not in (int, float) or wait_seconds < 0:
         raise ValueError("Lock wait must be a non-negative number of seconds")
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    operation = (fcntl.LOCK_SH if shared else fcntl.LOCK_EX) | fcntl.LOCK_NB
     with (root / "command.lock").open("a") as lock:
         deadline = time.monotonic() + wait_seconds
         while True:
             try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(lock, operation)
                 break
             except BlockingIOError as error:
                 remaining = deadline - time.monotonic()
@@ -211,19 +215,24 @@ def profile_lock(root, *, busy_message="Another command is changing this profile
         yield lock
 
 
-def command_execution_lock(root, *, busy_message="A command from this profile is still running", key=None):
+def command_execution_lock(root, *, busy_message="A command from this profile is still running", key=None,
+                           shared=False):
     """Lease installed command execution without blocking profile lifecycle.
 
-    The lease is inherited by a provider child so pack mutation cannot remove
-    its selected version after the dispatcher exits. Capture/network lifecycle
-    deliberately uses the independent profile lease. key scopes the lease to
-    one pack id: a running command then blocks only mutation of its own pack,
-    never operations on unrelated packs.
+    Running a command takes the lease shared: commands of one pack, whether
+    dispatched from the CLI or by the background controller, run concurrently
+    and a pack that must not run two writers keeps its own lock. Pack mutation
+    takes the lease exclusive (the default) and is refused while any command of
+    that pack runs. The lease is inherited by a provider child so mutation
+    cannot remove the selected version after the dispatcher exits.
+    Capture/network lifecycle deliberately uses the independent profile lease.
+    key scopes the lease to one pack id: a running command then blocks only
+    mutation of its own pack, never operations on unrelated packs.
     """
     directory = Path(root) / "state/command-execution"
     if key is not None:
         directory = directory / ("pack-" + hashlib.sha256(key.encode()).hexdigest()[:24])
-    return profile_lock(directory, busy_message=busy_message)
+    return profile_lock(directory, busy_message=busy_message, shared=shared)
 
 
 class MacOS:

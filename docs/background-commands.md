@@ -14,9 +14,12 @@ This is an extension of the command manifest: earlier Core validators reject it.
 Core owns one LaunchAgent per profile. Every tick briefly takes the profile
 lease to discover enabled, verified, selected command providers and select due
 runs. A provider executes under a separate inherited command-execution lease;
-slow external work therefore does not block capture/network lifecycle. Pack
-mutation still contends on the execution lease so it cannot disable or remove a
-selected version underneath a running child. Version/config changes become
+slow external work therefore does not block capture/network lifecycle. The
+lease is shared between commands of one pack: a CLI invocation runs alongside
+the scheduled one instead of failing as "still running", and a pack whose
+commands must not overlap keeps its own lock. Pack mutation takes the lease
+exclusively, so it cannot disable or remove a selected version underneath a
+running child. Version/config changes become
 effective on the next tick. A busy profile or command runner retries later;
 this is periodic best-effort work, not an exact clock.
 Intervals start after completion. Commands must tolerate repeated execution.

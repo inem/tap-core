@@ -198,7 +198,7 @@ def run_freshness_once(root, commands):
         if receipt["action"] != freshness_policy.REFRESH:
             continue
         name, expected, adapter, previous = metadata[index]
-        with command_execution_lock(root, key=expected.provider_id,
+        with command_execution_lock(root, key=expected.provider_id, shared=True,
                                     busy_message=f"A command from pack '{expected.provider_id}' is still running") as lease:
             with profile_lock(root):
                 current = {command.provider_id + ":" + command.label: command for command, _ in tasks(root)}.get(name)
@@ -264,10 +264,12 @@ def run_once(root):
     for key, expected_fingerprint, provider_id in due:
         # A command lease prevents pack disable/update/uninstall from invalidating
         # files or authority while the provider runs. The lease is scoped to this
-        # provider: operations on unrelated packs proceed without waiting.
+        # provider: operations on unrelated packs proceed without waiting. It is
+        # shared, so a CLI command of the same pack neither blocks nor is blocked
+        # by this run; only pack mutation waits.
         # Re-read the profile under its short lease after acquiring execution
         # authority so a stale scheduler snapshot can never resurrect a changed selection.
-        with command_execution_lock(root, key=provider_id,
+        with command_execution_lock(root, key=provider_id, shared=True,
                                     busy_message=f"A command from pack '{provider_id}' is still running") as lease:
             with profile_lock(root):
                 current = {task_key(command): (command, schedule)
