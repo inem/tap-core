@@ -1,6 +1,7 @@
 """Profile-owned periodic command execution, independent of capture on/off."""
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import plistlib
@@ -29,12 +30,27 @@ FRESHNESS_WAKE_SECONDS = 15 * 60
 # Transitional admission while #228 defines a pack-declared adapter contract.
 # Only this local, credential-free adapter is allowed to refresh. Every other
 # scheduled command keeps its existing schedule unchanged.
+#
+# One command may serve several targets: `usage collect` asks the Codex
+# app-server and the Antigravity CLI in the same run. Each target has its own
+# key in the pack's freshness sidecar and, optionally, its own passive activity
+# source. The policy decides per target; the command runs once when any of its
+# targets is due, and every target it serves is settled from its own key.
 FRESHNESS_ADAPTERS = {
     ("usage.meters", ("usage", "collect")): {
-        "provider": "codex",
-        "freshness": ("data", "readers", "usage.meters", "freshness.json"),
+        "targets": (
+            {"provider": "codex",
+             "freshness": ("data", "readers", "usage.meters", "freshness.json")},
+            {"provider": "antigravity",
+             "freshness": ("data", "readers", "usage.meters", "freshness.json"),
+             "activity": {"path": ("data", "readers", "usage.meters", "native-activity.jsonl"),
+                          "client": "antigravity-hub"}},
+        ),
     },
 }
+# The activity ledger is append-only and roughly chronological; the newest row
+# of a client is found in its tail, not by parsing every row ever written.
+ACTIVITY_TAIL_BYTES = 1 << 20
 
 
 def tasks(root, *, account=None):
@@ -122,8 +138,8 @@ def _local_utc_offset_seconds(now):
     return int(time.mktime(local) - time.mktime(time.gmtime(now)))
 
 
-def _freshness_at(root, adapter):
-    path = Path(root).joinpath(*adapter["freshness"])
+def _freshness_at(root, target):
+    path = Path(root).joinpath(*target["freshness"])
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -131,8 +147,47 @@ def _freshness_at(root, adapter):
     if not isinstance(payload, dict) or payload.get("version") != 1:
         return None
     observed = payload.get("observed_at")
-    value = observed.get(adapter["provider"]) if isinstance(observed, dict) else None
+    value = observed.get(target["provider"]) if isinstance(observed, dict) else None
     return value if type(value) in (int, float) else None
+
+
+def _activity_at(root, target):
+    """Newest passive activity time of the target's client, or None.
+
+    Reads the tail of the pack's activity ledger (schema-2 `activity` rows,
+    one per line). A row of another client, a line that does not parse, and a
+    non-finite time are skipped; the policy applies its own believability test
+    to what is returned. The first line of a tail is usually cut and dropped.
+    """
+    spec = target.get("activity")
+    if not spec:
+        return None
+    path = Path(root).joinpath(*spec["path"])
+    try:
+        with path.open("rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            start = max(0, fh.tell() - ACTIVITY_TAIL_BYTES)
+            fh.seek(start)
+            lines = fh.read().split(b"\n")
+    except OSError:
+        return None
+    if start:
+        lines = lines[1:]
+    newest = None
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(row, dict) or row.get("client") != spec["client"] \
+                or row.get("record", "activity") != "activity":
+            continue
+        value = row.get("observed_at")
+        if type(value) in (int, float) and math.isfinite(value) and (newest is None or value > newest):
+            newest = value
+    return newest
 
 
 def _append_freshness_receipts(root, rows):
@@ -156,12 +211,35 @@ def _freshness_account(state):
     return account
 
 
-def run_freshness_once(root, commands):
-    """Coarse, policy-driven wake for the one admitted live usage adapter.
+def _adapter_id(command):
+    return command.provider_id + ":" + command.label
 
-    This is deliberately narrow: it converts the old 180-second Codex poll into
-    an idle-tier refresh with persisted policy state.  Passive activity and more
-    adapters arrive through #223/#228; no command is inferred as refreshable.
+
+def _target_key(command, target):
+    return _adapter_id(command) + "/" + target["provider"]
+
+
+def _restore_target(account, command, target):
+    key = _target_key(command, target)
+    state = account["targets"].get(key)
+    if isinstance(state, dict):
+        return state
+    # Before the second target, the one target was keyed by the adapter id
+    # alone. Adopt it so its attempts and backoff survive the upgrade.
+    legacy = account["targets"].get(_adapter_id(command))
+    if isinstance(legacy, dict) and legacy.get("provider") == target["provider"]:
+        return legacy
+    return freshness_policy.new_state(target["provider"], adapter=_adapter_id(command))
+
+
+def run_freshness_once(root, commands):
+    """Coarse, policy-driven wake for the admitted live usage adapter.
+
+    This is deliberately narrow: it converts the old 180-second provider poll
+    into per-target policy decisions with persisted state. A command with
+    several targets runs once per wake at most; the targets it serves are
+    settled from their own freshness keys afterwards. More adapters arrive
+    through #228; no command is inferred as refreshable.
     """
     root = Path(root).resolve()
     admitted = [(command, freshness_adapter(command)) for command, _ in commands
@@ -174,67 +252,82 @@ def run_freshness_once(root, commands):
         account = _freshness_account(state)
         if account.get("next_wake_at", 0) > now:
             return []
-        names = {command.provider_id + ":" + command.label for command, _ in admitted}
-        account["targets"] = {name: value for name, value in account["targets"].items()
-                              if name in names}
         policy_states, metadata = [], []
         for command, adapter in admitted:
-            name = command.provider_id + ":" + command.label
-            target = account["targets"].get(name)
-            if not isinstance(target, dict):
-                target = freshness_policy.new_state(adapter["provider"], adapter=command.provider_id + ":" + command.label)
-            seen = _freshness_at(root, adapter)
-            target = freshness_policy.observed_quota(target, seen, "legacy-schedule", now)
-            policy_states.append(target)
-            metadata.append((name, command, adapter, seen))
+            for spec in adapter["targets"]:
+                target = _restore_target(account, command, spec)
+                seen = _freshness_at(root, spec)
+                target = freshness_policy.observed_quota(target, seen, "legacy-schedule", now)
+                target = freshness_policy.observed_activity(target, _activity_at(root, spec), now)
+                policy_states.append(target)
+                metadata.append((_target_key(command, spec), command, spec, seen))
         context = freshness_policy.context(now, utc_offset_seconds=_local_utc_offset_seconds(now), online=None)
         policy_states, receipts = freshness_policy.plan(policy_states, context)
-        account["targets"] = {name: target for (name, _, _, _), target in zip(metadata, policy_states)}
+        account["targets"] = {key: target for (key, _, _, _), target in zip(metadata, policy_states)}
         account["next_wake_at"] = now + FRESHNESS_WAKE_SECONDS
         atomic_json(root / "state/background.json", state)
         _append_freshness_receipts(root, receipts)
 
+    # One run per command. The approved targets of a command share it, and the
+    # run also serves the command's other targets (a coalesced neighbour, or
+    # one that was simply fresh): each is settled from its own key.
+    approved_by_command = {}
     for index, receipt in enumerate(receipts):
-        if receipt["action"] != freshness_policy.REFRESH:
-            continue
-        name, expected, adapter, previous = metadata[index]
+        if receipt["action"] == freshness_policy.REFRESH:
+            approved_by_command.setdefault(_adapter_id(metadata[index][1]), []).append(index)
+    for name, approved in approved_by_command.items():
+        expected = metadata[approved[0]][1]
+        served = [index for index, (_, command, _, _) in enumerate(metadata) if _adapter_id(command) == name]
         with command_execution_lock(root, key=expected.provider_id,
                                     busy_message=f"A command from pack '{expected.provider_id}' is still running") as lease:
             with profile_lock(root):
-                current = {command.provider_id + ":" + command.label: command for command, _ in tasks(root)}.get(name)
+                current = {_adapter_id(command): command for command, _ in tasks(root)}.get(name)
                 if current is None or current.provider_version != expected.provider_version:
                     continue
                 state = read_state(root)
                 account = _freshness_account(state)
-                target = account["targets"].get(name, policy_states[index])
-                target = freshness_policy.started(target, receipt, time.time())
-                account["targets"][name] = target
+                started_at = time.time()
+                for index in approved:
+                    key = metadata[index][0]
+                    target = account["targets"].get(key, policy_states[index])
+                    account["targets"][key] = freshness_policy.started(target, receipts[index], started_at)
                 atomic_json(root / "state/background.json", state)
             try:
                 code = _run_pack(current, root, [], lease_fd=lease.fileno(), timeout=60)
             except (TapError, OSError):
                 code = 125
             finished_at = time.time()
-            observed = _freshness_at(root, adapter)
-            success = (code == 0 and type(observed) in (int, float)
-                       and (previous is None or observed > previous))
-            outcome = "unchanged" if success else "error"
+            rows = []
             with profile_lock(root):
                 state = read_state(root)
                 account = _freshness_account(state)
-                target = account["targets"].get(name)
-                if target is not None:
-                    target = freshness_policy.finished(
-                        target, outcome, finished_at,
-                        quota_observed_at=observed if success else None)
-                    account["targets"][name] = target
-                    outcome = "unchanged" if target.get("last_error") is None else "error"
-                    atomic_json(root / "state/background.json", state)
-            _append_freshness_receipts(root, [{
-                "receipt": "tap.usage-freshness-execution/v1", "decision_id": receipt["decision_id"],
-                "at": finished_at, "target": receipt["target"], "exit_code": code,
-                "outcome": outcome,
-            }])
+                for index in served:
+                    key, _, spec, previous = metadata[index]
+                    target = account["targets"].get(key)
+                    if target is None:
+                        continue
+                    observed = _freshness_at(root, spec)
+                    moved = (code == 0 and type(observed) in (int, float)
+                             and (previous is None or observed > previous))
+                    if index in approved or moved:
+                        # A look that moved the key is a successful look for that
+                        # target whether or not it asked: the streak clears. A key
+                        # that did not move fails only the target that asked.
+                        target = freshness_policy.finished(
+                            target, "unchanged" if moved else "error", finished_at,
+                            quota_observed_at=observed if moved else None)
+                        account["targets"][key] = target
+                        outcome = "unchanged" if target.get("last_error") is None else "error"
+                    else:
+                        outcome = "error"
+                    decision = receipts[index if index in approved else approved[0]]
+                    rows.append({
+                        "receipt": "tap.usage-freshness-execution/v1", "decision_id": decision["decision_id"],
+                        "at": finished_at, "target": receipts[index]["target"],
+                        "exit_code": code, "outcome": outcome, "ride_along": index not in approved,
+                    })
+                atomic_json(root / "state/background.json", state)
+            _append_freshness_receipts(root, rows)
     return receipts
 
 
