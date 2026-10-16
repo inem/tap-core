@@ -1,4 +1,5 @@
 """Profile-owned periodic command execution, independent of capture on/off."""
+from contextlib import ExitStack
 import hashlib
 import json
 import os
@@ -13,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tap_core.runtime import TapError, atomic_json, command_execution_lock, profile_lock, stamped
 from tap_core.pack_store import PackStore
 from tap_core.packs import PackError
-from tap_core.commands import discover, _run_pack
+from tap_core.commands import discover, _run_pack, _start_pack
 from tap_core import freshness_policy
 
 
@@ -238,94 +239,207 @@ def run_freshness_once(root, commands):
     return receipts
 
 
-def run_once(root):
-    root = Path(root).resolve()
-    # Discovery and schedule selection are a short profile snapshot. Provider
-    # execution has its own inherited lease, so capture lifecycle remains
-    # available while a network-bound periodic command is running.
+# One host, existing provider subprocesses, no additional service or queue store.
+MAX_RUNNING_PACKS = 4
+DISCOVERY_SECONDS = 10
+POLL_SECONDS = 0.1
+
+
+def _scheduled_snapshot(root, *, account_failures=False):
     with profile_lock(root):
         state = read_state(root)
-        active = tasks(root, account=state)
-        scheduled = [(command, schedule) for command, schedule in active if freshness_adapter(command) is None]
-        active_by_key = {task_key(command): command for command, _ in active}
-        state['jobs'] = {k: v for k, v in state['jobs'].items()
-                         if k in active_by_key and freshness_adapter(active_by_key[k]) is None}
+        active = tasks(root, account=state if account_failures else None)
+        scheduled = [(c, s) for c, s in active if freshness_adapter(c) is None]
+        keys = {task_key(c) for c, _ in scheduled}
+        state['jobs'] = {k: v for k, v in state['jobs'].items() if k in keys}
         due = []
         for command, schedule in scheduled:
             key = task_key(command)
             previous = state['jobs'].get(key, {})
             fingerprint = task_fingerprint(command, schedule)
+            same = previous.get('fingerprint') == fingerprint
+            next_at = previous.get('next_at', 0) if same else 0
+            if next_at <= time.time():
+                due.append((next_at, key, fingerprint, command.provider_id))
+        state['checked_at'] = time.time()
+        atomic_json(root / 'state/background.json', state)
+    # Oldest due first: a fast recurring command cannot jump an overdue neighbour.
+    return active, sorted(due, key=lambda item: item[0])
+
+
+def _start_scheduled(root, key, expected_fingerprint, provider_id):
+    resources = ExitStack()
+    try:
+        # Separate from the shared command/mutation lease: only scheduled writers
+        # of one pack serialize. Inherit both leases so an orphan provider cannot
+        # overlap a replacement host after a host crash.
+        lock_key = hashlib.sha256(provider_id.encode()).hexdigest()[:24]
+        scheduled_lease = resources.enter_context(profile_lock(
+            root / 'state/background-execution' / lock_key,
+            busy_message=f"Scheduled command from '{provider_id}' is still running"))
+        lease = resources.enter_context(command_execution_lock(root, key=provider_id, shared=True,
+            busy_message=f"Pack '{provider_id}' is being changed"))
+        with profile_lock(root):
+            current = {task_key(c): (c, s) for c, s in tasks(root)}.get(key)
+            if current is None:
+                return None
+            command, schedule = current
+            fingerprint = task_fingerprint(command, schedule)
+            if fingerprint != expected_fingerprint:
+                return None
+            state = read_state(root)
+            previous = state['jobs'].get(key, {})
             now = time.time()
             if previous.get('fingerprint') == fingerprint and previous.get('next_at', 0) > now:
-                continue
-            due.append((key, fingerprint, command.provider_id))
-        atomic_json(root / 'state/background.json', state)
-
-    for key, expected_fingerprint, provider_id in due:
-        # A command lease prevents pack disable/update/uninstall from invalidating
-        # files or authority while the provider runs. The lease is scoped to this
-        # provider: operations on unrelated packs proceed without waiting. It is
-        # shared, so a CLI command of the same pack neither blocks nor is blocked
-        # by this run; only pack mutation waits.
-        # Re-read the profile under its short lease after acquiring execution
-        # authority so a stale scheduler snapshot can never resurrect a changed selection.
-        with command_execution_lock(root, key=provider_id, shared=True,
-                                    busy_message=f"A command from pack '{provider_id}' is still running") as lease:
-            with profile_lock(root):
-                current = {task_key(command): (command, schedule)
-                           for command, schedule in tasks(root)}.get(key)
-                if current is None:
-                    continue
-                command, schedule = current
-                fingerprint = task_fingerprint(command, schedule)
-                if fingerprint != expected_fingerprint:
-                    continue
-                state = read_state(root)
-                previous = state['jobs'].get(key, {})
-                now = time.time()
-                if previous.get('fingerprint') == fingerprint and previous.get('next_at', 0) > now:
-                    continue
-                run_id = hashlib.sha256(f'{key}\0{fingerprint}\0{time.time_ns()}'.encode()).hexdigest()
-                row = {'provider': command.provider_id, 'version': command.provider_version,
-                       'fingerprint': fingerprint, 'run': run_id,
-                       'started_at': now, 'phase': 'running',
-                       'next_at': now + schedule['interval_seconds']}
-                state['jobs'][key] = row
-                atomic_json(root / 'state/background.json', state)
-
+                return None
+            run_id = hashlib.sha256(f'{key}\0{fingerprint}\0{time.time_ns()}'.encode()).hexdigest()
+            row = {'provider': command.provider_id, 'version': command.provider_version,
+                   'fingerprint': fingerprint, 'run': run_id,
+                   'started_at': now, 'phase': 'running',
+                   'next_at': now + schedule['interval_seconds']}
+            receipt_dir = root / 'state/background-runs' / run_id
+            receipt_dir.mkdir(mode=0o700, parents=True)
+            row['receipt_dir'] = str(receipt_dir)
+            atomic_json(receipt_dir / 'started.json', {
+                'schema': 'tap.background-run/v1', **row, 'command': list(command.path),
+                'trigger': {'kind': 'schedule', 'due_at': previous.get('next_at')
+                            if previous.get('fingerprint') == fingerprint else None,
+                            'schedule': schedule},
+                'implementation': {'path': str(command.root),
+                                   'manifest_sha256': hashlib.sha256((command.root / 'pack.json').read_bytes()).hexdigest()},
+            })
+            state['jobs'][key] = row
+            atomic_json(root / 'state/background.json', state)
+        job = dict(key=key, command=command, schedule=schedule, row=row,
+                   process=None, resources=resources, code=None)
+        try:
             logdir = root / 'logs/background'
             logdir.mkdir(parents=True, exist_ok=True, mode=0o700)
             logpath = logdir / (hashlib.sha256(key.encode()).hexdigest()[:16] + '.log')
-            # Bound each job's log between runs; never log invocation context.
             if logpath.exists() and logpath.stat().st_size > 1024 * 1024:
                 logpath.unlink()
-            try:
-                with logpath.open('ab') as log:
-                    os.chmod(logpath, 0o600)
-                    code = _run_pack(command, root, [], lease_fd=lease.fileno(),
-                                     timeout=schedule['timeout_seconds'], log=log)
-            except (TapError, OSError):
-                code = 125
-                row['error'] = 'command_start_failed'
+            log = resources.enter_context(logpath.open('ab'))
+            os.chmod(logpath, 0o600)
+            job['process'] = _start_pack(command, root, [], lease_fd=lease.fileno(),
+                timeout=schedule['timeout_seconds'], log=log, extra_fds=(scheduled_lease.fileno(),),
+                execution={'id': run_id, 'kind': 'schedule', 'receipt_dir': str(receipt_dir)})
+            job['deadline'] = time.monotonic() + schedule['timeout_seconds']
+        except (TapError, OSError):
+            job['code'] = 125
+            row['error'] = 'command_start_failed'
+        job['resources'] = resources.pop_all()
+        return job
+    finally:
+        resources.close()
 
-            with profile_lock(root):
-                state = read_state(root)
-                current_row = state['jobs'].get(key)
-                if current_row is None or current_row.get('run') != run_id:
-                    raise TapError(f'Background run state changed during execution: {key}')
-                row.update(finished_at=time.time(), exit_code=code,
-                           phase='unknown' if code in (124, 130) else 'ok' if code == 0 else 'failed')
-                row['next_at'] = time.time() + schedule['interval_seconds']
-                state['jobs'][key] = row
-                atomic_json(root / 'state/background.json', state)
-            print(stamped('ran %s:%s exit=%s %s' % (
-                command.provider_id, '/'.join(command.path), code, row['phase'])), flush=True)
 
+def _stop_process(job):
+    process = job['process']
+    if process is not None:
+        # The process may have exited between poll and kill. Its descendants can
+        # still hold the inherited leases, so kill the isolated process group.
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+
+
+def _poll_scheduled(job):
+    if job['code'] is not None:
+        return job['code']
+    process = job['process']
+    code = process.poll()
+    if code is not None:
+        return 128 - code if code < 0 else code
+    if time.monotonic() >= job['deadline']:
+        _stop_process(job)
+        return 124
+    return None
+
+
+def _finish_scheduled(root, job, code):
+    row = job['row']
     with profile_lock(root):
         state = read_state(root)
-        state['checked_at'] = time.time()
+        current = state['jobs'].get(job['key'])
+        if current is None or current.get('run') != row['run']:
+            raise RuntimeError(f"Background run state changed during execution: {job['key']}")
+        now = time.time()
+        row.update(finished_at=now, exit_code=code,
+                   phase='unknown' if code in (124, 130) else 'ok' if code == 0 else 'failed',
+                   next_at=now + job['schedule']['interval_seconds'])
+        atomic_json(Path(row['receipt_dir']) / 'finished.json', {
+            'schema': 'tap.background-run/v1', **row, 'command': list(job['command'].path),
+        })
+        state['jobs'][job['key']] = row
         atomic_json(root / 'state/background.json', state)
+    command = job['command']
+    print(stamped('ran %s:%s exit=%s %s' % (
+        command.provider_id, '/'.join(command.path), code, row['phase'])), flush=True)
 
+
+def run_once(root):
+    root = Path(root).resolve()
+    # launchd already prevents overlap. This also covers manual host invocations.
+    with profile_lock(root / 'state/background-host', busy_message='Background host is already running'):
+        _run_cycle(root)
+
+
+def _run_cycle(root):
+    running = {}
+    active, due = _scheduled_snapshot(root, account_failures=True)
+    next_discovery = time.monotonic() + DISCOVERY_SECONDS
+    try:
+        while True:
+            completed = False
+            for provider_id, job in list(running.items()):
+                code = _poll_scheduled(job)
+                if code is None:
+                    continue
+                job['code'] = code
+                try:
+                    _finish_scheduled(root, job, code)
+                except TapError:
+                    # A short lifecycle operation owns the profile; retry the
+                    # receipt without rerunning the provider or losing its lease.
+                    continue
+                job['resources'].close()
+                del running[provider_id]
+                completed = True
+            if completed or time.monotonic() >= next_discovery:
+                try:
+                    active, due = _scheduled_snapshot(root)
+                except TapError:
+                    due = []  # Retry fresh discovery, never stale authority.
+                next_discovery = time.monotonic() + DISCOVERY_SECONDS
+            for _, key, fingerprint, provider_id in due:
+                if len(running) >= MAX_RUNNING_PACKS:
+                    break
+                if provider_id in running:
+                    continue
+                try:
+                    job = _start_scheduled(root, key, fingerprint, provider_id)
+                except TapError:
+                    continue  # Pack/profile mutation or an inherited orphan lease.
+                if job is not None:
+                    running[provider_id] = job
+            due = []
+            if not running:
+                break
+            time.sleep(POLL_SECONDS)
+    finally:
+        # SIGTERM/interrupt/exception must reap all children, not leave writers
+        # running behind a dead host. Existing timeout/unknown semantics remain.
+        for job in running.values():
+            try:
+                _stop_process(job)
+                try:
+                    _finish_scheduled(root, job, job['code'] if job['code'] is not None else 130)
+                except (TapError, RuntimeError, OSError) as exc:
+                    print(stamped(str(exc)), file=sys.stderr, flush=True)
+            finally:
+                job['resources'].close()
     run_freshness_once(root, active)
 
 

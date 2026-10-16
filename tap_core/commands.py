@@ -240,7 +240,8 @@ def _private_runtime_directory(store, path):
     return path
 
 
-def _run_pack(command, profile_root, argv, lease_fd=None, timeout=None, log=None):
+def _start_pack(command, profile_root, argv, lease_fd=None, timeout=None, log=None, extra_fds=(), execution=None):
+    """Start the existing command provider; the caller owns wait/timeout cleanup."""
     from .pack_store import PackStore
     profile_root = Path(profile_root).expanduser().resolve()
     store = PackStore(profile_root)
@@ -260,21 +261,30 @@ def _run_pack(command, profile_root, argv, lease_fd=None, timeout=None, log=None
         "config": command.config, "grants": command.grants,
         "runtime": command.runtime,
     }
+    if execution is not None:
+        context["execution"] = execution
     environment = dict(os.environ)
     environment.update({
         "TAP_COMMAND_CONTEXT": json.dumps(context, separators=(",", ":")),
         "PYTHONDONTWRITEBYTECODE": "1",
     })
-    process = None
     try:
         if command.runtime != "host-python":
             raise TapError(f"Unsupported command runtime: {command.runtime}")
-        process = subprocess.Popen(
+        return subprocess.Popen(
             [sys.executable, "-B", str(executable), *argv], cwd=state,
             env=environment, stdin=subprocess.DEVNULL if timeout else None, stdout=log, stderr=log,
             start_new_session=bool(timeout),
-            pass_fds=(() if lease_fd is None else (lease_fd,)),
+            pass_fds=(() if lease_fd is None else (lease_fd,)) + tuple(extra_fds),
         )
+    except OSError as error:
+        raise TapError(f"Cannot start command provider {command.provider_id}: {error}") from error
+
+
+def _run_pack(command, profile_root, argv, lease_fd=None, timeout=None, log=None):
+    process = None
+    try:
+        process = _start_pack(command, profile_root, argv, lease_fd=lease_fd, timeout=timeout, log=log)
         try:
             returncode = process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
