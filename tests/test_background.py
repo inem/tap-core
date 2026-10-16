@@ -56,10 +56,29 @@ class BackgroundTests(unittest.TestCase):
         self.store.enable('usage.meters', version, origins=['https://fixture.example'],
                           capabilities=['command.execute', 'background.run'])
 
-    def write_usage_freshness(self, observed_at):
+    def write_usage_freshness(self, observed_at, **per_provider):
+        """The pack's sidecar after a live look: one key per provider it asked.
+        Both admitted targets move together unless a provider is overridden."""
+        observed = {'codex': observed_at, 'antigravity': observed_at}
+        observed.update(per_provider)
         path = self.profile / 'data/readers/usage.meters/freshness.json'
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({'version': 1, 'observed_at': {'codex': observed_at}}))
+        path.write_text(json.dumps({'version': 1, 'observed_at': {
+            k: v for k, v in observed.items() if v is not None}}))
+
+    def write_usage_activity(self, rows):
+        path = self.profile / 'data/readers/usage.meters/native-activity.jsonl'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(''.join(
+            (row if isinstance(row, str) else json.dumps(row)) + '\n' for row in rows))
+
+    def freshness_targets(self):
+        return background.read_state(self.profile)['usage_freshness']['targets']
+
+    def execution_receipts(self):
+        path = self.profile / 'logs/usage-freshness-decisions.jsonl'
+        rows = [json.loads(line) for line in path.read_text().splitlines()]
+        return [r for r in rows if r['receipt'] == 'tap.usage-freshness-execution/v1']
 
     def test_due_selected_version_disable_and_retained_data_without_capture(self):
         self.install()
@@ -87,7 +106,7 @@ class BackgroundTests(unittest.TestCase):
         self.store.disable('fixture.command')
         background.run_once(self.profile)
 
-    def test_freshness_coordinator_only_runs_stale_codex_adapter(self):
+    def test_freshness_coordinator_only_runs_when_a_target_is_due(self):
         self.install_usage_adapter()
         now = 1_000_000.0
         self.write_usage_freshness(now)
@@ -95,7 +114,8 @@ class BackgroundTests(unittest.TestCase):
         with patch.object(background.time, 'time', return_value=now), \
                 patch.object(background, '_run_pack') as run:
             receipts = background.run_freshness_once(self.profile, commands)
-        self.assertEqual(receipts[0]['reason'], 'idle_decay')
+        self.assertEqual({r['target']['provider'] for r in receipts}, {'codex', 'antigravity'})
+        self.assertEqual({r['reason'] for r in receipts}, {'idle_decay'})
         run.assert_not_called()
 
         later = now + background.freshness_policy.DEFAULT_POLICY['idle_interval'] + 1
@@ -106,10 +126,121 @@ class BackgroundTests(unittest.TestCase):
         with patch.object(background.time, 'time', return_value=later), \
                 patch.object(background, '_run_pack', side_effect=collect) as run:
             receipts = background.run_freshness_once(self.profile, commands)
-        self.assertEqual((receipts[0]['action'], receipts[0]['reason']), ('refresh', 'due_idle'))
+        # Both targets are due; one wake approves one of them, the other is
+        # coalesced, and the single run serves both.
+        verdicts = {r['target']['provider']: (r['action'], r['reason']) for r in receipts}
+        self.assertEqual(sorted(verdicts.values()), [('refresh', 'due_idle'), ('skip', 'coalesced_wake')])
         run.assert_called_once()
-        target = next(iter(background.read_state(self.profile)['usage_freshness']['targets'].values()))
-        self.assertEqual((target['last_authoritative_at'], target['failures']), (later, 0))
+        targets = self.freshness_targets()
+        self.assertEqual(set(targets), {'usage.meters:usage collect/codex',
+                                        'usage.meters:usage collect/antigravity'})
+        for target in targets.values():
+            self.assertEqual((target['last_authoritative_at'], target['failures'],
+                              target['last_authoritative_via']), (later, 0, 'live-adapter'))
+        executions = self.execution_receipts()
+        self.assertEqual(sorted((r['target']['provider'], r['ride_along'], r['outcome']) for r in executions),
+                         sorted([(p, verdicts[p][0] != 'refresh', 'unchanged') for p in verdicts]))
+        approved = next(r for r in receipts if r['action'] == 'refresh')
+        self.assertTrue(all(r['decision_id'] == approved['decision_id'] for r in executions))
+
+    def test_antigravity_activity_newer_than_its_snapshot_makes_it_active(self):
+        # Hub activity after the last look moves the Antigravity target to the
+        # 15-minute tier; Codex, with no activity source, stays idle and is not
+        # even due. The one run still refreshes both keys.
+        self.install_usage_adapter()
+        now = 1_000_000.0
+        looked = now - 1000
+        self.write_usage_freshness(looked)
+        self.write_usage_activity([
+            {'schema': 2, 'record': 'activity', 'client': 'gemini-cli', 'observed_at': now - 10},
+            'not json at all',
+            {'schema': 2, 'record': 'activity', 'client': 'antigravity-hub', 'observed_at': now - 300},
+            {'schema': 2, 'record': 'activity', 'client': 'antigravity-hub', 'observed_at': now - 900},
+        ])
+        commands = background.tasks(self.profile)
+
+        def collect(*_args, **_kwargs):
+            self.write_usage_freshness(now)
+            return 0
+
+        with patch.object(background.time, 'time', return_value=now), \
+                patch.object(background, '_run_pack', side_effect=collect) as run:
+            receipts = background.run_freshness_once(self.profile, commands)
+        by = {r['target']['provider']: r for r in receipts}
+        self.assertEqual((by['antigravity']['tier'], by['antigravity']['action'], by['antigravity']['reason']),
+                         ('active', 'refresh', 'due_active'))
+        self.assertEqual(by['antigravity']['inputs']['last_activity_at'], now - 300)
+        self.assertEqual((by['codex']['tier'], by['codex']['action'], by['codex']['reason']),
+                         ('idle', 'skip', 'idle_decay'))
+        self.assertIsNone(by['codex']['inputs']['last_activity_at'])
+        run.assert_called_once()
+        targets = self.freshness_targets()
+        self.assertEqual(targets['usage.meters:usage collect/antigravity']['last_authoritative_at'], now)
+        self.assertEqual(targets['usage.meters:usage collect/codex']['last_authoritative_at'], now)
+        self.assertEqual([(r['target']['provider'], r['ride_along']) for r in self.execution_receipts()],
+                         [('codex', True), ('antigravity', False)])
+
+    def test_activity_the_snapshot_already_covers_keeps_antigravity_idle(self):
+        self.install_usage_adapter()
+        now = 1_000_000.0
+        self.write_usage_freshness(now - 1000)
+        self.write_usage_activity([
+            {'schema': 2, 'record': 'activity', 'client': 'antigravity-hub', 'observed_at': now - 2000}])
+        commands = background.tasks(self.profile)
+        with patch.object(background.time, 'time', return_value=now), \
+                patch.object(background, '_run_pack') as run:
+            receipts = background.run_freshness_once(self.profile, commands)
+        by = {r['target']['provider']: r for r in receipts}
+        self.assertEqual((by['antigravity']['tier'], by['antigravity']['reason']), ('idle', 'idle_decay'))
+        self.assertEqual(by['antigravity']['inputs']['last_activity_at'], now - 2000)
+        run.assert_not_called()
+
+    def test_activity_tail_reads_the_newest_row_of_the_client_only(self):
+        target = background.FRESHNESS_ADAPTERS[('usage.meters', ('usage', 'collect'))]['targets'][1]
+        self.assertIsNone(background._activity_at(self.profile, target))
+        rows = [{'schema': 2, 'record': 'activity', 'client': 'antigravity-hub', 'observed_at': 500.0}]
+        self.write_usage_activity(rows)
+        self.assertEqual(background._activity_at(self.profile, target), 500.0)
+        # Order on disk does not matter, other clients and bad rows do not count,
+        # and a non-finite time is not "newest".
+        self.write_usage_activity([
+            {'schema': 2, 'record': 'activity', 'client': 'antigravity-hub', 'observed_at': 700.0},
+            {'schema': 2, 'record': 'activity', 'client': 'antigravity-hub', 'observed_at': 600.0},
+            {'schema': 2, 'record': 'activity', 'client': 'gemini-cli', 'observed_at': 900.0},
+            {'schema': 2, 'record': 'activity', 'client': 'antigravity-hub', 'observed_at': 'Infinity'},
+            '{"client": "antigravity-hub", "observed_at": Infinity}',
+            '{broken',
+        ])
+        self.assertEqual(background._activity_at(self.profile, target), 700.0)
+        # Only the tail is read: a huge ledger whose newest row is at the end.
+        filler = json.dumps({'schema': 2, 'record': 'activity', 'client': 'antigravity-hub',
+                             'observed_at': 1.0, 'pad': 'x' * 200})
+        self.write_usage_activity([filler] * (2 * background.ACTIVITY_TAIL_BYTES // len(filler))
+                                  + [{'schema': 2, 'record': 'activity', 'client': 'antigravity-hub',
+                                      'observed_at': 800.0}])
+        self.assertEqual(background._activity_at(self.profile, target), 800.0)
+        self.assertIsNone(background._activity_at(self.profile, {'provider': 'codex'}))
+
+    def test_legacy_single_target_state_is_adopted_by_the_codex_target(self):
+        self.install_usage_adapter()
+        now = 1_000_000.0
+        self.write_usage_freshness(now)
+        state = background.read_state(self.profile)
+        legacy = background.freshness_policy.new_state('codex', adapter='usage.meters:usage collect')
+        legacy['attempts'] = [now - 100]
+        state['usage_freshness'] = {'version': 1, 'next_wake_at': 0,
+                                    'targets': {'usage.meters:usage collect': legacy}}
+        background.atomic_json(self.profile / 'state/background.json', state)
+        with patch.object(background.time, 'time', return_value=now), \
+                patch.object(background, '_run_pack') as run:
+            receipts = background.run_freshness_once(self.profile, background.tasks(self.profile))
+        run.assert_not_called()
+        targets = self.freshness_targets()
+        self.assertNotIn('usage.meters:usage collect', targets)
+        self.assertEqual(targets['usage.meters:usage collect/codex']['attempts'], [now - 100])
+        self.assertEqual(targets['usage.meters:usage collect/antigravity']['attempts'], [])
+        self.assertEqual({r['target']['provider']: r['inputs']['budget_used'] for r in receipts},
+                         {'codex': 1, 'antigravity': 0})
 
     def test_idle_refresh_has_slack_before_the_usage_view_turns_stale(self):
         # client-usage shows "seen ... ago" at six hours.  The coordinator
@@ -123,18 +254,60 @@ class BackgroundTests(unittest.TestCase):
         )
         self.assertLess(latest_possible_refresh, presentation_stale_after)
 
-    def test_freshness_coordinator_backs_off_when_adapter_reports_no_quota(self):
+    def test_freshness_coordinator_backs_off_only_the_target_that_asked(self):
+        # No sidecar at all: both targets are due, one is approved, the run
+        # reports no quota. The approved target backs off; the neighbour it was
+        # meant to serve is recorded as a failed ride-along but keeps its budget.
         self.install_usage_adapter()
         now = 1_000_000.0
         commands = background.tasks(self.profile)
         with patch.object(background.time, 'time', return_value=now), \
                 patch.object(background, '_run_pack', return_value=0) as run:
             receipts = background.run_freshness_once(self.profile, commands)
-        self.assertEqual((receipts[0]['action'], receipts[0]['reason']), ('refresh', 'due_idle'))
         run.assert_called_once()
-        target = next(iter(background.read_state(self.profile)['usage_freshness']['targets'].values()))
-        self.assertEqual((target['failures'], target['last_error']), (1, 'error'))
-        self.assertEqual(target['retry_at'], now + background.freshness_policy.DEFAULT_POLICY['backoff']['base'])
+        approved = next(r for r in receipts if r['action'] == 'refresh')
+        other = next(r for r in receipts if r['action'] != 'refresh')
+        self.assertEqual((approved['reason'], other['reason']), ('due_idle', 'coalesced_wake'))
+        targets = self.freshness_targets()
+        asked = targets['usage.meters:usage collect/' + approved['target']['provider']]
+        neighbour = targets['usage.meters:usage collect/' + other['target']['provider']]
+        self.assertEqual((asked['failures'], asked['last_error']), (1, 'error'))
+        self.assertEqual(asked['retry_at'], now + background.freshness_policy.DEFAULT_POLICY['backoff']['base'])
+        self.assertEqual((neighbour['failures'], neighbour['retry_at'], neighbour['attempts']), (0, None, []))
+        self.assertEqual(sorted((r['ride_along'], r['outcome']) for r in self.execution_receipts()),
+                         [(False, 'error'), (True, 'error')])
+
+    def test_ride_along_success_clears_the_neighbours_backoff(self):
+        # Antigravity is backing off after a failed look of its own; Codex's
+        # approved run moves the Antigravity key too. That is a successful look
+        # for Antigravity: streak cleared, snapshot time advanced, no attempt spent.
+        self.install_usage_adapter()
+        now = 1_000_000.0
+        policy = background.freshness_policy.DEFAULT_POLICY
+        self.write_usage_freshness(now - policy['idle_interval'] - 1, antigravity=now - 60)
+        state = background.read_state(self.profile)
+        stuck = background.freshness_policy.new_state('antigravity', adapter='usage.meters:usage collect')
+        stuck.update(failures=3, retry_at=now + 3600, last_error='timeout')
+        state['usage_freshness'] = {'version': 1, 'next_wake_at': 0,
+                                    'targets': {'usage.meters:usage collect/antigravity': stuck}}
+        background.atomic_json(self.profile / 'state/background.json', state)
+
+        def collect(*_args, **_kwargs):
+            self.write_usage_freshness(now)
+            return 0
+
+        with patch.object(background.time, 'time', return_value=now), \
+                patch.object(background, '_run_pack', side_effect=collect) as run:
+            receipts = background.run_freshness_once(self.profile, background.tasks(self.profile))
+        by = {r['target']['provider']: r for r in receipts}
+        self.assertEqual((by['codex']['action'], by['antigravity']['reason']), ('refresh', 'backoff'))
+        run.assert_called_once()
+        targets = self.freshness_targets()
+        anti = targets['usage.meters:usage collect/antigravity']
+        self.assertEqual((anti['failures'], anti['retry_at'], anti['last_error'], anti['attempts']),
+                         (0, None, None, []))
+        self.assertEqual((anti['last_authoritative_at'], anti['last_authoritative_via']), (now, 'live-adapter'))
+        self.assertEqual(targets['usage.meters:usage collect/codex']['attempts'], [now])
 
     def test_background_does_not_also_run_the_legacy_usage_interval(self):
         self.install_usage_adapter()

@@ -7,19 +7,25 @@ freshness coordinator, as executable code and deterministic tests:
 - `tests/test_freshness_policy.py` — 47 decision tests.
 
 Core now has a deliberately narrow first coordinator in `background.py`. It
-admits only `usage.meters:usage collect` for the local Codex app-server; the
+admits only `usage.meters:usage collect`, with two targets: `codex` (the local
+Codex app-server) and `antigravity` (the Antigravity CLI, `agy -p /usage`). The
 old 180-second provider poll is replaced by a 15-minute **policy wake**. The
-wake reads the durable Codex freshness sidecar, applies the idle/night/backoff/
-budget/single-flight rules, and invokes the adapter only when the policy permits
-it. Decisions and executions are appended to `logs/usage-freshness-decisions.jsonl`;
-state lives in `state/background.json` under `usage_freshness`.
+wake reads each target's key in the pack's durable freshness sidecar and, for
+the Antigravity target, the newest `antigravity-hub` row of the pack's activity
+ledger; it applies the active/idle/night/backoff/budget/single-flight rules per
+target and invokes the command once when any of its targets is due. Decisions
+and executions are appended to `logs/usage-freshness-decisions.jsonl`; state
+lives in `state/background.json` under `usage_freshness.targets`, keyed
+`<pack>:<command>/<provider>`.
 
-This is intentionally not the final adapter contract: Core has no passive
-activity, UI visibility, idle, or online signal wired yet, so Codex is treated
-as idle (five-and-a-half-hour interval) unless the safety policy applies. This
-leaves the coordinator's 15-minute wake and the adapter deadline before the
-six-hour stale boundary presented by `client-usage`. Other providers
-remain passive-only until #228 gives them an explicit adapter declaration.
+This is intentionally not the final adapter contract: Core has no UI
+visibility, idle, or online signal wired yet, and passive activity is wired for
+one target only. Codex is treated as idle (five-and-a-half-hour interval)
+unless the safety policy applies; Antigravity moves to the 15-minute active
+tier while Hub activity is newer than its last look. The idle interval leaves
+the coordinator's 15-minute wake and the adapter deadline before the six-hour
+stale boundary presented by `client-usage`. Other providers remain passive-only
+until #228 gives them an explicit adapter declaration.
 
 ## Boundary
 
@@ -159,18 +165,59 @@ explicit request pending, online, local hour, user idle, dashboard visible).
 | one approval per wake, explicit requests exempt, queue drains across wakes | `WakeDoesNotFanOut` |
 | receipt completeness, determinism, purity, no clock/network/process access | `Receipt` |
 
+The coordinator itself — two targets of one command, activity from the ledger
+tail, one run serving both, ride-along settlement, backoff only for the target
+that asked, adoption of the pre-two-target state — is covered by the
+`freshness`/`antigravity`/`ride_along` tests in `tests/test_background.py`.
+
 ## Transitional state
 
 The background host still wakes for its other scheduled commands. For the one
-admitted Codex adapter it skips the legacy 180-second provider invocation and
-uses the coordinator's 15-minute safety wake instead. The compatibility map is
-explicit and temporary; #228 replaces it with pack-declared adapters.
+admitted command it skips the legacy 180-second provider invocation and uses the
+coordinator's 15-minute safety wake instead. The compatibility map is explicit
+and temporary; #228 replaces it with pack-declared adapters.
+
+### One command, several targets
+
+`FRESHNESS_ADAPTERS` admits `usage.meters:usage collect` with two targets. Each
+target names its provider key in `data/readers/usage.meters/freshness.json`
+(`observed_at[<provider>]`, written by the pack on every live look, changed
+quota or not) and may name a passive activity source. `antigravity` reads the
+newest `observed_at` of client `antigravity-hub` from the tail (1 MiB) of
+`data/readers/usage.meters/native-activity.jsonl`, the ledger that `usage
+native refresh` projects every 10 seconds; `codex` has no activity source yet.
+
+- **Decide per target.** Every wake evaluates both targets with the unchanged
+  `decide()` order and tiers. Hub activity newer than the last Antigravity look
+  and within `active_window` makes that target `active` (15 min); activity the
+  last look already covers leaves it `idle`.
+- **Run per command.** `plan()` still approves at most one target per wake. The
+  command runs once for the approved target and, because that run asks every
+  provider, serves the command's other targets too. Afterwards each served
+  target is settled from its own key: a key that moved is a successful look for
+  that target (`finished("unchanged")`, streak cleared, snapshot time advanced)
+  whether or not it asked; a key that did not move fails only the target that
+  asked (`error`, backoff). A target served without asking spends no attempt of
+  its budget and does not raise its `in_flight`.
+- **Receipts.** One decision receipt per target per wake, as before. One
+  execution receipt per served target per run, carrying the approving
+  `decision_id`, that target's `outcome`, and `ride_along: true` when the target
+  did not ask.
+- **State upgrade.** The old single key `usage.meters:usage collect` is adopted
+  by the `codex` target (attempts and backoff survive) and dropped.
+
+Install order: the pack must write `observed_at.antigravity` (tap-pack-usage
+0.21.0, client `antigravity`) before this Core runs. Otherwise the Antigravity
+target is never observed, is approved on its first wake, records `error` and
+backs off (5 min × 2ⁿ, capped at 6 h) until the pack is in place; the Codex
+target is unaffected.
 
 ## Open
 
 1. Inputs Core cannot supply yet: user idle time, dashboard visibility, online.
    All three are optional (`None` = unknown, treated as "not away / not visible /
-   not offline").
+   not offline"). Passive activity is wired for the Antigravity target only;
+   the Codex target has no activity source and never leaves `idle` on its own.
 3. Interval values are defaults to be tuned against the refresh receipts, not
    measurements. Per-provider overrides are expected from the adapter contract (#228).
 4. A known window reset passing (`resets_epoch < now`) could make a snapshot
