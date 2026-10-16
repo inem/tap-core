@@ -423,7 +423,8 @@ def parser():
     capture = commands.add_parser("capture", help="Change capture retention policy on a running proxy")
     capture_actions = capture.add_subparsers(dest="capture_action", required=True)
     capture_actions.add_parser(
-        "reload", help="Apply profile capture.binary_paths/request_body_paths without restarting")
+        "reload",
+        help="Apply profile capture.binary_paths/request_body_paths/stream_paths without restarting")
     commands.add_parser("pages", help="List live pages connected to the local WebSocket bridge")
     page = commands.add_parser("page", help="Send an opaque command to an operation exposed by a page pack")
     page_actions = page.add_subparsers(dest="page_action", required=True)

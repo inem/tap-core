@@ -1,4 +1,5 @@
 """HTTP capture record v1 and read-only compatibility with unversioned records."""
+import base64
 import json
 import math
 import uuid
@@ -105,3 +106,99 @@ def decode_record(line, allow_legacy=True):
     except (ValueError, UnicodeError) as error:
         raise RecordError("Invalid capture JSON: " + str(error)) from error
     return validate_record(record, allow_legacy=allow_legacy)
+
+
+# Stream parts in data/wire.jsonl (#250). A separate journal with its own
+# schema: stream.jsonl and the v1 record above stay unchanged. A flow's parts
+# share `flow_id` (= the v1 record_id of the same flow) and are numbered from 0;
+# concatenating `data` of all parts in order gives the first `bytes_kept` bytes
+# the client received (content-encoding not decoded). A missing part number is
+# a loss; the next delivered part counts it in `parts_lost_before`.
+WIRE_SCHEMA = "tap.capture.wire/v1"
+WIRE_OUTCOMES = ("complete", "truncated", "error", "shutdown", "refused")
+
+
+def _uuid(value):
+    try:
+        return isinstance(value, str) and str(uuid.UUID(value)) == value
+    except (ValueError, AttributeError):
+        return False
+
+
+def _time(value):
+    return type(value) in (int, float) and value >= 0 and math.isfinite(value)
+
+
+def _count(value):
+    return type(value) is int and value >= 0
+
+
+def validate_wire_part(record):
+    if not isinstance(record, dict) or record.get("schema") != WIRE_SCHEMA:
+        raise RecordError("Unsupported wire part schema")
+    for name in ("record_id", "flow_id"):
+        if not _uuid(record.get(name)):
+            raise RecordError("Invalid wire part " + name)
+    if not _count(record.get("part")) or type(record.get("final")) is not bool:
+        raise RecordError("Invalid wire part number or final flag")
+    if record.get("transport") not in ("http", "websocket"):
+        raise RecordError("Invalid wire transport")
+    if not isinstance(record.get("url"), str) or not record["url"]:
+        raise RecordError("Invalid wire url")
+    for name in ("method", "ctype", "content_encoding", "ua"):
+        if not isinstance(record.get(name), str):
+            raise RecordError("Invalid wire text: " + name)
+    if type(record.get("status")) is not int or not 100 <= record["status"] <= 999:
+        raise RecordError("Invalid HTTP response status")
+    if not _time(record.get("t_headers")) or not (
+            record.get("t_request") is None or _time(record.get("t_request"))):
+        raise RecordError("Invalid wire flow timestamps")
+    chunks = record.get("chunks")
+    if not isinstance(chunks, list):
+        raise RecordError("Invalid wire chunks")
+    websocket = record["transport"] == "websocket"
+    for chunk in chunks:
+        if (not isinstance(chunk, list) or len(chunk) != (4 if websocket else 2)
+                or not _count(chunk[0]) or not _count(chunk[1])
+                or (websocket and (chunk[2] not in ("c", "s") or not _count(chunk[3])))):
+            raise RecordError("Invalid wire chunk entry")
+    if chunks:
+        if not (_time(record.get("t_first")) and _time(record.get("t_last"))
+                and record["t_first"] <= record["t_last"]):
+            raise RecordError("Invalid wire part timestamps")
+    elif record.get("t_first") is not None or record.get("t_last") is not None:
+        raise RecordError("Wire part without chunks has no timestamps")
+    data = record.get("data")
+    try:
+        raw = base64.b64decode(data, validate=True) if isinstance(data, str) else None
+    except ValueError:
+        raw = None
+    if raw is None:
+        raise RecordError("Wire part data must be base64 text")
+    if len(raw) > sum(chunk[1] for chunk in chunks):
+        raise RecordError("Wire part keeps more bytes than its chunks carried")
+    for name in ("bytes_seen", "bytes_kept", "parts_lost_before"):
+        if not _count(record.get(name)):
+            raise RecordError("Invalid wire counter: " + name)
+    if record["bytes_kept"] > record["bytes_seen"]:
+        raise RecordError("Wire part keeps more bytes than it saw")
+    outcome = record.get("outcome")
+    if record["final"] != (outcome is not None) or (
+            outcome is not None and outcome not in WIRE_OUTCOMES):
+        raise RecordError("Invalid wire outcome")
+    if "error" in record and not isinstance(record["error"], str):
+        raise RecordError("Invalid wire error text")
+    if "close_code" in record and record["close_code"] is not None and not _count(
+            record["close_code"]):
+        raise RecordError("Invalid WebSocket close code")
+    return record
+
+
+def decode_wire_part(line):
+    try:
+        if isinstance(line, bytes):
+            line = line.decode("utf-8")
+        record = json.loads(line, object_pairs_hook=_object, parse_constant=_constant)
+    except (ValueError, UnicodeError) as error:
+        raise RecordError("Invalid wire JSON: " + str(error)) from error
+    return validate_wire_part(record)

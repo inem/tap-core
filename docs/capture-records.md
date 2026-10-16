@@ -140,6 +140,11 @@ response bodies are retained as base64 (`body_encoding: "base64"`, #171). The co
 ships no vendor defaults. A profile supplies the paths via
 `capture.binary_paths` in `profile.json`; `TAP_CAPTURE_BINARY_PATHS` is a
 debugging override. Packs cannot currently declare binary response paths.
+`binary_paths` never applies to open-ended streaming media (`text/event-stream`,
+`application/connect+*`, `application/grpc*`, #250): such a response is always
+passed through as it arrives, because buffering it would hold every byte from the
+client until upstream ends or passes `stream_large_bodies`. A unary binary body
+without Content-Length (common over HTTP/2) stays retainable.
 Optional: `request_body_paths` — up to 64 URL substrings whose UTF-8 request
 bodies are retained even when the response is not retained, including streamed
 SSE responses. A profile may supply complete URL substrings. A pack may instead
@@ -151,13 +156,15 @@ rolling back a pack that changes it, then run `tap on`. The same
 `max_body_bytes` limit applies. `TAP_CAPTURE_REQUEST_BODY_PATHS` is a debugging
 override.
 
-**Live retention reload (#247).** After editing `capture.binary_paths` or
-`capture.request_body_paths` in `profile.json`, `tap --profile <root> capture
-reload` applies the effective allowlists (profile plus enabled pack request-body
+**Live retention reload (#247).** After editing `capture.binary_paths`,
+`capture.request_body_paths` or `capture.stream_paths` in `profile.json`, `tap
+--profile <root> capture reload` applies the effective allowlists (profile plus enabled pack request-body
 paths) to the running proxy without `off`/`on`. The CLI validates the policy with
 the same `capture_limits` validator and writes the versioned document
 `state/capture-policy.json` (`{version: 1, revision, binary_paths,
-request_body_paths}`, `revision` = content hash). The capture addon polls that
+request_body_paths[, stream_paths]}`, `revision` = content hash; an empty
+`stream_paths` is omitted from the document and the hash, so policies that do not
+use it keep their #247 revision and a proxy started before #250 accepts them). The capture addon polls that
 file every 0.5 s, re-validates it, and replaces its limits reference in one
 assignment, so each flow sees either the old or the new allowlists; a flow whose
 headers were already decided keeps that decision. The CLI waits up to 5 s for the
@@ -167,7 +174,7 @@ document keeps the previous policy; the rejection is logged and recorded.
 Every applied or rejected policy, including the startup policy, is a line in
 `data/capture-policy.jsonl` (`capture.policy.applied` / `capture.policy.rejected`
 with revision, previous revision and added/removed patterns) and a `[tap] capture
-policy ...` line in `logs/capture.log`. Only these two allowlists reload: size
+policy ...` line in `logs/capture.log`. Only these allowlists reload: size
 bounds, queue, segments, routing, ports and passthrough remain restart-only, and
 a pending difference in them is listed under `restart_required`. A launchd
 KeepAlive restart keeps the reloaded policy; `tap on` deletes the file and
@@ -183,6 +190,60 @@ before append. Queue drops are writer health counters, not JournalGap.
 Independent readers and managed scheduling already exist (#28/#43); the remaining
 storage work is profile-restart and delivery-visible failure acceptance (#8/#13).
 
+
+## Streamed bodies and WebSocket messages: `wire.jsonl` (#250)
+
+v1 records never keep a streamed body. Optional `capture.stream_paths` (up to 64
+URL substrings, validated like `binary_paths`, reloadable, debugging override
+`TAP_CAPTURE_STREAM_PATHS`) selects responses whose bytes are teed into the
+sibling journal `data/wire.jsonl` (+ `wire.jsonl.<ns>` rolls) while the client
+keeps receiving them unbuffered. Only responses v1 does not retain qualify: a
+`media_type` decision (SSE, Connect or gRPC streams, other binary bodies) or a
+101 upgrade, whose WebSocket messages are teed in both directions. JSON/text
+responses keep v1 buffering; a unary `binary_paths` body stays in v1.
+
+The decision is pinned per flow at response headers, so a reload never changes an
+open flow. The v1 record of a teed flow is unchanged in shape (`streamed: true`,
+`body_kept: false`), keeps its request body (`req_body`, valid v1) and its
+`record_id` is the `flow_id` of the flow's parts. `stream.jsonl`, its readers and
+`records.validate_record` do not change.
+
+Each line is a part, schema `tap.capture.wire/v1`, validated by
+`records.validate_wire_part`:
+
+| field | meaning |
+|---|---|
+| `record_id`, `flow_id`, `part`, `final` | part identity; parts of a flow are numbered from 0 |
+| `transport` | `http` or `websocket` |
+| `method`, `url`, `status`, `ctype`, `content_encoding`, `ua` | flow metadata, as in v1; no headers are stored |
+| `t_request`, `t_headers`, `t_first`, `t_last` | epoch seconds; `t_first`/`t_last` are null for a part without chunks |
+| `chunks` | `[ms since headers, length]` per chunk; WebSocket `[ms, length, "c"|"s", opcode]` per message |
+| `data` | base64 of the bytes kept in this part, raw as on the wire (content-encoding not decoded) |
+| `bytes_seen`, `bytes_kept` | cumulative for the flow |
+| `parts_lost_before` | parts of this flow dropped (queue full) since the previous delivered part |
+| `outcome` | on the final part only: `complete`, `truncated`, `error`, `shutdown`, `refused` |
+| `error`, `close_code` | optional: proxy error text; WebSocket close code |
+
+Concatenating `data` of a flow's parts in order gives exactly the first
+`bytes_kept` bytes the client received. Loss is always explicit: a missing part
+number and `parts_lost_before` (queue full), `truncated` (per-flow cap reached;
+chunk boundaries and counters continue), `error` (the flow ended in a proxy error,
+for example a client abort), `shutdown` (proxy stopped while the flow was open),
+`refused` (too many flows tracked at once; one part, no data).
+
+Bounds (constants for now): a part is flushed at 256 KiB kept, 4096 chunks, or
+2 s after its first chunk (an event-loop timer flushes an idle part); 8 MiB kept
+per flow; 64 flows tracked at once; the wire writer has its own 32 MiB queue,
+128 MiB segments and 7 rolls, so stream bursts cannot starve `stream.jsonl`.
+Hooks only append and enqueue; base64 and JSON encoding run on the wire writer
+thread. `state/wire.json` is the wire writer's health record: the usual writer
+counters plus `flows_open`, `flows_started`, `flows_refused`, `flows_truncated`,
+`flows_error`, `flows_shutdown`, `parts_submitted`, `parts_dropped`,
+`bytes_seen`, `bytes_kept`. A profile without `stream_paths` creates neither file.
+
+Retention is opt-in per URL substring; Core ships no vendor paths. URLs are
+stored as in v1, query strings included. There is no reader API for
+`wire.jsonl` yet (follow-up); provider parsing belongs to packs.
 
 ## Verification
 

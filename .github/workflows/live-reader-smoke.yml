@@ -1,4 +1,5 @@
-# Opt-in real macOS acceptance for hot-adding TAP readers. No system proxy changes.
+# Opt-in real macOS acceptance for hot-adding TAP readers, capture policy reload
+# and stream tee (#247, #250). No system proxy changes.
 name: Live reader smoke (macOS)
 on:
   pull_request:
@@ -11,6 +12,7 @@ on:
       - 'tap_core/cli.py'
       - 'tap_core/capture.py'
       - 'tap_core/capture_policy.py'
+      - 'tap_core/records.py'
   workflow_dispatch:
 
 permissions:
