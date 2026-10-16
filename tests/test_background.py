@@ -5,6 +5,11 @@ import json
 from pathlib import Path
 import re
 import shutil
+import subprocess
+import sys
+import time
+import os
+import signal
 import tempfile
 import threading
 import unittest
@@ -151,10 +156,11 @@ class BackgroundTests(unittest.TestCase):
         release = threading.Event()
         errors = []
 
-        def run_pack(*_args, **_kwargs):
+        def start_pack(*_args, **_kwargs):
+            process = Mock()
+            process.poll.side_effect = lambda: 0 if release.is_set() else None
             started.set()
-            release.wait(2)
-            return 0
+            return process
 
         def run_background():
             try:
@@ -162,7 +168,7 @@ class BackgroundTests(unittest.TestCase):
             except Exception as error:
                 errors.append(error)
 
-        with patch.object(background, '_run_pack', side_effect=run_pack):
+        with patch.object(background, '_start_pack', side_effect=start_pack):
             worker = threading.Thread(target=run_background)
             worker.start()
             self.assertTrue(started.wait(1))
@@ -326,3 +332,177 @@ class BackgroundTests(unittest.TestCase):
         record = background.read_state(self.profile)['verify_failures']['fixture.command']
         self.assertEqual(record['count'], 1)
         self.assertEqual(record['error'], 'installed code unreadable')
+
+    def recording_provider(self, delay):
+        (self.source / 'command.py').write_text(
+            "import os,json,pathlib,time\n"
+            "c=json.loads(os.environ['TAP_COMMAND_CONTEXT'])\n"
+            "p=pathlib.Path(c['output_dir'])/'events.jsonl'\n"
+            "def record(phase):\n"
+            " with p.open('a') as f: f.write(json.dumps(dict(phase=phase,at=time.time(),path=c['path'],pid=os.getpid()))+'\\n')\n"
+            "record('start')\n"
+            f"time.sleep({delay})\n"
+            "record('finish')\n")
+
+    def events(self, pack):
+        path = self.profile / 'data/packs' / pack / 'events.jsonl'
+        return [json.loads(line) for line in path.read_text().splitlines()]
+
+    def wait_for(self, predicate, seconds=4):
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            if predicate():
+                return
+            time.sleep(.02)
+        self.fail('timed out waiting for provider evidence')
+
+    def host(self):
+        process = subprocess.Popen([sys.executable, '-B', str(Path(background.__file__)), str(self.profile)],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        def cleanup():
+            if process.poll() is None:
+                process.terminate()
+                process.wait(timeout=5)
+        self.addCleanup(cleanup)
+        return process
+
+    def test_short_pack_repeats_while_slow_pack_still_runs(self):
+        self.manifest['entrypoints']['command']['commands'][0]['schedule'] = {
+            'interval_seconds': 30, 'timeout_seconds': 5}
+        self.recording_provider(2.5)
+        self.install()
+        self.recording_provider(0)
+        self.install_other()
+        # Keep production manifest bounds; shorten only this fixture's resolved
+        # schedule to exercise admission during an active slow provider.
+        original = background.tasks
+        def tasks(*args, **kwargs):
+            result = original(*args, **kwargs)
+            return [(c, {**s, 'interval_seconds': 1} if c.provider_id == 'fixture.other' else s)
+                    for c, s in result]
+        with patch.object(background, 'tasks', side_effect=tasks), \
+                patch.object(background, 'DISCOVERY_SECONDS', .05):
+            background.run_once(self.profile)
+        slow = self.events('fixture.command')
+        fast = self.events('fixture.other')
+        starts = [r['at'] for r in fast if r['phase'] == 'start']
+        self.assertGreaterEqual(len(starts), 2)
+        self.assertLess(starts[0], slow[-1]['at'])
+        self.assertLess(starts[1], slow[-1]['at'])
+        self.assertEqual(len(slow), 2)
+        self.assertTrue(all(r['phase'] == 'ok' for r in background.read_state(self.profile)['jobs'].values()))
+
+    def test_scheduled_siblings_serialize_but_other_pack_finishes_first(self):
+        declaration = copy.deepcopy(self.manifest['entrypoints']['command']['commands'][0])
+        declaration['path'] = ['fixture', 'second']
+        self.manifest['entrypoints']['command']['commands'].append(declaration)
+        self.recording_provider(.4)
+        self.install()
+        self.manifest['entrypoints']['command']['commands'].pop()
+        # install_other reads the written manifest.
+        (self.source / 'pack.json').write_text(json.dumps(self.manifest))
+        self.recording_provider(0)
+        self.install_other()
+        background.run_once(self.profile)
+        own = self.events('fixture.command')
+        other = self.events('fixture.other')
+        self.assertEqual([r['phase'] for r in own], ['start', 'finish', 'start', 'finish'])
+        self.assertLess(other[-1]['at'], own[1]['at'])
+
+    def test_concurrency_bound_and_overdue_queue_drain(self):
+        self.recording_provider(.2)
+        self.install()
+        template = json.loads((self.source / 'pack.json').read_text())
+        for index in range(6):
+            manifest = copy.deepcopy(template)
+            name = 'fixture.pack' + str(index)
+            manifest['id'] = name
+            manifest['entrypoints']['command']['commands'][0]['path'] = ['pack' + str(index), 'echo']
+            (self.source / 'pack.json').write_text(json.dumps(manifest))
+            artifact = self.root / (name + '.tap-pack')
+            build_artifact(self.source, artifact)
+            self.store.install(artifact)
+            self.store.enable(name, '0.1.0', origins=['https://fixture.example'], capabilities=['command.execute', 'background.run'])
+        with patch.object(background, 'MAX_RUNNING_PACKS', 2):
+            background.run_once(self.profile)
+        timeline = sorted((r['at'], 1 if r['phase'] == 'start' else -1)
+                          for path in (self.profile / 'data/packs').glob('*/events.jsonl')
+                          for r in map(json.loads, path.read_text().splitlines()))
+        active = maximum = 0
+        for _, delta in timeline:
+            active += delta
+            maximum = max(maximum, active)
+        self.assertEqual((active, maximum), (0, 2))
+        self.assertEqual(len(background.read_state(self.profile)['jobs']), 7)
+
+    def test_timeout_does_not_delay_neighbor_and_lease_is_released(self):
+        self.recording_provider(30)
+        self.install()
+        self.recording_provider(0)
+        self.install_other()
+        background.run_once(self.profile)
+        jobs = background.read_state(self.profile)['jobs']
+        slow, fast = jobs['fixture.command:fixture echo'], jobs['fixture.other:other echo']
+        self.assertEqual((slow['phase'], slow['exit_code']), ('unknown', 124))
+        self.assertEqual(fast['phase'], 'ok')
+        self.assertLess(fast['finished_at'], slow['finished_at'])
+        self.store.disable('fixture.command')
+
+    def test_start_failure_isolated(self):
+        self.install()
+        self.install_other()
+        original = background._start_pack
+        def start(command, *args, **kwargs):
+            if command.provider_id == 'fixture.command':
+                raise OSError('fixture startup failure')
+            return original(command, *args, **kwargs)
+        with patch.object(background, '_start_pack', side_effect=start):
+            background.run_once(self.profile)
+        rows = {v['provider']: v for v in background.read_state(self.profile)['jobs'].values()}
+        self.assertEqual(rows['fixture.command']['exit_code'], 125)
+        self.assertEqual(rows['fixture.other']['phase'], 'ok')
+
+    def test_sigterm_reaps_provider_and_marks_unknown(self):
+        self.manifest['entrypoints']['command']['commands'][0]['schedule']['timeout_seconds'] = 30
+        self.recording_provider(30)
+        self.install()
+        process = self.host()
+        evidence = self.profile / 'data/packs/fixture.command/events.jsonl'
+        self.wait_for(evidence.exists)
+        pid = self.events('fixture.command')[0]['pid']
+        process.terminate()
+        process.wait(timeout=5)
+        with self.assertRaises(ProcessLookupError):
+            os.kill(pid, 0)
+        row = next(iter(background.read_state(self.profile)['jobs'].values()))
+        self.assertEqual((row['phase'], row['exit_code']), ('unknown', 130))
+        self.store.disable('fixture.command')
+
+    def test_replacement_host_does_not_overlap_orphan_provider(self):
+        self.manifest['entrypoints']['command']['commands'][0]['schedule']['timeout_seconds'] = 30
+        self.recording_provider(30)
+        self.install()
+        process = self.host()
+        evidence = self.profile / 'data/packs/fixture.command/events.jsonl'
+        self.wait_for(evidence.exists)
+        pid = self.events('fixture.command')[0]['pid']
+        self.addCleanup(lambda: self.kill_orphan(pid))
+        process.kill()
+        process.wait(timeout=5)
+        # Even after the old nominal due time, its inherited scheduler lease
+        # prevents an overlapping writer. No live profile is used here.
+        state = background.read_state(self.profile)
+        next(iter(state['jobs'].values()))['next_at'] = 0
+        background.atomic_json(self.profile / 'state/background.json', state)
+        background.run_once(self.profile)
+        self.assertEqual(len(self.events('fixture.command')), 1)
+        with self.assertRaises(TapError):
+            with command_execution_lock(self.profile, key='fixture.command'):
+                pass
+
+    @staticmethod
+    def kill_orphan(pid):
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass

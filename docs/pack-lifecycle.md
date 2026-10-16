@@ -219,7 +219,25 @@ rebuilding the artifact and running `pack update`. A mutation is refused only wh
 a command of the same pack is running (scheduled or from a terminal): the
 execution lease is scoped per pack id and the busy message names the pack, so
 iterating on one command pack never waits for an unrelated pack's long command.
-Commands of one pack do not serialize on that lease; they run concurrently.
+Commands of one pack do not serialize on that lease; terminal commands can run
+concurrently. Scheduled commands additionally hold an inherited, per-pack
+scheduler lease: two scheduled writers of the same pack never overlap.
+
+The existing background host runs at most four independent packs concurrently.
+While any command is running it rechecks schedules every ten seconds, and again
+when a slot becomes free; it admits the oldest due eligible command first. A long
+refresh therefore does not hold up a different pack's first or subsequent poll.
+The host exits when no scheduled work remains in flight; launchd supplies the
+next wake as before. Intervals still begin after completion, so this removes queue
+wait without turning a 120-second schedule into instant delivery.
+
+Timeouts kill the provider process group and keep the existing `unknown` / 124
+outcome. Host interruption reaps all its providers with `unknown` / 130. A killed
+host cannot start a second scheduled writer over a surviving child: the child
+inherits both its scheduler and command leases. A forcibly orphaned child still
+requires its own exit or operator cleanup; the replacement host does not guess
+that it is safe to run a duplicate. No new runtime, service, public manifest field,
+or queue database is introduced. The existing usage freshness policy is unchanged.
 
 An update is installed before activation. If its requests, dependencies, config
 or binding are incompatible, the old selected version remains enabled and no
