@@ -209,10 +209,10 @@ def validate_manifest(manifest, root, host_api=PACK_API):
                     require(type(schedule["timeout_seconds"]) is int and 1 <= schedule["timeout_seconds"] <= 3600,
                             "command.schedule timeout must be 1..3600 seconds")
                 path = declaration["path"]
-                require(type(path) is list and 1 <= len(path) <= 8
+                require(type(path) is list and bool(path)
                         and all(type(segment) is str and COMMAND_SEGMENT.fullmatch(segment)
                                 for segment in path),
-                        "entrypoints.command.commands[].path: expected 1-8 lowercase command words")
+                        "entrypoints.command.commands[].path: expected nonempty lowercase command words")
                 command_path = tuple(path)
                 require(command_path not in paths,
                         f"entrypoints.command.commands: duplicate path {' '.join(path)}")

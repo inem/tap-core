@@ -38,10 +38,10 @@ def configuration(value, profile):
         if not Path(value['bun']).is_absolute():
             raise TapError('Component bun requires an explicit absolute path when Hub is required')
     for name in ('readers', 'handlers'):
-        if type(value[name]) is not dict or len(value[name]) > 8:
-            raise TapError('At most eight named readers/handlers/services per development profile')
-    if type(value.get('services', {})) is not dict or len(value.get('services', {})) > 8:
-        raise TapError('At most eight named readers/handlers/services per development profile')
+        if type(value[name]) is not dict:
+            raise TapError(f'Components {name} must be an object')
+    if type(value.get('services', {})) is not dict:
+        raise TapError('Components services must be an object')
     for name, spec in value['readers'].items():
         Reader(profile, name)
         validate_definition(spec)
@@ -50,8 +50,8 @@ def configuration(value, profile):
         if type(spec) is not dict or set(spec) != {'command', 'config', 'origins'}:
             raise TapError('Handler requires command, config and explicit origins')
         validate_definition(dict(version=1, revision='handler-1', command=spec['command'], config=spec['config']))
-        if type(spec['origins']) is not list or len(spec['origins']) > 64:
-            raise TapError('Handler origins must be a bounded list')
+        if type(spec['origins']) is not list:
+            raise TapError('Handler origins must be a list')
         for origin in spec['origins']:
             exact_or_all_origin(origin)
     for name, spec in value.get('services', {}).items():
@@ -59,10 +59,10 @@ def configuration(value, profile):
         if type(spec) is not dict or set(spec) != {'command', 'port'}:
             raise TapError('Service requires command and explicit loopback port')
         command, port = spec['command'], spec['port']
-        if (type(command) is not list or not command or len(command) > 16
+        if (type(command) is not list or not command
                 or not all(type(item) is str and item for item in command)
                 or not Path(command[0]).is_absolute()):
-            raise TapError('Service command requires a bounded argv with an absolute executable')
+            raise TapError('Service command requires a nonempty argv with an absolute executable')
         if type(port) is not int or not 1024 <= port <= 65535:
             raise TapError('Service port must be an unprivileged integer')
         if port in {profile.port, profile.bridge['hub_port']}:

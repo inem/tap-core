@@ -47,8 +47,8 @@ def development_configuration(root):
         return {'version': 1, 'origins': [], 'tools': []}
     if (type(value) is not dict or set(value) != {'version', 'origins', 'tools'}
             or value['version'] != 1
-            or type(value['origins']) is not list or len(value['origins']) > 64
-            or type(value['tools']) is not list or len(value['tools']) > 16
+            or type(value['origins']) is not list
+            or type(value['tools']) is not list
             or len(value['origins']) != len(set(value['origins']))
             or len(value['tools']) != len(set(value['tools']))
             or not all(type(origin) is str for origin in value['origins'])
@@ -272,17 +272,17 @@ def configuration(value, script_origins=None):
             or type(value['hub_port']) is not int or not 1024 <= value['hub_port'] <= 65535):
         raise ValueError('Invalid bridge configuration version/fields/enabled/hub_port')
     agents = value.get('exclude_user_agents', [])
-    if (not isinstance(agents, list) or len(agents) > 64
+    if (not isinstance(agents, list)
             or not all(isinstance(item, str) and item for item in agents)
             or len(set(agents)) != len(agents)):
-        raise ValueError('Bridge exclude_user_agents must be at most 64 unique non-empty strings')
+        raise ValueError('Bridge exclude_user_agents must be unique non-empty strings')
     for name in ('allow_origins', 'exclude_origins', 'page_scripts'):
         items = value[name]
-        if (not isinstance(items, list) or len(items) > 64
+        if (not isinstance(items, list)
                 or not all(isinstance(item, str) for item in items)
                 or (name != 'page_scripts' or script_origins is None)
                 and len(set(items)) != len(items)):
-            raise ValueError('Bridge lists must contain at most 64 unique strings')
+            raise ValueError('Bridge lists must contain unique strings')
     for origin in value['allow_origins']:
         exact_or_all_origin(origin)
     for origin in value['exclude_origins']:
@@ -297,7 +297,7 @@ def configuration(value, script_origins=None):
         seen = {}
         allowed = set(value['allow_origins'])
         for script, origins in zip(value['page_scripts'], script_origins):
-            if (not isinstance(origins, list) or not origins or len(origins) > 64
+            if (not isinstance(origins, list) or not origins
                     or not all(isinstance(origin, str) for origin in origins)
                     or len(set(origins)) != len(origins) or not origin_subset(origins, allowed)):
                 raise ValueError('Effective page script origins are malformed')

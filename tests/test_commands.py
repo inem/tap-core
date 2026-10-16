@@ -84,6 +84,31 @@ class CommandHostTests(unittest.TestCase):
         self.assertIn("fixture echo", result.stdout)
         self.assertFalse(marker.exists())
 
+    def test_deep_command_path_builds_installs_and_executes(self):
+        source = self.root / 'deep-command'
+        shutil.copytree(SOURCE, source)
+        path = ['fixture', *['nested'] * 10, 'echo']
+        manifest_path = source / 'pack.json'
+        manifest = json.loads(manifest_path.read_text())
+        declaration = manifest['entrypoints']['command']['commands'][0]
+        declaration['path'] = path
+        manifest['entrypoints']['command']['commands'] = [declaration]
+        manifest_path.write_text(json.dumps(manifest))
+        script = source / 'command.py'
+        script.write_text(script.read_text().replace(
+            '("fixture", "echo")', repr(tuple(path))))
+        artifact = self.root / 'deep.tap-pack'
+        build_artifact(source, artifact)
+        self.assertEqual(self.cli('pack', 'install', str(artifact))[0], 0)
+        code, _, error = self.cli('pack', 'enable', 'fixture.command',
+                                  '--version', '0.1.0',
+                                  '--grant-origin', ORIGIN,
+                                  '--grant-capability', CAPABILITY)
+        self.assertEqual(code, 0, error)
+        result = self.run_tap(*path, 'two words')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)['argv'], ['two words'])
+
     def test_existing_where_runs_through_registry_with_same_result_shape(self):
         profile = Profile(self.profile, "/fixture/mitmdump", 19001, "explicit",
                           "http://example.test", [])

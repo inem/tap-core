@@ -63,6 +63,39 @@ class ComponentTests(unittest.TestCase):
         self.binding['handlers']['echo']['origins'] = ['*']
         self.assertEqual(configuration(self.binding, self.profile), self.binding)
 
+    def test_profile_roundtrips_more_than_eight_components_per_group(self):
+        self.binding['readers'] = {
+            f'reader.{i}': {
+                'version': 1, 'revision': 'fixture-1',
+                'command': [sys.executable, '-c', 'pass'], 'config': {},
+            } for i in range(12)
+        }
+        self.binding['handlers'] = {
+            f'handler.{i}': {
+                'command': [sys.executable, '-c', 'pass'], 'config': {},
+                'origins': [f'https://site-{j}.test' for j in range(80)],
+            } for i in range(12)
+        }
+        self.binding['services'] = {
+            f'service.{i}': {
+                'command': [sys.executable, '-c', 'pass', *['argument'] * 24],
+                'port': 20000 + i,
+            } for i in range(12)
+        }
+        self.profile.components = self.binding
+        self.profile.save()
+        self.assertEqual(Profile.load(self.root).components, self.binding)
+
+    def test_component_groups_and_service_argv_still_require_valid_shapes(self):
+        for group in ('readers', 'handlers', 'services'):
+            with self.subTest(group=group), self.assertRaises(TapError):
+                configuration(dict(self.binding, **{group: []}), self.profile)
+        for command in ([], ['python'], [sys.executable, '']):
+            with self.subTest(command=command), self.assertRaises(TapError):
+                configuration(dict(self.binding, services={
+                    'bad': {'command': command, 'port': 20000},
+                }), self.profile)
+
     def test_service_requires_explicit_loopback_port_and_absolute_command(self):
         binding = dict(self.binding, services={'active-chat': {'command': [sys.executable, '-c', 'pass'], 'port': 17883}})
         self.assertEqual(configuration(binding, self.profile), binding)

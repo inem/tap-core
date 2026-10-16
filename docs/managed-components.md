@@ -139,7 +139,10 @@ the same file is theirs and is not reformatted.
 The existing proxy job is unchanged in responsibility. One additional launchd job,
 `<profile-label>.components`, runs `service.py` from this checkout. It starts the
 Bun Hub and schedules finite `Reader.run` batches over existing #9 checkpoints.
-There is one scheduling thread per declared reader, at most eight readers.
+There is one scheduling thread per declared reader. Reader, handler and service
+declarations have no fixed count ceiling; adding a ninth component does not
+reject the profile. Runtime concurrency, payload and timeout limits remain
+separate from the number of configured components.
 No second cursor store, capture bus or workflow scheduler is introduced.
 
 A controller and its required Hub must become live before infrastructure startup

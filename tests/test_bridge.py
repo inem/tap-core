@@ -53,6 +53,23 @@ def flow(path='/', host='example.test', headers=None, response=None):
 
 
 class BridgeTests(unittest.TestCase):
+    def test_large_declared_bridge_lists_and_development_tools(self):
+        from tap_core.bridge import development_configuration
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            origins = [f'https://site-{i}.test' for i in range(80)]
+            scripts = [str(root / f'script-{i}.js') for i in range(80)]
+            value = config(allow_origins=origins, exclude_origins=origins,
+                           page_scripts=scripts,
+                           exclude_user_agents=[f'client-{i}' for i in range(80)])
+            self.assertEqual(configuration(value), value)
+            self.assertEqual(configuration(value, [origins] * len(scripts)), value)
+            (root / 'state').mkdir()
+            development = {'version': 1, 'origins': origins,
+                           'tools': [f'tool.{i}' for i in range(24)]}
+            (root / 'state/development.json').write_text(json.dumps(development))
+            self.assertEqual(development_configuration(root), development)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

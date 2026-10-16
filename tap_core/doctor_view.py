@@ -1,7 +1,5 @@
 """Human presentation of the existing doctor result; no host observations."""
 
-from .status_view import public_status_result, terminal_status
-
 
 def _safe(value):
     return " ".join("".join(char if char.isprintable() else " " for char in str(value)).split())
@@ -13,6 +11,16 @@ def _line(label, state, detail, color):
         code = {"good": "32", "bad": "31", "unknown": "33"}[state]
         symbol = f"\x1b[{code}m{symbol}\x1b[0m"
     return f"{label:<14} {symbol} {_safe(detail)}"
+
+
+def _check(label, state, detail, color, *, keep=False):
+    """Omit boring goods and unrun probes. Doctor answers what binds."""
+    if not keep:
+        if state == "good":
+            return None
+        if _safe(detail) == "not checked":
+            return None
+    return _line(label, state, detail, color)
 
 
 def _proxy_endpoint(state):
@@ -124,57 +132,64 @@ def _limitations(result):
 
 
 def terminal_doctor(result, *, color=False):
-    """Render diagnosis and actionable setup lines without changing doctor's result."""
+    """Diagnosis only. Status owns 'is it up'; doctor owns what still binds."""
     healthy = result.get("healthy") is True
     lines = [_line("doctor", "good" if healthy else "bad",
-                   "healthy" if healthy else "needs attention", color),
-             terminal_status(public_status_result(result), color=color), "Checks"]
+                   "healthy" if healthy else "needs attention", color)]
+
+    checks = []
 
     if "backend_error" in result:
-        lines.append(_line("  backend", "bad", result["backend_error"], color))
+        checks.append(_check("  backend", "bad", result["backend_error"], color, keep=True))
     elif result.get("backend_version"):
-        lines.append(_line("  backend", "good", result["backend_version"], color))
+        checks.append(_check("  backend", "good", result["backend_version"], color, keep=True))
     else:
-        lines.append(_line("  backend", "unknown", "not checked", color))
+        checks.append(_check("  backend", "unknown", "not checked", color, keep=True))
 
     ca_file = result.get("ca_file_present")
-    lines.append(_line("  CA file", "good" if ca_file is True else
-                       "bad" if ca_file is False else "unknown",
-                       "present" if ca_file is True else
-                       "missing" if ca_file is False else "not checked", color))
+    checks.append(_check("  CA file", "good" if ca_file is True else
+                         "bad" if ca_file is False else "unknown",
+                         "present" if ca_file is True else
+                         "missing" if ca_file is False else "not checked", color))
     trust = result.get("ca_trust")
-    trust_granted = isinstance(trust, str) and trust.startswith(("granted;", "verified_live;"))
+    trust_granted = isinstance(trust, str) and trust.startswith("granted;")
+    live = isinstance(trust, str) and trust.startswith("verified_live;")
     if isinstance(trust, str):
         trust = (trust.replace("not_verified;", "not verified —", 1)
                  .replace("verified_live;", "verified live —", 1)
                  .replace("granted;", "granted —", 1))
-    lines.append(_line("  CA trust", "good" if trust_granted else "unknown",
-                       trust or "not checked", color))
+    checks.append(_check("  CA trust", "good" if (trust_granted or live) else "unknown",
+                         trust or "not checked", color, keep=live))
 
     if isinstance(result.get("sudoers"), dict):
         ready = result["sudoers"].get("ready")
-        lines.append(_line("  proxy rights", "good" if ready is True else
-                           "bad" if ready is False else "unknown",
-                           "ready" if ready is True else
-                           "missing" if ready is False else "not checked", color))
+        checks.append(_check("  proxy rights", "good" if ready is True else
+                             "bad" if ready is False else "unknown",
+                             "ready" if ready is True else
+                             "missing" if ready is False else "not checked", color))
 
     probe = result.get("traffic_probe")
-    lines.append(_line("  traffic", "good" if probe is True else
-                       "bad" if probe is False else "unknown",
-                       "probe passed" if probe is True else
-                       "probe failed" if probe is False else "not checked", color))
+    checks.append(_check("  traffic", "good" if probe is True else
+                         "bad" if probe is False else "unknown",
+                         "probe passed" if probe is True else
+                         "probe failed" if probe is False else "not checked", color))
 
     https = result.get("https_decryption") if isinstance(result.get("https_decryption"), dict) else {}
     decrypt = https.get("profile_ca_verified")
-    lines.append(_line("  HTTPS decrypt", "good" if decrypt is True else
-                       "bad" if decrypt is False else "unknown",
-                       "profile CA verified" if decrypt is True else
-                       "profile CA failed" if decrypt is False else "not checked", color))
+    checks.append(_check("  HTTPS decrypt", "good" if decrypt is True else
+                         "bad" if decrypt is False else "unknown",
+                         "profile CA verified" if decrypt is True else
+                         "profile CA failed" if decrypt is False else "not checked", color))
     curl_trust = https.get("system_trust_verified")
-    lines.append(_line("  curl trust", "good" if curl_trust is True else
-                       "bad" if curl_trust is False else "unknown",
-                       "default trust verified" if curl_trust is True else
-                       "default trust failed" if curl_trust is False else "not checked", color))
+    checks.append(_check("  curl trust", "good" if curl_trust is True else
+                         "bad" if curl_trust is False else "unknown",
+                         "default trust verified" if curl_trust is True else
+                         "default trust failed" if curl_trust is False else "not checked", color))
+
+    checks = [line for line in checks if line]
+    if checks:
+        lines.append("Checks")
+        lines.extend(checks)
 
     limitations = _limitations(result)
     if limitations:
