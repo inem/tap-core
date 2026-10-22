@@ -157,3 +157,86 @@ class LiveReaderReconcileTests(unittest.TestCase):
             finally:
                 process.terminate()
                 process.communicate(timeout=8)
+
+
+class ReaderIdleIoTests(unittest.TestCase):
+    """A running controller leaves idle reader state untouched (#256)."""
+
+    def test_idle_controller_does_not_rewrite_or_chmod_reader_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / 'pack-source'
+            source.mkdir()
+            (source / 'reader.py').write_text(
+                "import json, os, pathlib, sys\n"
+                "event = json.loads(sys.stdin.readline())\n"
+                "context = json.loads(os.environ['TAP_PACK_CONTEXT'])\n"
+                "target = pathlib.Path(context['output_dir']) / (context['reader_lane'] + '.jsonl')\n"
+                "with target.open('a') as out: out.write(json.dumps(event['body']) + '\\n')\n"
+            )
+            (source / 'pack.json').write_text(json.dumps({
+                'manifest_version': 1, 'id': PACK, 'version': '0.1.0',
+                'requires': {'pack_api': 1, 'dependencies': []},
+                'files': ['reader.py'],
+                'entrypoints': {'reader': {'file': 'reader.py', 'interface': 'python-jsonl-v1',
+                                           'delivery': 'fresh-and-replay-v1'}},
+                'config': {},
+                'access': {'origins': [ORIGIN], 'capabilities': ['capture.read']},
+            }))
+            artifact = root / 'reader.tap-pack'
+            build_artifact(source, artifact)
+            profile = Profile(root, '/fixture/backend', 19000, 'explicit',
+                              'http://fixture.test', [],
+                              bridge=dict(bridge_config(), enabled=False),
+                              components={'version': 1, 'python': sys.executable,
+                                          'bun': '/usr/bin/true', 'readers': {}, 'handlers': {}})
+            profile.save()
+            store = PackStore(root)
+            store.install(artifact)
+            store.enable(PACK, '0.1.0', origins=[ORIGIN], capabilities=['capture.read'])
+            # Retained history for the replay lane: unrelated traffic, then one match.
+            unrelated = []
+            for index in range(120):
+                record = capture_record(body=f'unrelated-{index}')
+                record['url'] = 'https://unrelated.example/data'
+                unrelated.append(record)
+            stream = root / 'data/stream.jsonl'
+            stream.parent.mkdir(parents=True, exist_ok=True)
+            stream.write_bytes(b''.join(encoded(record) for record in unrelated)
+                               + encoded(capture_record(body='retained-match')))
+            process = subprocess.Popen(
+                [sys.executable, '-B', '-m', 'tap_core.service', str(root)],
+                cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            state_dir = root / 'state/readers' / PACK
+            output = root / 'data/readers' / PACK
+            watched = [state_dir, state_dir / 'work', output, root / 'logs/readers' / PACK,
+                       state_dir / 'checkpoint.json', state_dir / 'fresh-checkpoint.json']
+
+            def processed(lane):
+                try:
+                    name = 'fresh-checkpoint.json' if lane == 'fresh' else 'checkpoint.json'
+                    return json.loads((state_dir / name).read_text())['processed']
+                except (OSError, ValueError):
+                    return -1
+
+            def snapshot():
+                # A replace changes the inode; a chmod or entry change moves ctime.
+                return {str(path): (path.stat().st_ino, path.stat().st_ctime_ns) for path in watched}
+
+            try:
+                # 121 records at one per 0.25 s tick took ~30 s; batched skips need a few ticks.
+                self.assertTrue(until(lambda: processed('replay') == 121, timeout=8),
+                                f'replay lane processed {processed("replay")} of 121')
+                self.assertEqual((output / 'replay.jsonl').read_text().splitlines(), ['"retained-match"'])
+                self.assertTrue(until(lambda: processed('fresh') == 0))
+                time.sleep(2)  # let the last run record its idle phase
+                before = snapshot()
+                time.sleep(4)  # several idle ticks of both lanes
+                self.assertEqual(snapshot(), before)
+                with stream.open('ab') as handle:
+                    handle.write(encoded(capture_record(body='live-match')))
+                self.assertTrue(until(lambda: (output / 'fresh.jsonl').exists()))
+                self.assertEqual((output / 'fresh.jsonl').read_text().splitlines(), ['"live-match"'])
+            finally:
+                process.terminate()
+                process.communicate(timeout=8)

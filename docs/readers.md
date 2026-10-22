@@ -92,6 +92,16 @@ is separate under `state/readers/<name>/work`, output under `data/readers/<name>
 and logs under `logs/readers/<name>`. Owned directories are mode 0700; checkpoints
 and captured logs are replaced through private temporary files.
 
+A run writes its checkpoint only when progress or phase changes. A run that
+finds nothing new leaves an already `idle` checkpoint untouched, and an owned
+directory is chmodded only when its mode is not 0700. Records skipped by an
+origin filter advance the cursor in memory; that progress is saved with the next
+write in the run: the in-flight marker before a delivery, the final phase, or
+the failure/cancel record. A crash before that write loses only skip progress,
+so the next run rescans those filtered records without invoking the reader for
+them. `updated_at` is therefore the time of the last saved change, not of the
+last poll (#256).
+
 `TAP_READER_DELIVERY_ID` identifies a captured journal entry and remains stable
 across retry and explicit replay in the same profile. It is not a body hash:
 A → B → A contains three different delivery IDs. `reader_generation` is a

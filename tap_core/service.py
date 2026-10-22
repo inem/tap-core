@@ -29,6 +29,16 @@ def service_startup_seconds():
         return 10.0
 
 
+# A reader that found nothing new polls less often; one with work keeps the
+# short tick so a burst drains promptly (#256).
+READER_BUSY_SECONDS = 0.25
+READER_IDLE_SECONDS = 1.5
+
+
+def reader_wait(completed):
+    return READER_BUSY_SECONDS if completed else READER_IDLE_SECONDS
+
+
 def log(message):
     """One timestamped controller line into components.log (see #145)."""
     print(stamped(message), flush=True)
@@ -64,9 +74,10 @@ def main():
         if fresh_enabled:
             return fresh_reader_loop(name, spec, allowed_origins, stop_reader, cancelled)
         while not cancelled():
+            completed = 0
             try:
-                reader.run(spec, max_records=1 if first else 50, timeout=10, guard_parent=True,
-                           cancelled=cancelled, allowed_origins=allowed_origins)
+                completed = reader.run(spec, max_records=1 if first else 50, timeout=10, guard_parent=True,
+                                       cancelled=cancelled, allowed_origins=allowed_origins)['completed_this_run']
                 failures, first = 0, False
                 row = {'healthy': True, 'phase': 'waiting', 'progress': reader.load(), 'error': None}
             except Exception as error:
@@ -77,7 +88,7 @@ def main():
                 rows[name] = row
             if failures >= 3:
                 return  # Explicit off/on resumes; no infinite failed replay loop.
-            stop_reader.wait(min(4, 2 ** (failures - 1)) if failures else 0.25)
+            stop_reader.wait(min(4, 2 ** (failures - 1)) if failures else reader_wait(completed))
 
     def fresh_reader_loop(name, spec, allowed_origins, stop_reader, cancelled):
         replay = Reader(profile, name)
@@ -86,6 +97,7 @@ def main():
         replay_failures = fresh_failures = 0
         replay_error = fresh_error = None
         while not cancelled():
+            completed = 0
             if not initialized:
                 try:
                     fresh.follow_tail(spec)
@@ -96,8 +108,8 @@ def main():
                     fresh_error = type(error).__name__ + ': ' + str(error)
             if initialized:
                 try:
-                    fresh.run(spec, max_records=500, max_invocations=5, timeout=10, guard_parent=True,
-                              cancelled=cancelled, allowed_origins=allowed_origins)
+                    completed += fresh.run(spec, max_records=500, max_invocations=5, timeout=10, guard_parent=True,
+                                           cancelled=cancelled, allowed_origins=allowed_origins)['completed_this_run']
                     fresh_failures = 0
                     if not any(fresh.state.glob('fresh-failure-*.json')):
                         fresh_error = None
@@ -112,9 +124,11 @@ def main():
                             fresh_error += '; recovery failed: ' + str(skip_error)
             if replay_failures < 3:
                 try:
-                    replay.run(spec, max_records=1, timeout=10,
-                               guard_parent=True, cancelled=cancelled,
-                               allowed_origins=allowed_origins)
+                    # Filtered records are skipped 50 at a time; recovery still
+                    # starts at most one child per tick beside the fresh lane.
+                    completed += replay.run(spec, max_records=50, max_invocations=1, timeout=10,
+                                            guard_parent=True, cancelled=cancelled,
+                                            allowed_origins=allowed_origins)['completed_this_run']
                     replay_failures = 0
                     replay_error = None
                 except Exception as error:
@@ -127,7 +141,7 @@ def main():
                    'fresh_skipped': len(list(fresh.state.glob('fresh-failure-*.json'))), 'error': error}
             with mutex:
                 rows[name] = row
-            stop_reader.wait(0.25 if fresh_failures == 0 else min(4, 2 ** (fresh_failures - 1)))
+            stop_reader.wait(reader_wait(completed) if fresh_failures == 0 else min(4, 2 ** (fresh_failures - 1)))
 
     def sync_readers(desired_components, reader_origins, fresh_readers, *, live_attach=False):
         """Change only reader workers; never restart the controller, Hub or proxy."""
