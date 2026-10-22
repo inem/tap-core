@@ -150,6 +150,9 @@ architecture by default.
 
 Read [TECHNOLOGY.md](TECHNOLOGY.md) for release requirements, working stack choices
 and unresolved packaging decisions before starting an implementation task.
+The [lazy-session migration research](docs/lazy-session-migration.md) examines
+#263's source formats, retention and consumer dependencies, with reproducible
+synthetic probes and a staged plan. It does not implement the proposed Rust runtime.
 The [components map](docs/components.md) lists every repository, the installed
 instance layout, which command exercises which component, the pack roles and a
 terminal-only live check recipe over the WebSocket bridge.
