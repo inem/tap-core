@@ -1,0 +1,40 @@
+{
+  "architecture": "x86_64",
+  "core_commit": "66a168a72cf2d705c41ac403f7698c704cbf9033",
+  "evidence_level": "synthetic characterization; not live or performance acceptance",
+  "file_change": {
+    "content_changed": true,
+    "directory_signature_unchanged_after_child_rewrite": true,
+    "file_mtime_size_unchanged_after_timestamp_restore": true
+  },
+  "journal": {
+    "cursor_version": 2,
+    "idle_resume_lines_read": 2,
+    "idle_resume_records_decoded": 1,
+    "idle_resume_records_returned": 0,
+    "segment_records": 1000
+  },
+  "platform": "Linux",
+  "python": "3.12.14",
+  "reader": {
+    "filtered_batch": {
+      "checkpoint_writes": 51,
+      "chmod_calls": 7,
+      "records_advanced": 50,
+      "worker_invocations": 0
+    },
+    "idle_tick": {
+      "checkpoint_writes": 1,
+      "chmod_calls": 7,
+      "records_advanced": 0,
+      "worker_invocations": 0
+    }
+  },
+  "schema": "tap.lazy-session-research/v1",
+  "sqlite": "3.53.1",
+  "sqlite_wal": {
+    "main_database_signature_unchanged": true,
+    "readonly_query_sees_committed_change": true,
+    "wal_signature_changed": true
+  }
+}
