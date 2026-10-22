@@ -125,6 +125,123 @@ class ReaderTests(unittest.TestCase):
         self.reader.run(self.spec, allowed_origins=allowed)
         self.assertEqual(self.outputs(self.reader), [18, 19])
 
+    def counted_writes(self, reader):
+        """Count checkpoint replacements and chmod calls during a block (#256)."""
+        saves, chmods = [], []
+        original_save, original_chmod = readers.save, Path.chmod
+
+        def save(path, value):
+            if path == reader.checkpoint:
+                saves.append(value)
+            return original_save(path, value)
+
+        def chmod(path, mode, **kwargs):
+            chmods.append(path)
+            return original_chmod(path, mode, **kwargs)
+
+        stack = contextlib.ExitStack()
+        stack.enter_context(patch.object(readers, 'save', save))
+        stack.enter_context(patch.object(Path, 'chmod', chmod))
+        return stack, saves, chmods
+
+    def test_idle_run_writes_no_checkpoint_and_no_chmod(self):
+        self.write('A')
+        self.reader.run(self.spec)
+        previous = self.reader.checkpoint.read_bytes()
+        stack, saves, chmods = self.counted_writes(self.reader)
+        with stack:
+            for _ in range(3):
+                self.assertEqual(self.reader.run(self.spec)['completed_this_run'], 0)
+        self.assertEqual((saves, chmods), ([], []))
+        self.assertEqual(self.reader.checkpoint.read_bytes(), previous)
+        # The persisted phase still reports what an idle run would have written.
+        self.assertEqual(self.reader.load()['phase'], 'idle')
+
+    def test_idle_run_after_failure_still_records_idle(self):
+        self.write('A')
+        spec = dict(self.spec, config={'fixture_mode': 'fail_before_once'})
+        with self.assertRaises(ReaderError):
+            self.reader.run(spec)
+        self.reader.run(spec)
+        state = self.reader.load()
+        self.assertEqual((state['phase'], state['error'], state['inflight']), ('idle', None, None))
+
+    def test_private_dir_repairs_only_a_wrong_mode(self):
+        self.reader.prepare()
+        self.reader.state.chmod(0o755)
+        stack, _saves, chmods = self.counted_writes(self.reader)
+        with stack:
+            self.reader.prepare()
+            self.reader.prepare()
+        self.assertEqual(chmods, [self.reader.state])
+        self.assertEqual(self.reader.state.stat().st_mode & 0o777, 0o700)
+
+    def test_filtered_origins_write_checkpoint_once_per_batch(self):
+        records = self.write(*range(40))
+        for record in records:
+            record['url'] = 'https://unrelated.example/data'
+        self.stream.write_bytes(b''.join(encoded(record) for record in records))
+        allowed = frozenset({'https://fixture.example'})
+        self.reader.run(self.spec, max_records=1, allowed_origins=allowed)
+        stack, saves, _chmods = self.counted_writes(self.reader)
+        with stack:
+            first = self.reader.run(self.spec, max_records=25, allowed_origins=allowed)
+            second = self.reader.run(self.spec, max_records=25, allowed_origins=allowed)
+            idle = self.reader.run(self.spec, max_records=25, allowed_origins=allowed)
+        self.assertEqual([first['completed_this_run'], second['completed_this_run'],
+                          idle['completed_this_run']], [25, 14, 0])
+        self.assertEqual(len(saves), 2)
+        self.assertEqual([value['processed'] for value in saves], [26, 40])
+        self.assertTrue(all(value['phase'] == 'idle' for value in saves))
+        self.assertEqual(self.reader.load()['cursor'], saves[-1]['cursor'])
+        self.assertFalse((self.reader.output / 'projection.sqlite3').exists())
+
+    def test_filtered_skips_persist_with_the_running_marker_before_delivery(self):
+        records = self.write(*range(21))
+        for record in records[:10] + records[11:]:
+            record['url'] = 'https://unrelated.example/data'
+        self.stream.write_bytes(b''.join(encoded(record) for record in records))
+        allowed = frozenset({'https://fixture.example'})
+        stack, saves, _chmods = self.counted_writes(self.reader)
+        with stack:
+            result = self.reader.run(self.spec, allowed_origins=allowed)
+        self.assertEqual(result['completed_this_run'], 21)
+        self.assertEqual(self.outputs(self.reader), [10])
+        # initial, running (carries 10 skips), delivered, idle (carries 10 skips)
+        self.assertEqual([(value['phase'], value['processed']) for value in saves],
+                         [('ready', 0), ('running', 10), ('ready', 11), ('idle', 21)])
+
+    def test_cancel_after_filtered_skips_keeps_their_progress(self):
+        records = self.write(*range(10))
+        for record in records:
+            record['url'] = 'https://unrelated.example/data'
+        self.stream.write_bytes(b''.join(encoded(record) for record in records))
+        allowed = frozenset({'https://fixture.example'})
+        self.reader.run(self.spec, max_records=1, allowed_origins=allowed)
+        checks = iter([False] * 5 + [True])
+        with self.assertRaisesRegex(ReaderError, 'Reader stopped'):
+            self.reader.run(self.spec, allowed_origins=allowed, cancelled=lambda: next(checks))
+        state = self.reader.load()
+        self.assertEqual((state['phase'], state['processed']), ('failed', 6))
+        self.assertEqual(self.reader.run(self.spec, allowed_origins=allowed)['completed_this_run'], 4)
+
+    def test_crash_during_filtered_batch_rescans_without_delivery(self):
+        records = self.write(*range(10))
+        for record in records[:9]:
+            record['url'] = 'https://unrelated.example/data'
+        self.stream.write_bytes(b''.join(encoded(record) for record in records))
+        allowed = frozenset({'https://fixture.example'})
+        self.reader.run(self.spec, max_records=1, allowed_origins=allowed)
+        before = self.reader.load()
+        # A crash before the batch flush loses only in-memory skip progress.
+        with patch.object(readers, 'save', side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                self.reader.run(self.spec, max_records=5, allowed_origins=allowed)
+        self.assertEqual(self.reader.load(), before)
+        self.reader.run(self.spec, allowed_origins=allowed)
+        self.assertEqual(self.outputs(self.reader), [9])
+        self.assertEqual(self.reader.load()['processed'], 10)
+
     def test_record_origin_normalizes_default_ports_and_rejects_bad_urls(self):
         self.assertEqual(record_origin({'url': 'https://FiXtUrE.Example:443/data'}),
                          'https://fixture.example')

@@ -14,8 +14,11 @@ records captured during controller downtime. New records are delivered promptly 
 `fresh-checkpoint.json`; the original `checkpoint.json` continues recovery from
 its saved position. The lanes share one reader lock, so their output writes do
 not overlap. Fresh polling can skip up to 500 unrelated records but invokes at
-most five pack workers per turn. Recovery processes one record per turn, then yields to fresh
-delivery. The child sees `reader_lane` (`fresh` or `replay`) in
+most five pack workers per turn. Recovery can skip up to 50 unrelated records but invokes at
+most one pack worker per turn, then yields to fresh delivery. A turn that
+completed nothing waits 1.5 s before the next one; a turn with work waits
+0.25 s, so a burst drains promptly and the first record after a quiet period
+waits at most about 1.5 s plus its run. The child sees `reader_lane` (`fresh` or `replay`) in
 `TAP_PACK_CONTEXT`. The Core passes records and schedules turns; the pack owns
 their meaning and its output ordering rule.
 

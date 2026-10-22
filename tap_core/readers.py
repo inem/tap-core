@@ -32,7 +32,9 @@ def private_dir(path):
     if path.is_symlink():
         raise ReaderError("Reader-owned directory must not be a symlink")
     path.mkdir(mode=0o700, parents=True, exist_ok=True)
-    path.chmod(0o700)
+    # Idle ticks call this repeatedly; only an actual repair touches metadata (#256).
+    if path.stat().st_mode & 0o777 != 0o700:
+        path.chmod(0o700)
 
 
 def save(path, value):
@@ -258,6 +260,9 @@ class Reader:
             if state['definition'] != fingerprint(spec):
                 raise ReaderError('Reader definition changed; use a new reader name or explicit replay')
             completed = invoked = 0
+            # Skipped origins advance in memory and persist with the next write.
+            # A crash only rescans this batch's filtered records, which are never delivered.
+            dirty = False
             try:
                 recovered_gap = False
                 while True:
@@ -267,8 +272,9 @@ class Reader:
                                 if cancelled and cancelled():
                                     raise ReaderError('Reader stopped; cursor was not advanced')
                                 if allowed_origins is not None and record_origin(entry.record) not in allowed_origins:
-                                    self.store(state, cursor=entry.cursor, processed=state['processed'] + 1,
-                                               inflight=None, phase='ready', error=None)
+                                    state.update(cursor=entry.cursor, processed=state['processed'] + 1,
+                                                 inflight=None, phase='ready', error=None)
+                                    dirty = True
                                     completed += 1
                                     if completed == max_records:
                                         break
@@ -276,6 +282,7 @@ class Reader:
                                 delivery_id = hashlib.sha256(entry.cursor.encode()).hexdigest()
                                 invocation_id = fingerprint([self.name, state['generation'], delivery_id])
                                 self.store(state, phase='running', inflight=invocation_id, error=None)
+                                dirty = False
                                 self.execute(spec, entry.record, delivery_id, invocation_id, state['generation'], timeout, lock,
                                              guard_parent, cancelled)
                                 self.store(state, cursor=entry.cursor, processed=state['processed'] + 1,
@@ -309,7 +316,9 @@ class Reader:
                         self.store(state, cursor=None, inflight=None, phase='ready',
                                    error='JournalGap skipped: ' + str(gap))
                         recovered_gap = True
-                self.store(state, phase='idle', error=None)
+                # An unchanged idle checkpoint is not rewritten on every poll (#256).
+                if dirty or state['phase'] != 'idle' or state['inflight'] is not None or state['error'] is not None:
+                    self.store(state, phase='idle', error=None)
             except Exception as error:
                 # Keep the last acknowledged cursor, including after a timeout or
                 # a crash between output and checkpoint. An explicit run retries.
