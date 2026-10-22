@@ -9,6 +9,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import Mock, patch
 
@@ -53,6 +54,36 @@ class CommandHostTests(unittest.TestCase):
             [sys.executable, "-B", str(ROOT / "tap"), "--profile", str(self.profile),
              *arguments], text=True, capture_output=True, env=environment,
         )
+
+    def stop_command(self, process, release, pid_file=None):
+        """Release, reap and kill a ``fixture wait`` process tree.
+
+        Registered in the test body so it runs before ``setUp``'s
+        ``shutil.rmtree`` cleanup (unittest runs cleanups LIFO). Without
+        this, a still-polling child can outlive its temporary directory.
+        """
+        release.touch()
+        if process.poll() is None:
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+        if process.poll() is None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait(timeout=5)
+        if pid_file is not None and pid_file.exists():
+            try:
+                provider_pid = int(pid_file.read_text().strip())
+            except ValueError:
+                provider_pid = None
+            if provider_pid is not None:
+                try:
+                    os.kill(provider_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
 
     def test_manifest_declares_commands_without_importing_provider(self):
         marker = self.root / "executed"
@@ -165,16 +196,25 @@ class CommandHostTests(unittest.TestCase):
         self.assertIsNone(call.kwargs["stdout"])
         self.assertIsNone(call.kwargs["stderr"])
 
+    def test_wait_fixture_self_terminates_when_release_never_appears(self):
+        self.install_enable()
+        release = self.root / "never-released"
+        environment = {**os.environ, "TAP_FIXTURE_WAIT_TIMEOUT": "0.2"}
+        started = time.monotonic()
+        result = self.run_tap("fixture", "wait", str(release), environment=environment)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("fixture wait timed out", result.stderr)
+        self.assertLess(time.monotonic() - started, 5)
+
     def test_real_sigint_stops_provider_and_returns_130(self):
         self.install_enable()
         release = self.root / "interrupt-release"
         process = subprocess.Popen(
             [sys.executable, "-B", str(ROOT / "tap"), "--profile", str(self.profile),
              "fixture", "wait", str(release)], text=True,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
         )
-        self.addCleanup(release.touch)
-        self.addCleanup(lambda: process.poll() is None and process.kill())
+        self.addCleanup(self.stop_command, process, release)
         self.assertEqual(process.stdout.readline().strip(), "ready")
         process.send_signal(signal.SIGINT)
         _stdout, stderr = process.communicate(timeout=5)
@@ -186,10 +226,9 @@ class CommandHostTests(unittest.TestCase):
         process = subprocess.Popen(
             [sys.executable, "-B", str(ROOT / "tap"), "--profile", str(self.profile),
              "fixture", "wait", str(release)], text=True,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
         )
-        self.addCleanup(release.touch)
-        self.addCleanup(lambda: process.poll() is None and process.kill())
+        self.addCleanup(self.stop_command, process, release)
         self.assertEqual(process.stdout.readline().strip(), "ready")
         blocked = self.run_tap("pack", "disable", "fixture.command")
         self.assertEqual(blocked.returncode, 1)
@@ -208,10 +247,9 @@ class CommandHostTests(unittest.TestCase):
         dispatcher = subprocess.Popen(
             [sys.executable, "-B", str(ROOT / "tap"), "--profile", str(self.profile),
              "fixture", "wait", str(release), str(pid_file)], text=True,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
         )
-        self.addCleanup(release.touch)
-        self.addCleanup(lambda: dispatcher.poll() is None and dispatcher.kill())
+        self.addCleanup(self.stop_command, dispatcher, release, pid_file)
         self.assertEqual(dispatcher.stdout.readline().strip(), "ready")
         provider_pid = int(pid_file.read_text())
         dispatcher.terminate()
