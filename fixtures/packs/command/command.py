@@ -33,8 +33,13 @@ if path == ("fixture", "wait"):
     if len(sys.argv) > 2:
         Path(sys.argv[2]).write_text(str(os.getpid()))
     print("ready", flush=True)
-    while not release.exists():
+    wait_timeout = float(os.environ.get("TAP_FIXTURE_WAIT_TIMEOUT", "15"))
+    deadline = time.monotonic() + wait_timeout
+    while not release.exists() and time.monotonic() < deadline:
         time.sleep(0.02)
+    if not release.exists():
+        print("fixture wait timed out", file=sys.stderr)
+        raise SystemExit(1)
     raise SystemExit(0)
 
 print("unknown fixture command path", file=sys.stderr)
