@@ -336,9 +336,8 @@ def dispatch(profile_root, words):
     # it is shared: another command of the same pack (a scheduled refresh, a
     # second terminal) runs alongside instead of failing as "still running".
     with command_execution_lock(profile_root, key=command.provider_id, shared=True) as lease:
-        with profile_lock(profile_root):
-            current = discover(profile_root).commands.get(command.path)
-            if current is None or (current.provider_id, current.provider_version) != (
-                    command.provider_id, command.provider_version):
-                raise TapError("Command provider changed before invocation; retry the command")
+        current = discover(profile_root).commands.get(command.path)
+        if current is None or (current.provider_id, current.provider_version) != (
+                command.provider_id, command.provider_version):
+            raise TapError("Command provider changed before invocation; retry the command")
         return execute(current, profile_root, argv, lease_fd=lease.fileno())
