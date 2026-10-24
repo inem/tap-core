@@ -526,7 +526,7 @@ class PackStoreTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in visible], ["example.reader", PACK_ID])
         self.assertEqual(visible[0]["features"], reader_manifest["features"])
 
-    def test_pack_update_refuses_incompatible_reader_checkpoint(self):
+    def test_pack_update_adopts_changed_reader_definition_keeping_progress(self):
         import sys
         from tap_core.readers import Reader, fingerprint
         linked = Path(__file__).resolve().parent.parent / "fixtures/packs/installed-linked"
@@ -556,23 +556,18 @@ class PackStoreTests(unittest.TestCase):
         (linked_v2 / "reader.py").write_text((linked_v2 / "reader.py").read_text() + "\n# bump\n")
         (linked_v2 / "pack.json").write_text(json.dumps(manifest, indent=2) + "\n")
         second = self.artifact(linked_v2, "linked-v2.tap-pack")
-        with self.assertRaisesRegex(PackError, "progress under another definition"):
-            self.store.update(second)
-        selected = self.store.load()["packs"]["fixture.installed-linked"]["selected"]
-        self.assertEqual(selected, "0.1.0")
-        self.assertIn("0.2.0", self.store.load()["packs"]["fixture.installed-linked"]["versions"])
-        new_spec = dict(old_spec, revision='fixture.installed-linked@0.2.0',
-                        command=[sys.executable, str(self.store.version_root(
-                            'fixture.installed-linked', '0.2.0') / 'reader.py')])
         reader = Reader(Profile(self.profile, '/fixture/mitmdump', 19001, 'explicit',
                                 'http://example.test', []), 'fixture.installed-linked')
         previous = reader.load()
-        reader.rebind(new_spec, fingerprint(old_spec))
-        self.store.enable('fixture.installed-linked', '0.2.0',
-                          origins=['https://fixture.example'],
-                          capabilities=['page.inject', 'capture.read', 'bridge.handle'])
-        self.assertEqual(reader.load()['cursor'], previous['cursor'])
-        self.assertEqual(reader.load()['processed'], previous['processed'])
+        # The changed reader definition is adopted in place: same cursor and
+        # progress, next generation; no stop-and-rebind step.
+        self.store.update(second)
+        self.assertEqual(self.store.load()["packs"]["fixture.installed-linked"]["selected"], "0.2.0")
+        new_spec = self.store.effective_components(components)["readers"]["fixture.installed-linked"]
+        adopted = reader.load()
+        self.assertEqual(adopted['definition'], fingerprint(new_spec))
+        self.assertEqual(adopted['generation'], previous['generation'] + 1)
+        self.assertEqual((adopted['cursor'], adopted['processed']), (previous['cursor'], previous['processed']))
         self.assertEqual(self.store.fresh_readers(), {'fixture.installed-linked'})
 
     def test_prepare_refreshes_effective_runtime_after_enable_disable(self):
