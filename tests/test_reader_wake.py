@@ -36,40 +36,45 @@ def record(path, body):
 
 @unittest.skipUnless(sys.platform == 'darwin', 'stream growth uses kqueue')
 class ReaderWakeTests(unittest.TestCase):
+    def make_profile(self, root, delivery=None):
+        source = root / 'pack-source'
+        source.mkdir()
+        (source / 'reader.py').write_text(
+            "import json, os, pathlib, sys\n"
+            "event = json.loads(sys.stdin.readline())\n"
+            "context = json.loads(os.environ['TAP_PACK_CONTEXT'])\n"
+            "target = pathlib.Path(context['output_dir']) / 'events.jsonl'\n"
+            "with target.open('a') as out: out.write(event['body'] + '\\n')\n"
+        )
+        (source / 'pack.json').write_text(json.dumps({
+            'manifest_version': 1, 'id': PACK, 'version': '0.1.0',
+            'requires': {'pack_api': 1, 'dependencies': []},
+            'files': ['reader.py'],
+            'entrypoints': {'reader': {'file': 'reader.py', 'interface': 'python-jsonl-v1',
+                                       'input': {'path_prefixes': {ORIGIN: ['/api/']}},
+                                       **({'delivery': delivery} if delivery else {})}},
+            'config': {},
+            'access': {'origins': [ORIGIN], 'capabilities': ['capture.read']},
+        }))
+        artifact = root / 'reader.tap-pack'
+        build_artifact(source, artifact)
+        profile = Profile(root, '/fixture/backend', 19000, 'explicit',
+                          'http://fixture.test', [], bridge=dict(bridge_config(), enabled=False),
+                          components={'version': 1, 'python': sys.executable,
+                                      'bun': '/usr/bin/true', 'readers': {}, 'handlers': {}})
+        profile.save()
+        store = PackStore(root)
+        store.install(artifact)
+        store.enable(PACK, '0.1.0', origins=[ORIGIN], capabilities=['capture.read'])
+        self.assertEqual(store.reader_path_prefixes(), {PACK: ((ORIGIN, ('/api/',)),)})
+        stream = root / 'data/stream.jsonl'
+        stream.parent.mkdir(parents=True, exist_ok=True)
+        return stream
+
     def test_idle_reader_does_not_poll_and_wakes_on_growth_and_rotation(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            source = root / 'pack-source'
-            source.mkdir()
-            (source / 'reader.py').write_text(
-                "import json, os, pathlib, sys\n"
-                "event = json.loads(sys.stdin.readline())\n"
-                "context = json.loads(os.environ['TAP_PACK_CONTEXT'])\n"
-                "target = pathlib.Path(context['output_dir']) / 'events.jsonl'\n"
-                "with target.open('a') as out: out.write(event['body'] + '\\n')\n"
-            )
-            (source / 'pack.json').write_text(json.dumps({
-                'manifest_version': 1, 'id': PACK, 'version': '0.1.0',
-                'requires': {'pack_api': 1, 'dependencies': []},
-                'files': ['reader.py'],
-                'entrypoints': {'reader': {'file': 'reader.py', 'interface': 'python-jsonl-v1',
-                                           'input': {'path_prefixes': {ORIGIN: ['/api/']}}}},
-                'config': {},
-                'access': {'origins': [ORIGIN], 'capabilities': ['capture.read']},
-            }))
-            artifact = root / 'reader.tap-pack'
-            build_artifact(source, artifact)
-            profile = Profile(root, '/fixture/backend', 19000, 'explicit',
-                              'http://fixture.test', [], bridge=dict(bridge_config(), enabled=False),
-                              components={'version': 1, 'python': sys.executable,
-                                          'bun': '/usr/bin/true', 'readers': {}, 'handlers': {}})
-            profile.save()
-            store = PackStore(root)
-            store.install(artifact)
-            store.enable(PACK, '0.1.0', origins=[ORIGIN], capabilities=['capture.read'])
-            self.assertEqual(store.reader_path_prefixes(), {PACK: ((ORIGIN, ('/api/',)),)})
-            stream = root / 'data/stream.jsonl'
-            stream.parent.mkdir(parents=True, exist_ok=True)
+            stream = self.make_profile(root)
             stream.write_bytes(record('/telemetry', 'noise') + record('/api/one', 'one'))
             events = root / 'data/readers' / PACK / 'events.jsonl'
             checkpoint = root / 'state/readers' / PACK / 'checkpoint.json'
@@ -98,6 +103,27 @@ class ReaderWakeTests(unittest.TestCase):
                 process.terminate()
                 process.communicate(timeout=10)
 
+
+    def test_fresh_lane_drains_a_filtered_backlog_without_a_long_wait(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            stream = self.make_profile(root, delivery='fresh-and-replay-v1')
+            stream.write_bytes(b'')
+            events = root / 'data/readers' / PACK / 'events.jsonl'
+            process = subprocess.Popen(
+                [sys.executable, '-B', '-m', 'tap_core.service', str(root)],
+                cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                time.sleep(2.0)
+                noise = b''.join(record(f'/telemetry/{i}', 'noise') for i in range(1200))
+                with stream.open('ab') as handle:  # one write: then the stream stays quiet
+                    handle.write(noise + record('/api/wanted', 'wanted'))
+                started = time.monotonic()
+                self.assertTrue(until(lambda: events.exists() and 'wanted' in events.read_text(), timeout=10))
+                self.assertLess(time.monotonic() - started, 10)
+            finally:
+                process.terminate()
+                process.communicate(timeout=10)
 
 if __name__ == '__main__':
     unittest.main()

@@ -131,7 +131,7 @@ def main():
                     result = fresh.run(spec, max_records=500, max_invocations=5, timeout=10, guard_parent=True,
                                        cancelled=cancelled, allowed_origins=allowed_origins,
                                        path_prefixes=path_prefixes)
-                    busy = result['completed_this_run'] > 0
+                    busy = result['completed_this_run'] >= 500  # a full batch: backlog remains
                     delivered = result['invoked_this_run'] > 0
                     fresh_failures = 0
                     if not any(fresh.state.glob('fresh-failure-*.json')):
@@ -152,7 +152,7 @@ def main():
                     result = replay.run(spec, max_records=REPLAY_BATCH, max_invocations=1, timeout=10,
                                         guard_parent=True, cancelled=cancelled,
                                         allowed_origins=allowed_origins, path_prefixes=path_prefixes)
-                    busy = busy or result['completed_this_run'] > 0
+                    busy = busy or result['completed_this_run'] >= REPLAY_BATCH
                     delivered = delivered or result['invoked_this_run'] > 0
                     replay_failures = 0
                     replay_error = None
@@ -168,6 +168,8 @@ def main():
                 rows[name] = row
             if fresh_failures or not initialized:
                 stop_reader.wait(min(4, 2 ** (max(fresh_failures, 1) - 1)))
+            elif busy:
+                continue  # a lane ended on a full batch of filtered records: no pause
             elif delivered or 0 < replay_failures < 3:
                 stop_reader.wait(max(0.0, started + READER_MIN_SCAN_SECONDS - time.monotonic()))
             else:

@@ -2,6 +2,7 @@ import contextlib
 import copy
 import io
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -703,3 +704,79 @@ class BackgroundTests(unittest.TestCase):
             with self.assertRaisesRegex(TapError, 'did not unload'):
                 background.reconcile(self.profile, adapter)
         self.assertNotIn('bootstrap', [c.args[0][1] for c in adapter.run.call_args_list])
+
+    def test_event_storm_during_debounce_does_not_run_a_pass_per_event(self):
+        self.with_trigger(debounce_ms=1000, min_interval_seconds=1)
+        self.install()
+        callbacks = []
+
+        class FakeWatch:
+            def __init__(self, paths, on_change):
+                callbacks.append(on_change)
+            def start(self):
+                return self
+            def close(self):
+                pass
+
+        passes = []
+        real_run_once = background.run_once
+
+        def counting_run_once(*args, **kwargs):
+            passes.append(time.monotonic())
+            return real_run_once(*args, **kwargs)
+
+        with patch.object(background, 'run_once', side_effect=counting_run_once):
+            self.serve(FakeWatch)
+            self.assertTrue(self.wait_for(lambda: callbacks and len(self.runs()) == 1))
+            time.sleep(1.2)
+            before = len(passes)
+            for _ in range(50):  # a burst inside one debounce window
+                callbacks[-1]([str(self.root / 'watched/file')])
+                time.sleep(0.01)
+            self.assertTrue(self.wait_for(lambda: len(self.runs()) == 2))
+            time.sleep(0.5)
+        self.assertLessEqual(len(passes) - before, 2)
+        self.assertEqual(len(self.runs()), 2)
+
+    def test_the_hosts_own_state_writes_never_trigger_a_run(self):
+        self.with_trigger(debounce_ms=0, min_interval_seconds=1)
+        self.install()
+        callbacks = []
+
+        class FakeWatch:
+            def __init__(self, paths, on_change):
+                callbacks.append(on_change)
+            def start(self):
+                return self
+            def close(self):
+                pass
+
+        self.serve(FakeWatch)
+        self.assertTrue(self.wait_for(lambda: callbacks and len(self.runs()) == 1))
+        time.sleep(1.2)
+        own = os.path.realpath(self.profile)
+        for _ in range(20):
+            callbacks[-1]([own + '/state/background.json', own + '/logs/background/abc.log'])
+        time.sleep(1.5)
+        self.assertEqual(len(self.runs()), 1)
+
+    def test_a_watch_on_a_path_created_later_is_moved_onto_it(self):
+        if sys.platform != 'darwin':
+            self.skipTest('FSEvents is a macOS boundary')
+        target = self.root / 'later' / 'sessions'
+        self.with_trigger(watch=[str(target)], min_interval_seconds=1)
+        self.install()
+        bound = patch.object(background, 'RESIDENT_MAX_SLEEP_SECONDS', 1)
+        bound.start()
+        self.addCleanup(bound.stop)
+        self.serve(background.PathWatch)
+        host = lambda: json.loads((self.profile / 'state/background-host.json').read_text())
+        self.assertTrue(self.wait_for(lambda: (self.profile / 'state/background-host.json').exists()))
+        self.assertEqual(list(host()['watches'].values())[0]['roots'], [os.path.realpath(self.root)])
+        target.mkdir(parents=True)
+        real = os.path.realpath(target)
+        self.assertTrue(self.wait_for(lambda: list(host()['watches'].values())[0]['roots'] == [real]))
+        runs = len(self.runs())
+        time.sleep(1.2)
+        (target / 'a.jsonl').write_text('{}\n')
+        self.assertTrue(self.wait_for(lambda: len(self.runs()) > runs))

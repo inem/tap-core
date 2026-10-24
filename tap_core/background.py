@@ -475,8 +475,15 @@ def serve(root, stop=None, watch_factory=PathWatch):
     mark = _code_mark()
     started_at = time.time()
 
+    own = tuple(os.path.join(os.path.realpath(root), name) for name in (
+        'state/background.json', 'state/background-host.json', 'logs/background'))
+
     def changed_paths(key):
-        def mark_pending(_paths):
+        def mark_pending(paths):
+            # The host's own state/log writes must not wake it (a watch over
+            # state/ would otherwise re-trigger itself on every pass).
+            if paths and all(str(p).startswith(own) for p in paths):
+                return
             now = time.monotonic()
             with guard:
                 first, _ = pending.get(key, (now, now))
@@ -517,7 +524,8 @@ def serve(root, stop=None, watch_factory=PathWatch):
             for key in list(watches):
                 paths, watcher, _ = watches[key]
                 wanted = triggers.get(key)
-                if wanted is None or tuple(expand(p, root) for p in wanted['watch']) != paths:
+                stale = watcher is not None and getattr(watcher, 'needs_reroot', lambda: False)()
+                if wanted is None or stale or tuple(expand(p, root) for p in wanted['watch']) != paths:
                     if watcher is not None:
                         watcher.close()
                     del watches[key]
@@ -535,6 +543,7 @@ def serve(root, stop=None, watch_factory=PathWatch):
                 'version': 1, 'mode': 'resident', 'pid': os.getpid(), 'started_at': started_at,
                 'updated_at': time.time(),
                 'watches': {key: {'paths': list(paths), 'state': 'watching' if watcher else 'polling',
+                                  'roots': list(getattr(watcher, 'roots', ())) if watcher else [],
                                   'error': error}
                             for key, (paths, watcher, error) in sorted(watches.items())}})
 
@@ -552,20 +561,27 @@ def serve(root, stop=None, watch_factory=PathWatch):
                 wake_at = state.get('usage_freshness', {}).get('next_wake_at', 0)
                 deadline = min(deadline, now + max(0.0, wake_at - now_wall))
             with guard:
-                for key, times in pending.items():
-                    if key in triggers:
-                        deadline = min(deadline, _trigger_ready(
-                            triggers[key], times, jobs.get(key, {}), now_wall, now))
                 for key, (_, watcher, _) in watches.items():
                     if watcher is None:
                         deadline = min(deadline, fallback_at.get(key, now))
-            deadline = max(deadline, time.monotonic() + 0.2)
-            # One-second slices only so an embedding caller's `stop` is seen;
-            # under launchd SIGTERM interrupts the wait directly.
-            while not stop.is_set() and not changed.wait(min(1.0, deadline - time.monotonic())):
-                if time.monotonic() >= deadline:
+            # Between passes a watch event only moves the wake time: no
+            # discovery, no state writes, until a trigger is ready or a deadline passes.
+            earliest = time.monotonic() + 0.2
+            while not stop.is_set():
+                now, now_wall = time.monotonic(), time.time()
+                wake_at = deadline
+                with guard:
+                    for key, times in pending.items():
+                        if key in triggers:
+                            wake_at = min(wake_at, _trigger_ready(
+                                triggers[key], times, jobs.get(key, {}), now_wall, now))
+                wake_at = max(wake_at, earliest)
+                if now >= wake_at:
                     break
-            changed.clear()
+                # One-second slices only so an embedding caller's `stop` is
+                # seen; under launchd SIGTERM interrupts the wait directly.
+                changed.wait(min(1.0, wake_at - now))
+                changed.clear()
     finally:
         for _, watcher, _ in watches.values():
             if watcher is not None:
