@@ -774,6 +774,13 @@ class PackStore:
                 for pack_id, _root, manifest, _record in self._enabled_packs(self.load())
                 if 'reader' in manifest['entrypoints']}
 
+    def reader_path_prefixes(self):
+        """Declared per-origin path prefixes of enabled readers, as hashable pairs."""
+        return {pack_id: tuple(sorted((origin, tuple(paths)) for origin, paths in
+                                      manifest['entrypoints']['reader']['input']['path_prefixes'].items()))
+                for pack_id, _root, manifest, _record in self._enabled_packs(self.load())
+                if 'input' in manifest['entrypoints'].get('reader', {})}
+
     def fresh_readers(self):
         """Readers that explicitly accept out-of-order, at-least-once delivery."""
         return {pack_id for pack_id, _root, manifest, _record in self._enabled_packs(self.load())

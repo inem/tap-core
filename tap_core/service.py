@@ -13,6 +13,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tap_core.runtime import Profile, atomic_json, profile_lock, stamped
 from tap_core.components import ROOT, identity, hub_health, needs_hub
 from tap_core.readers import Reader
+from tap_core.fs_watch import GrowthSignal, WatchUnavailable
+
+# Readers sleep until the capture stream grows (kqueue on the file and its
+# rotation), with a long backstop. Scans keep the previous pacing as a floor,
+# so a busy stream costs no more than the former fixed 0.25 s loop.
+READER_MIN_SCAN_SECONDS = 0.25
+READER_IDLE_BACKSTOP_SECONDS = 30.0
+# Records advanced per replay run. Filtered records are cheap (no child process,
+# no per-record checkpoint write); each admitted record is still one invocation.
+REPLAY_BATCH = 500
 
 
 def service_startup_seconds():
@@ -47,6 +57,13 @@ def main():
     mutex = threading.Lock()
     health_path = profile.root / 'state/components.json'
     configuration = identity(profile)
+    growth = GrowthSignal(profile.root / 'data/stream.jsonl')
+
+    def idle_wait(seen, started, stop_reader, cancelled):
+        stop_reader.wait(max(0.0, started + READER_MIN_SCAN_SECONDS - time.monotonic()))
+        if growth.available and not cancelled():
+            growth.wait(seen, READER_IDLE_BACKSTOP_SECONDS, cancelled)
+
     def report(phase, hub_pid=None, error=None):
         with mutex:
             workloads_healthy = all(row['healthy'] for row in [*rows.values(), *services.values()])
@@ -56,18 +73,22 @@ def main():
                      'workloads_healthy': workloads_healthy, 'readers': dict(rows),
                      'services': dict(services)}
         atomic_json(health_path, state)
-    def reader_loop(name, spec, allowed_origins, fresh_enabled, stop_reader):
+    def reader_loop(name, spec, allowed_origins, path_prefixes, fresh_enabled, stop_reader):
         def cancelled():
             return stopping.is_set() or stop_reader.is_set()
 
+        path_prefixes = dict(path_prefixes) if path_prefixes else None
         reader, failures, first = Reader(profile, name), 0, True
         if fresh_enabled:
-            return fresh_reader_loop(name, spec, allowed_origins, stop_reader, cancelled)
+            return fresh_reader_loop(name, spec, allowed_origins, path_prefixes, stop_reader, cancelled)
         while not cancelled():
+            seen, started, busy = growth.generation, time.monotonic(), False
             try:
-                reader.run(spec, max_records=1 if first else 50, timeout=10, guard_parent=True,
-                           cancelled=cancelled, allowed_origins=allowed_origins)
+                result = reader.run(spec, max_records=1 if first else REPLAY_BATCH, timeout=10,
+                                    guard_parent=True, cancelled=cancelled,
+                                    allowed_origins=allowed_origins, path_prefixes=path_prefixes)
                 failures, first = 0, False
+                busy = result['completed_this_run'] > 0
                 row = {'healthy': True, 'phase': 'waiting', 'progress': reader.load(), 'error': None}
             except Exception as error:
                 failures += 1
@@ -77,15 +98,19 @@ def main():
                 rows[name] = row
             if failures >= 3:
                 return  # Explicit off/on resumes; no infinite failed replay loop.
-            stop_reader.wait(min(4, 2 ** (failures - 1)) if failures else 0.25)
+            if failures:
+                stop_reader.wait(min(4, 2 ** (failures - 1)))
+            elif not busy:
+                idle_wait(seen, started, stop_reader, cancelled)
 
-    def fresh_reader_loop(name, spec, allowed_origins, stop_reader, cancelled):
+    def fresh_reader_loop(name, spec, allowed_origins, path_prefixes, stop_reader, cancelled):
         replay = Reader(profile, name)
         fresh = Reader(profile, name, lane='fresh')
         initialized = False
         replay_failures = fresh_failures = 0
         replay_error = fresh_error = None
         while not cancelled():
+            seen, started, busy = growth.generation, time.monotonic(), False
             if not initialized:
                 try:
                     fresh.follow_tail(spec)
@@ -96,8 +121,10 @@ def main():
                     fresh_error = type(error).__name__ + ': ' + str(error)
             if initialized:
                 try:
-                    fresh.run(spec, max_records=500, max_invocations=5, timeout=10, guard_parent=True,
-                              cancelled=cancelled, allowed_origins=allowed_origins)
+                    result = fresh.run(spec, max_records=500, max_invocations=5, timeout=10, guard_parent=True,
+                                       cancelled=cancelled, allowed_origins=allowed_origins,
+                                       path_prefixes=path_prefixes)
+                    busy = result['completed_this_run'] > 0
                     fresh_failures = 0
                     if not any(fresh.state.glob('fresh-failure-*.json')):
                         fresh_error = None
@@ -112,9 +139,12 @@ def main():
                             fresh_error += '; recovery failed: ' + str(skip_error)
             if replay_failures < 3:
                 try:
-                    replay.run(spec, max_records=1, timeout=10,
-                               guard_parent=True, cancelled=cancelled,
-                               allowed_origins=allowed_origins)
+                    # Recovery stays gentle (one invocation per pass) while
+                    # filtered records no longer cost a pass each.
+                    result = replay.run(spec, max_records=REPLAY_BATCH, max_invocations=1, timeout=10,
+                                        guard_parent=True, cancelled=cancelled,
+                                        allowed_origins=allowed_origins, path_prefixes=path_prefixes)
+                    busy = busy or result['completed_this_run'] > 0
                     replay_failures = 0
                     replay_error = None
                 except Exception as error:
@@ -127,15 +157,20 @@ def main():
                    'fresh_skipped': len(list(fresh.state.glob('fresh-failure-*.json'))), 'error': error}
             with mutex:
                 rows[name] = row
-            stop_reader.wait(0.25 if fresh_failures == 0 else min(4, 2 ** (fresh_failures - 1)))
+            if fresh_failures or not initialized:
+                stop_reader.wait(min(4, 2 ** (max(fresh_failures, 1) - 1)))
+            elif busy or 0 < replay_failures < 3:
+                stop_reader.wait(max(0.0, started + READER_MIN_SCAN_SECONDS - time.monotonic()))
+            else:
+                idle_wait(seen, started, stop_reader, cancelled)
 
-    def sync_readers(desired_components, reader_origins, fresh_readers, *, live_attach=False):
+    def sync_readers(desired_components, reader_origins, fresh_readers, reader_prefixes, *, live_attach=False):
         """Change only reader workers; never restart the controller, Hub or proxy."""
-        desired = {name: (spec, reader_origins.get(name), name in fresh_readers)
+        desired = {name: (spec, reader_origins.get(name), reader_prefixes.get(name), name in fresh_readers)
                    for name, spec in desired_components['readers'].items()}
         # Stop changed workers before starting replacements: no duplicate writes.
-        for name, (spec, origins, fresh, stop_reader, thread) in list(reader_jobs.items()):
-            if desired.get(name) == (spec, origins, fresh):
+        for name, (spec, origins, prefixes, fresh, stop_reader, thread) in list(reader_jobs.items()):
+            if desired.get(name) == (spec, origins, prefixes, fresh):
                 continue
             stop_reader.set()
             thread.join(timeout=4)
@@ -145,7 +180,7 @@ def main():
             with mutex:
                 rows.pop(name, None)
             log(f'reader {name} detached')
-        for name, (spec, origins, fresh) in desired.items():
+        for name, (spec, origins, prefixes, fresh) in desired.items():
             if name in reader_jobs:
                 continue
             # Newly attached readers are subscriptions to future events only.
@@ -156,11 +191,11 @@ def main():
                     Reader(profile, name, lane='fresh').begin_now(spec)
             stop_reader = threading.Event()
             thread = threading.Thread(target=reader_loop,
-                                      args=(name, spec, origins, fresh, stop_reader),
+                                      args=(name, spec, origins, prefixes, fresh, stop_reader),
                                       daemon=True)
             with mutex:
                 rows[name] = {'healthy': False, 'phase': 'starting', 'error': None}
-            reader_jobs[name] = (spec, origins, fresh, stop_reader, thread)
+            reader_jobs[name] = (spec, origins, prefixes, fresh, stop_reader, thread)
             thread.start()
             log(f'reader {name} attached')
 
@@ -182,6 +217,7 @@ def main():
         components = store.effective_components(profile.components)
         reader_origins = store.reader_origins()
         fresh_readers = store.fresh_readers()
+        reader_prefixes = store.reader_path_prefixes()
         hub = None
         service_processes = {}
         hub_pid = None
@@ -217,7 +253,12 @@ def main():
                 service_announced[name] = False
                 services[name] = {'healthy': False, 'phase': 'starting', 'port': spec['port'], 'error': None}
                 log(f'service {name} starting pid={process.pid} port={spec["port"]}')
-            sync_readers(components, reader_origins, fresh_readers)
+            try:
+                growth.start()
+            except WatchUnavailable as error:
+                log(f'stream growth watch unavailable ({error}); readers poll every '
+                    f'{READER_MIN_SCAN_SECONDS:g}s')
+            sync_readers(components, reader_origins, fresh_readers, reader_prefixes)
             hub_failures = 0
             refresh_retry_at = 0.0
             refresh_failures = 0
@@ -261,7 +302,7 @@ def main():
                         if unchanged(updated) != unchanged(components):
                             raise RuntimeError('Live refresh supports reader changes only')
                         sync_readers(updated, store.reader_origins(), store.fresh_readers(),
-                                     live_attach=True)
+                                     store.reader_path_prefixes(), live_attach=True)
                         components = updated
                         # The existing runtime snapshot and health identity must agree.
                         prepare(profile)
@@ -337,10 +378,11 @@ def main():
             log(str(error))
         finally:
             stopping.set()
-            for _spec, _origins, _fresh, stop_reader, _thread in reader_jobs.values():
+            for *_job, stop_reader, _thread in reader_jobs.values():
                 stop_reader.set()
-            for _spec, _origins, _fresh, _stop_reader, thread in reader_jobs.values():
+            for *_job, thread in reader_jobs.values():
                 thread.join(timeout=4)
+            growth.close()
             if hub is not None:
                 try:
                     os.killpg(hub.pid, signal.SIGKILL)

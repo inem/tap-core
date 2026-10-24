@@ -92,6 +92,25 @@ def record_origin(record):
     return f'{parts.scheme}://{parts.hostname}' + (f':{port}' if port is not None and port != default else '')
 
 
+def record_admitted(record, allowed_origins=None, path_prefixes=None):
+    """Whether a reader subscribed by origin and optional path prefixes takes a record.
+
+    ``path_prefixes`` maps an origin to a tuple of URL path prefixes; an
+    origin absent from it is taken whole. Both filters are core-side input
+    selection, not a claim about what the reader would have done with it.
+    """
+    origin = record_origin(record) if allowed_origins is not None or path_prefixes else None
+    if allowed_origins is not None and origin not in allowed_origins:
+        return False
+    prefixes = path_prefixes.get(origin) if path_prefixes else None
+    if prefixes is None:
+        return True
+    try:
+        return urlsplit(record['url']).path.startswith(tuple(prefixes))
+    except ValueError:
+        return False
+
+
 class Reader:
     def __init__(self, profile, name, *, lane='replay'):
         if not re.fullmatch(r'[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*', name) or len(name) > 100:
@@ -241,7 +260,7 @@ class Reader:
         return self.status()
 
     def run(self, spec, max_records=100, timeout=30, *, guard_parent=False, cancelled=None,
-            allowed_origins=None, max_invocations=None):
+            allowed_origins=None, path_prefixes=None, max_invocations=None):
         validate_definition(spec)
         if type(max_records) is not int or max_records < 1 or not 0 < timeout <= 300:
             raise ReaderError('Run requires positive max_records and timeout <= 300 seconds')
@@ -266,9 +285,11 @@ class Reader:
                             for entry in entries:
                                 if cancelled and cancelled():
                                     raise ReaderError('Reader stopped; cursor was not advanced')
-                                if allowed_origins is not None and record_origin(entry.record) not in allowed_origins:
-                                    self.store(state, cursor=entry.cursor, processed=state['processed'] + 1,
-                                               inflight=None, phase='ready', error=None)
+                                if not record_admitted(entry.record, allowed_origins, path_prefixes):
+                                    # Filtered input advances in memory only; the next
+                                    # checkpoint write (an invocation or the end of the
+                                    # run) persists it. Losing it re-filters, never skips.
+                                    state.update(cursor=entry.cursor, processed=state['processed'] + 1)
                                     completed += 1
                                     if completed == max_records:
                                         break
