@@ -138,6 +138,31 @@ class JournalTests(unittest.TestCase):
     def write(self, *records):
         self.stream.write_bytes(b''.join(map(encoded, records)))
 
+    def test_appends_do_not_reread_the_active_segments_first_record(self):
+        first = capture_record(body='x' * 200000)
+        self.write(first, capture_record())
+        tail = self.journal.tail()
+        list(self.journal.scan(tail))  # warm the identity cache
+        from tap_core import journal
+        first_line = encoded(first)
+        for value in ('a', 'b', 'c'):
+            with self.stream.open('ab') as handle:
+                handle.write(encoded(capture_record(body=json.dumps({'value': value}))))
+            with patch.object(journal, 'digest', wraps=journal.digest) as hashed:
+                entries = list(self.journal.scan(tail))
+            self.assertFalse(any(call.args == (first_line,) for call in hashed.call_args_list))
+            tail = entries[-1].cursor
+        self.assertEqual(len(entries), 1)
+
+    def test_rewritten_first_record_in_the_same_file_is_not_trusted_from_cache(self):
+        self.write(capture_record(body='{"v":"one"}'), capture_record())
+        tail = self.journal.tail()
+        list(self.journal.scan(tail))
+        with self.stream.open('r+b') as handle:  # same inode, different first record
+            handle.write(encoded(capture_record(body='{"v":"two"}'))[:40])
+        with self.assertRaises(JournalGap):
+            list(self.journal.scan(tail))
+
     def test_segment_hash_is_shared_between_reader_instances(self):
         first, second = capture_record(body='x' * 10000), capture_record()
         self.write(first, second)

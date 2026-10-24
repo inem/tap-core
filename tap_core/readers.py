@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 
 from .journal import Journal, JournalGap
 from .runtime import TapError, profile_lock
+from .routes import record_matches, record_origin  # noqa: F401  (record_origin re-exported)
 
 OUTPUT_LIMIT = 1024 * 1024
 
@@ -76,40 +77,13 @@ def fingerprint(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()).hexdigest()
 
 
-def record_origin(record):
-    """Return a captured URL's canonical HTTP origin, without site-specific routing."""
-    url = record.get('url')
-    if not isinstance(url, str):
-        return None
-    try:
-        parts = urlsplit(url)
-        if (parts.scheme not in ('http', 'https') or not parts.hostname
-                or parts.username is not None or parts.password is not None):
-            return None
-        port = parts.port
-    except ValueError:
-        return None
-    default = {'http': 80, 'https': 443}[parts.scheme]
-    return f'{parts.scheme}://{parts.hostname}' + (f':{port}' if port is not None and port != default else '')
-
-
 def record_admitted(record, allowed_origins=None, path_prefixes=None):
     """Whether a reader subscribed by origin and optional path prefixes takes a record.
 
-    ``path_prefixes`` maps an origin to a tuple of URL path prefixes; an
-    origin absent from it is taken whole. Both filters are core-side input
-    selection, not a claim about what the reader would have done with it.
+    Same matching as capture-side routing (routes.record_matches), so a reader
+    is notified for exactly the records it would process.
     """
-    origin = record_origin(record) if allowed_origins is not None or path_prefixes else None
-    if allowed_origins is not None and origin not in allowed_origins:
-        return False
-    prefixes = path_prefixes.get(origin) if path_prefixes else None
-    if prefixes is None:
-        return True
-    try:
-        return urlsplit(record['url']).path.startswith(tuple(prefixes))
-    except ValueError:
-        return False
+    return record_matches(record, allowed_origins, path_prefixes)
 
 
 class Reader:

@@ -1,4 +1,4 @@
-"""A running controller's readers sleep while the stream is idle and wake on growth."""
+"""Routed readers: woken by capture only for records inside their own filter."""
 import json
 import os
 from pathlib import Path
@@ -12,6 +12,7 @@ from tap_core.pack_store import PackStore, build_artifact
 from tap_core.runtime import Profile
 from test_bridge import config as bridge_config
 from test_records_journal import capture_record, encoded
+from tap_core.routes import RouteTable
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,15 +29,24 @@ def until(predicate, timeout=8):
     return bool(predicate())
 
 
-def record(path, body):
+def record(path, body, origin=ORIGIN):
     value = capture_record(body=body)
-    value['url'] = ORIGIN + path
-    return encoded(value)
+    value['url'] = origin + path
+    return value
 
 
-@unittest.skipUnless(sys.platform == 'darwin', 'stream growth uses kqueue')
+def append(root, *values, stream_name='stream.jsonl'):
+    """Append like the capture writer: each record first, then its notification."""
+    table = RouteTable(root / 'state')
+    for value in values:
+        with (root / 'data' / stream_name).open('ab') as handle:
+            handle.write(encoded(value))
+        table.notify(value)
+    table.close()
+
+
 class ReaderWakeTests(unittest.TestCase):
-    def test_idle_reader_does_not_poll_and_wakes_on_growth_and_rotation(self):
+    def test_reader_sleeps_through_irrelevant_records_and_wakes_for_its_own(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / 'pack-source'
@@ -70,7 +80,7 @@ class ReaderWakeTests(unittest.TestCase):
             self.assertEqual(store.reader_path_prefixes(), {PACK: ((ORIGIN, ('/api/',)),)})
             stream = root / 'data/stream.jsonl'
             stream.parent.mkdir(parents=True, exist_ok=True)
-            stream.write_bytes(record('/telemetry', 'noise') + record('/api/one', 'one'))
+            stream.write_bytes(encoded(record('/telemetry', 'noise')) + encoded(record('/api/one', 'one')))
             events = root / 'data/readers' / PACK / 'events.jsonl'
             checkpoint = root / 'state/readers' / PACK / 'checkpoint.json'
 
@@ -81,18 +91,22 @@ class ReaderWakeTests(unittest.TestCase):
                 [sys.executable, '-B', '-m', 'tap_core.service', str(root)],
                 cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             try:
+                # Startup catches up from the cursor without any notification.
                 self.assertTrue(until(lambda: delivered() == ['one']))
                 self.assertTrue(until(lambda: json.loads(checkpoint.read_text())['processed'] == 2))
-                time.sleep(0.5)
-                # Idle: the former loop rewrote the checkpoint every 0.25 s.
+                self.assertTrue(until(lambda: (root / 'state/routes/components.json').exists()))
+                time.sleep(3.0)  # past the one settle pass after attaching
                 before = checkpoint.stat().st_mtime_ns
+                # Records outside the filter (other origin, other path) never wake it.
+                append(root, record('/telemetry', 'noise'), record('/x', 'other', 'https://other.example'))
                 time.sleep(2.0)
                 self.assertEqual(checkpoint.stat().st_mtime_ns, before)
-                with stream.open('ab') as handle:
-                    handle.write(record('/telemetry', 'noise') + record('/api/two', 'two'))
+                started = time.monotonic()
+                append(root, record('/api/two', 'two'))
                 self.assertTrue(until(lambda: delivered() == ['one', 'two'], timeout=3))
+                self.assertLess(time.monotonic() - started, 1.5)  # no idle floor for routed readers
                 os.rename(stream, root / 'data/stream.jsonl.1')
-                stream.write_bytes(record('/api/three', 'three'))
+                append(root, record('/api/three', 'three'))
                 self.assertTrue(until(lambda: delivered() == ['one', 'two', 'three'], timeout=3))
             finally:
                 process.terminate()
