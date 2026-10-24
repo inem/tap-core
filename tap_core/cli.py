@@ -526,18 +526,14 @@ def main(argv=None):
                 key = pack_keys[args.pack_action]() if args.pack_action in pack_keys else None
                 # Reader/handler projection is refused before registry publish so a
                 # concurrent bridge refresh cannot observe a rejected plan.
+                reload_capture = False
                 with ExitStack() as locks:
-                    if args.pack_action == 'add':
-                        locks.enter_context(command_execution_lock(
-                            root,
-                            busy_message="A command from this profile is still running; "
-                                         "wait before changing packs"))
-                    elif args.pack_action != 'install':
+                    if args.pack_action in ('disable', 'uninstall'):
                         locks.enter_context(command_execution_lock(
                             root, key=key,
                             busy_message=f"A command from pack '{key}' is still running; "
                                          f"wait before changing it"))
-                    locks.enter_context(profile_lock(root))
+                    locks.enter_context(profile_lock(root, wait_seconds=OFF_CLEANUP_WAIT_SECONDS))
                     live = (
                         profile is not None
                         and (adapter.service_loaded(profile)
@@ -546,6 +542,8 @@ def main(argv=None):
                     # proxy for a reader pack registration.
                     before_readers = (store.effective_components(profile.components)['readers']
                                       if live and profile is not None and profile.components else None)
+                    before_capture = (store.effective_capture(profile.capture)
+                                      if live and profile is not None else None)
                     if args.pack_action == 'add':
                         from .pack_add import add
                         output = add(root, args.source, assume_yes=args.yes, live=live)
@@ -576,6 +574,9 @@ def main(argv=None):
                             if controller_pid is None:
                                 raise TapError('Pack state saved but component controller is absent; run tap on')
                             os.kill(controller_pid, __import__('signal').SIGUSR1)
+                    if before_capture is not None:
+                        after_capture = store.effective_capture(profile.capture)
+                        reload_capture = before_capture != after_capture
                     from .background import reconcile
                     try:
                         reconcile(root, adapter)
@@ -584,6 +585,9 @@ def main(argv=None):
                     if isinstance(output, dict) and 'applies' in output and live:
                         output = dict(output)
                         output['applies'] = LIVE_PACK_APPLIES
+                if reload_capture and adapter.service_pid(profile):
+                    from .capture_policy import reload as reload_capture_policy
+                    reload_capture_policy(profile, adapter)
             print(json.dumps(output, indent=2))
             return 0
         repair_install = args.command == "install" and (root / "profile.json").is_file()
@@ -631,7 +635,7 @@ def main(argv=None):
         if args.command == "dev":
             from .page_control import allow, execute, inspect, pages
             if args.dev_action == "allow":
-                with profile_lock(root):
+                with profile_lock(root, wait_seconds=OFF_CLEANUP_WAIT_SECONDS):
                     profile = Profile.load(root)
                     output = allow(profile, args.origin)
             elif args.dev_action == "pages":
@@ -653,7 +657,7 @@ def main(argv=None):
         if args.command == 'components':
             from .components import configuration, Job
             from .bridge import read_json
-            with profile_lock(root):
+            with profile_lock(root, wait_seconds=OFF_CLEANUP_WAIT_SECONDS):
                 if adapter.service_loaded(profile) or adapter.service_loaded(Job(profile)):
                     raise TapError('Stop this profile with off before changing component configuration')
                 value = read_json(args.config)
@@ -664,7 +668,7 @@ def main(argv=None):
         if args.command == 'bridge':
             from .bridge import configuration, read_json, decision
             if args.bridge_action == 'configure':
-                with profile_lock(root):
+                with profile_lock(root, wait_seconds=OFF_CLEANUP_WAIT_SECONDS):
                     from .components import Job
                     if adapter.service_loaded(profile) or (profile.components is not None and adapter.service_loaded(Job(profile))):
                         raise TapError('Stop this profile with off before changing bridge configuration')
@@ -687,9 +691,6 @@ def main(argv=None):
             elif args.reader_action == "replay":
                 output = reader.replay(definition(args.definition))
             elif args.reader_action == "rebind":
-                from .components import Job
-                if adapter.service_loaded(profile) or adapter.service_loaded(Job(profile)):
-                    raise TapError('Stop this profile with off before rebinding reader progress')
                 output = Reader(profile, args.name, lane=args.lane).rebind(
                     definition(args.definition), args.expect_hash)
             else:
@@ -724,7 +725,7 @@ def main(argv=None):
                 print(terminal_doctor(result, color=color))
             return 1 if not result["healthy"] else 0
         if args.command == "routing":
-            with profile_lock(root):
+            with profile_lock(root, wait_seconds=OFF_CLEANUP_WAIT_SECONDS):
                 # Reload under the lock: the profile read before locking may be
                 # stale if another command changed routing in between, which would
                 # otherwise decide the shared lock or the no-op on old state.
@@ -755,7 +756,7 @@ def main(argv=None):
         # Serialize system-routing commands across profiles as well as per-profile.
         with profile_lock(
                 root,
-                wait_seconds=OFF_CLEANUP_WAIT_SECONDS if network_recovered else 0,
+                wait_seconds=OFF_CLEANUP_WAIT_SECONDS,
                 busy_message=(
                     "Network restored; profile cleanup is still pending because a command "
                     "did not finish within the bounded drain"

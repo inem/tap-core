@@ -155,6 +155,7 @@ class Profile:
             read_scripts(effective_bridge)
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.root.chmod(0o700)
+        (self.root / ".metadata_never_index").touch(exist_ok=True)
         for directory in ("data", "state", "certificates", "logs"):
             path = self.root / directory
             if path.is_symlink():

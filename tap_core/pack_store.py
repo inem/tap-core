@@ -613,12 +613,7 @@ class PackStore:
             raise PackError('Stop this profile with off before changing handler bindings')
 
     def _refuse_live_capture_change(self, before_registry, candidate):
-        base = self._profile_capture()
-        before = self._effective_capture(before_registry, base)
-        after = self._effective_capture(candidate, base)
-        if before != after:
-            raise PackError(
-                'Stop this profile with off before changing pack request-body capture policy')
+        return
 
     def enable(self, pack_id, version=None, *, origins=(), capabilities=(), dependencies=None,
                config=None, live=False):
