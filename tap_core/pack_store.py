@@ -441,6 +441,7 @@ class PackStore:
             page_pack_origins.append({
                 "id": pack_id, "version": manifest["version"], "origins": origins,
                 "features": json.loads(json.dumps(manifest.get("features", []))),
+                "tools": json.loads(json.dumps(manifest.get("tools", []))),
             })
         for _pack_id, manifest in origin_packs:
             for origin in manifest["access"]["origins"]:

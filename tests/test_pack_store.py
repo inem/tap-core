@@ -138,7 +138,7 @@ class PackStoreTests(unittest.TestCase):
         self.assertEqual(effective_configuration(self.profile, bridge()), effective)
         self.assertEqual(effective["allow_origins"], ORIGINS)
         self.assertEqual(effective["page_pack_origins"], [
-            {"id": PACK_ID, "version": "0.1.0", "origins": ORIGINS, "features": []},
+            {"id": PACK_ID, "version": "0.1.0", "origins": ORIGINS, "features": [], "tools": []},
         ])
         self.assertEqual([Path(path).parent.parent.name for path in effective["page_scripts"]],
                          ["fixture.ui", "fixture.feature"])
@@ -162,7 +162,7 @@ class PackStoreTests(unittest.TestCase):
         effective = self.store.effective_bridge(bridge())
         self.assertEqual(effective_configuration(self.profile, bridge()), effective)
         self.assertEqual(effective["page_pack_origins"], [
-            {"id": PACK_ID, "version": "0.1.0", "origins": ORIGINS, "features": []},
+            {"id": PACK_ID, "version": "0.1.0", "origins": ORIGINS, "features": [], "tools": []},
         ])
 
     def test_pack_request_body_paths_are_origin_scoped_and_startup_only(self):
@@ -201,7 +201,7 @@ class PackStoreTests(unittest.TestCase):
         self.assertEqual(effective["allow_origins"], ["*"])
         self.assertTrue(all(origins == ["*"] for origins in effective["page_script_origins"]))
         self.assertEqual(effective["page_pack_origins"], [
-            {"id": "fixture.all-sites-page", "version": "0.1.0", "origins": ["*"], "features": []},
+            {"id": "fixture.all-sites-page", "version": "0.1.0", "origins": ["*"], "features": [], "tools": []},
         ])
         self.assertTrue(decision(effective, "https://arbitrary.example")["allowed"])
 

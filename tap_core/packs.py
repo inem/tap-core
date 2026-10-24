@@ -25,6 +25,9 @@ ROLES = {
     "command": (("process-argv-v1",), "command.execute"),
 }
 TYPES = {"string": str, "integer": int, "boolean": bool}
+TOOL_ANNOTATIONS = frozenset({
+    "readOnlyHint", "untrustedContentHint", "consequentialHint", "debugging",
+})
 
 
 class PackError(ValueError):
@@ -76,6 +79,44 @@ def validate_features(value):
                     "features[].folder: expected a canonical path under profile data")
 
 
+def validate_tools(value):
+    """Validate declarative WebMCP-shaped TAP tool descriptors.
+
+    These describe a pack's existing bridge binding. They do not grant access,
+    create an executable function, or register a native WebMCP tool.
+    """
+    require(type(value) is list and len(value) <= 32,
+            "tools: expected at most 32 tool declarations")
+    names = set()
+    for tool in value:
+        fields(tool, ("name", "description", "inputSchema"),
+               ("title", "annotations"), label="tools[]")
+        name = tool["name"]
+        require(type(name) is str and 1 <= len(name) <= 128 and name == name.strip()
+                and "\x00" not in name,
+                "tools[].name: expected a nonempty canonical tool name")
+        require(name not in names, "tools[].name: duplicate")
+        names.add(name)
+        if "title" in tool:
+            require(type(tool["title"]) is str and 1 <= len(tool["title"]) <= 256,
+                    "tools[].title: expected 1..256 characters")
+        require(type(tool["description"]) is str and 1 <= len(tool["description"]) <= 1024,
+                "tools[].description: expected 1..1024 characters")
+        schema = tool["inputSchema"]
+        require(type(schema) is dict and schema.get("type") == "object",
+                "tools[].inputSchema: expected an object JSON Schema")
+        try:
+            encoded = json.dumps(schema, separators=(",", ":"), ensure_ascii=False)
+        except (TypeError, ValueError) as error:
+            raise PackError("tools[].inputSchema: must be JSON-serializable") from error
+        require(len(encoded.encode("utf-8")) <= 8192,
+                "tools[].inputSchema: exceeds 8 KiB")
+        annotations = tool.get("annotations", {})
+        require(type(annotations) is dict and set(annotations) <= TOOL_ANNOTATIONS
+                and all(type(value) is bool for value in annotations.values()),
+                "tools[].annotations: expected WebMCP boolean hints")
+
+
 def exact_origin(value):
     """Canonical http(s) origin only; no wildcard, path, credentials or query."""
     try:
@@ -125,13 +166,14 @@ def validate_manifest(manifest, root, host_api=PACK_API):
     root = Path(root).resolve()
     fields(manifest, ("manifest_version", "id", "version", "requires", "files",
                       "entrypoints", "config", "access"),
-           optional=("resources", "features", "capture"))
+           optional=("resources", "features", "tools", "capture"))
     require(type(manifest["manifest_version"]) is int and manifest["manifest_version"] == 1,
             "manifest_version: supported version is 1")
     require(type(manifest["id"]) is str and ID.fullmatch(manifest["id"]), "id: invalid pack id")
     require(type(manifest["version"]) is str and VERSION.fullmatch(manifest["version"]),
             "version: expected release version MAJOR.MINOR.PATCH")
     validate_features(manifest.get("features", []))
+    validate_tools(manifest.get("tools", []))
     requires = manifest["requires"]
     fields(requires, ("pack_api", "dependencies"), label="requires")
     require(type(requires["pack_api"]) is int and requires["pack_api"] == host_api,
@@ -209,10 +251,10 @@ def validate_manifest(manifest, root, host_api=PACK_API):
                     require(type(schedule["timeout_seconds"]) is int and 1 <= schedule["timeout_seconds"] <= 3600,
                             "command.schedule timeout must be 1..3600 seconds")
                 path = declaration["path"]
-                require(type(path) is list and 1 <= len(path) <= 8
+                require(type(path) is list and bool(path)
                         and all(type(segment) is str and COMMAND_SEGMENT.fullmatch(segment)
                                 for segment in path),
-                        "entrypoints.command.commands[].path: expected 1-8 lowercase command words")
+                        "entrypoints.command.commands[].path: expected nonempty lowercase command words")
                 command_path = tuple(path)
                 require(command_path not in paths,
                         f"entrypoints.command.commands: duplicate path {' '.join(path)}")

@@ -243,9 +243,9 @@ Hub validates and reconstructs the envelope; a handler cannot override transport
 session/request correlation fields. Diagnostics belong on stderr. The most recent
 nonzero-exit diagnostic is retained in the handler's private `last-failure.json`.
 
-Bounds: 64 sockets, a three-second Hello deadline, 64 KiB WS messages, four
+Bounds: 64 sockets, a three-second Hello deadline, 5 MiB WS request/result messages, four
 concurrent requests per socket, eight active handlers globally, 1,024 request IDs
-per session, five seconds per handler, 256 KiB stdout and 64 KiB stderr per handler.
+per session, five seconds per handler, 5 MiB stdout and 64 KiB stderr per handler.
 The page's response deadline is 6.5 seconds. Oversized output, missing commands,
 nonzero exits, malformed JSON/results and protocol mismatch fail explicitly;
 none is converted to a successful empty result. Protocol violations close the
