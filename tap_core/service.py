@@ -64,9 +64,11 @@ def main():
         if fresh_enabled:
             return fresh_reader_loop(name, spec, allowed_origins, stop_reader, cancelled)
         while not cancelled():
+            completed = 0
             try:
-                reader.run(spec, max_records=1 if first else 50, timeout=45, guard_parent=True,
-                           cancelled=cancelled, allowed_origins=allowed_origins)
+                res = reader.run(spec, max_records=1 if first else 50, timeout=45, guard_parent=True,
+                                 cancelled=cancelled, allowed_origins=allowed_origins)
+                completed = res.get('completed_this_run', 0)
                 failures, first = 0, False
                 row = {'healthy': True, 'phase': 'waiting', 'progress': reader.load(), 'error': None}
             except Exception as error:
@@ -77,7 +79,7 @@ def main():
                 rows[name] = row
             if failures >= 3:
                 return  # Explicit off/on resumes; no infinite failed replay loop.
-            stop_reader.wait(min(4, 2 ** (failures - 1)) if failures else 0.25)
+            stop_reader.wait(min(4, 2 ** (failures - 1)) if failures else (0.25 if completed else 1.5))
 
     def fresh_reader_loop(name, spec, allowed_origins, stop_reader, cancelled):
         replay = Reader(profile, name)
@@ -86,6 +88,7 @@ def main():
         replay_failures = fresh_failures = 0
         replay_error = fresh_error = None
         while not cancelled():
+            completed = 0
             if not initialized:
                 try:
                     fresh.follow_tail(spec)
@@ -96,8 +99,9 @@ def main():
                     fresh_error = type(error).__name__ + ': ' + str(error)
             if initialized:
                 try:
-                    fresh.run(spec, max_records=500, max_invocations=5, timeout=45, guard_parent=True,
-                              cancelled=cancelled, allowed_origins=allowed_origins)
+                    res = fresh.run(spec, max_records=500, max_invocations=5, timeout=45, guard_parent=True,
+                                    cancelled=cancelled, allowed_origins=allowed_origins)
+                    completed += res.get('completed_this_run', 0)
                     fresh_failures = 0
                     if not any(fresh.state.glob('fresh-failure-*.json')):
                         fresh_error = None
@@ -112,9 +116,10 @@ def main():
                             fresh_error += '; recovery failed: ' + str(skip_error)
             if replay_failures < 3:
                 try:
-                    replay.run(spec, max_records=1, timeout=45,
-                               guard_parent=True, cancelled=cancelled,
-                               allowed_origins=allowed_origins)
+                    res = replay.run(spec, max_records=50, max_invocations=1, timeout=45,
+                                     guard_parent=True, cancelled=cancelled,
+                                     allowed_origins=allowed_origins)
+                    completed += res.get('completed_this_run', 0)
                     replay_failures = 0
                     replay_error = None
                 except Exception as error:
@@ -130,16 +135,19 @@ def main():
                 row['failures'] = failures_count
             with mutex:
                 rows[name] = row
-            stop_reader.wait(0.25 if fresh_failures == 0 else min(4, 2 ** (fresh_failures - 1)))
+            stop_reader.wait((0.25 if completed else 1.5) if fresh_failures == 0 else min(4, 2 ** (fresh_failures - 1)))
 
     def sync_readers(desired_components, reader_origins, fresh_readers, *, live_attach=False):
         """Change only reader workers; never restart the controller, Hub or proxy."""
         desired = {name: (spec, reader_origins.get(name), name in fresh_readers)
                    for name, spec in desired_components['readers'].items()}
+        replaced = set()
         # Stop changed workers before starting replacements: no duplicate writes.
         for name, (spec, origins, fresh, stop_reader, thread) in list(reader_jobs.items()):
             if desired.get(name) == (spec, origins, fresh):
                 continue
+            if name in desired:
+                replaced.add(name)
             stop_reader.set()
             thread.join(timeout=4)
             if thread.is_alive():
@@ -152,8 +160,8 @@ def main():
             if name in reader_jobs:
                 continue
             # Newly attached readers are subscriptions to future events only.
-            # Startup readers retain the existing persisted recovery behavior.
-            if live_attach:
+            # Startup readers and in-place live updates retain persisted progress.
+            if live_attach and name not in replaced:
                 Reader(profile, name).begin_now(spec)
                 if fresh:
                     Reader(profile, name, lane='fresh').begin_now(spec)
@@ -188,11 +196,13 @@ def main():
         hub = None
         service_processes = {}
         hub_pid = None
+        python_bin = sys.executable if components.get('python') == '/usr/bin/python3' else components.get('python', sys.executable)
         try:
             if needs_hub(components, profile.bridge):
-                command = [components['python'], '-B', str(ROOT / 'guardian.py'), str(os.getpid()),
+                command = [python_bin, '-B', str(ROOT / 'guardian.py'), str(os.getpid()),
                            components['bun'], str(ROOT / 'hub.mjs'), str(profile.root)]
-                hub = subprocess.Popen(command, start_new_session=True)
+                hub = subprocess.Popen(command, start_new_session=True,
+                                       env={**os.environ, 'TAP_PYTHON': python_bin})
                 deadline = time.monotonic() + 10
                 while not stopping.is_set() and hub.poll() is None:
                     try:
@@ -213,7 +223,7 @@ def main():
             service_deadline = {}
             service_announced = {}
             for name, spec in components.get('services', {}).items():
-                command = [components['python'], '-B', str(ROOT / 'guardian.py'), str(os.getpid()), *spec['command']]
+                command = [python_bin, '-B', str(ROOT / 'guardian.py'), str(os.getpid()), *spec['command']]
                 process = subprocess.Popen(command, start_new_session=True)
                 service_processes[name] = (process, spec['port'])
                 service_deadline[name] = time.monotonic() + startup_grace
@@ -239,7 +249,7 @@ def main():
                 except ProcessLookupError:
                     pass
                 spec = components['services'][name]
-                command = [components['python'], '-B', str(ROOT / 'guardian.py'),
+                command = [python_bin, '-B', str(ROOT / 'guardian.py'),
                            str(os.getpid()), *spec['command']]
                 service_processes[name] = (subprocess.Popen(command, start_new_session=True), port)
                 service_starts[name] = ([t for t in service_starts[name]

@@ -176,11 +176,11 @@ class SystemProxyRouting(ExplicitProxyRouting):
                 self.tighten_bypasses(before)
                 if self.bypasses_match(before):
                     return
-            raise TapError("Saved network state needs recovery; run off before enabling again")
-        before = self.os.network_state()
-        if any(state[kind]["enabled"] for state in before.values() for kind in ("http", "https")):
-            raise TapError("An existing system proxy is enabled; refusing to replace another installation")
-        atomic_json(profile.snapshot, before)  # persist before the first mutation
+        else:
+            before = self.os.network_state()
+            if any(state[kind]["enabled"] for state in before.values() for kind in ("http", "https")):
+                raise TapError("An existing system proxy is enabled; refusing to replace another installation")
+            atomic_json(profile.snapshot, before)  # persist before the first mutation
         expected = {"enabled": True, "server": "127.0.0.1", "port": profile.port}
         for service, state in before.items():
             self.os.set_proxy(service, False, expected)

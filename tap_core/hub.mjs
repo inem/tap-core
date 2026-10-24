@@ -1,5 +1,7 @@
 // Generic volatile request/result transport. No Actions/Needs/Flows or journal.
-import { readFileSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, existsSync, fstatSync, openSync, readFileSync, readSync, statSync, writeFileSync } from 'node:fs';
+import { appendFile, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { timingSafeEqual } from 'node:crypto';
@@ -10,17 +12,49 @@ let effective = null;
 try { effective = JSON.parse(readFileSync(join(root, 'state/effective-runtime.json'), 'utf8')); } catch {}
 const bridge = effective?.bridge ?? profile.bridge;
 const components = effective?.components ?? profile.components;
+const pythonBin = components.python === '/usr/bin/python3'
+  ? (process.env.TAP_PYTHON || (existsSync('/Applications/Xcode.app/Contents/Developer/usr/bin/python3')
+      ? '/Applications/Xcode.app/Contents/Developer/usr/bin/python3'
+      : components.python))
+  : components.python;
 const secret = readFileSync(join(root, 'state/component-token'), 'utf8').trim();
 const pageToken = readFileSync(join(root, 'state/bridge-token'), 'utf8').trim();
 const here = dirname(fileURLToPath(import.meta.url));
 const VERSION = 'tap.bridge/v1';
 const MAX_REQUEST_BYTES = 5 * 1024 * 1024;
 const MAX_RESULT_BYTES = 5 * 1024 * 1024;
+const MAX_SIGNALS_FILE_BYTES = 5 * 1024 * 1024;
 const peers = new Set();
 const pages = new Map(), commands = new Map();
 const liveCapture = new LiveCaptureFeed();
 const signalsFile = join(root, 'data/signals.jsonl');
 const signalSubscribers = new Set();
+const recentSignals = [];
+let signalsBytes = 0;
+try {
+  const st = statSync(signalsFile);
+  signalsBytes = st.size;
+  if (st.size > 0) {
+    const tailLen = Math.min(st.size, 65536);
+    const fd = openSync(signalsFile, 'r');
+    try {
+      const buf = Buffer.allocUnsafe(tailLen);
+      const bytesRead = readSync(fd, buf, 0, tailLen, st.size - tailLen);
+      let text = buf.subarray(0, bytesRead).toString('utf8');
+      if (st.size > tailLen) {
+        const nl = text.indexOf('\n');
+        text = nl >= 0 ? text.slice(nl + 1) : '';
+      }
+      for (const line of text.trim().split('\n')) {
+        if (!line) continue;
+        try { recentSignals.push(JSON.parse(line)); } catch {}
+      }
+      if (recentSignals.length > 50) recentSignals.splice(0, recentSignals.length - 50);
+    } finally {
+      closeSync(fd);
+    }
+  }
+} catch {}
 function recordSignal(ws, name, payload) {
   const record = {
     version: VERSION,
@@ -30,9 +64,17 @@ function recordSignal(ws, name, payload) {
     signal: name,
     payload: payload ?? null
   };
-  try {
-    writeFileSync(signalsFile, JSON.stringify(record) + '\n', { flag: 'a' });
-  } catch {}
+  recentSignals.push(record);
+  if (recentSignals.length > 50) recentSignals.shift();
+  const line = JSON.stringify(record) + '\n';
+  signalsBytes += Buffer.byteLength(line);
+  if (signalsBytes > MAX_SIGNALS_FILE_BYTES) {
+    const compact = recentSignals.map(r => JSON.stringify(r) + '\n').join('');
+    signalsBytes = Buffer.byteLength(compact);
+    writeFile(signalsFile, compact).catch(() => {});
+  } else {
+    appendFile(signalsFile, line).catch(() => {});
+  }
   for (const sub of signalSubscribers) {
     try { sub(record); } catch {}
   }
@@ -119,13 +161,7 @@ async function controller(request, url) {
         }
       });
     }
-    try {
-      const content = readFileSync(signalsFile, 'utf8');
-      const lines = content.trim().split('\n').filter(Boolean).slice(-50).map(l => JSON.parse(l));
-      return Response.json({version:VERSION, signals:lines});
-    } catch {
-      return Response.json({version:VERSION, signals:[]});
-    }
+    return Response.json({version:VERSION, signals:recentSignals});
   }
   const match = url.pathname.match(/^\/v1\/pages\/([^/]+)\/commands$/);
   if (request.method !== 'POST' || !match) return new Response('Not found', {status:404});
@@ -146,9 +182,14 @@ async function controller(request, url) {
   });
   return Response.json(outcome, {status:outcome.ok ? 200 : 400});
 }
+const bridgeStateFile = join(root, 'state/bridge.json');
+let bridgeStateMtimeMs = -1;
 function readPlanRevision() {
   try {
-    const value = JSON.parse(readFileSync(join(root, 'state/bridge.json'), 'utf8'))?.configuration;
+    const st = statSync(bridgeStateFile);
+    if (st.mtimeMs === bridgeStateMtimeMs && planRevision !== null) return planRevision;
+    bridgeStateMtimeMs = st.mtimeMs;
+    const value = JSON.parse(readFileSync(bridgeStateFile, 'utf8'))?.configuration;
     return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value) ? value : null;
   } catch { return null; }
 }
@@ -159,7 +200,7 @@ setInterval(() => {
     planRevision = current;
     for (const ws of peers) if (ws.data.page) send(ws, {kind: 'PlanChanged', revision: current});
   } else if (current) planRevision = current;
-}, 500);
+}, 2000);
 function reject(ws, code) { send(ws, {kind: 'Error', ...fail(code, code)}); ws.close(1008, code); }
 async function bounded(stream, limit) {
   let count = 0, chunks = [];
@@ -170,9 +211,70 @@ async function bounded(stream, limit) {
   }
   return Buffer.concat(chunks).toString('utf8');
 }
+const IMAGE_CHUNK = 128 * 1024;
+const MAX_IMAGE_SIZE = 16 * 1024 * 1024;
+function imageMime(header) {
+  if (header.length >= 8 && header[0] === 0x89 && header[1] === 0x50 && header[2] === 0x4e && header[3] === 0x47
+      && header[4] === 0x0d && header[5] === 0x0a && header[6] === 0x1a && header[7] === 0x0a) return 'image/png';
+  if (header.length >= 3 && header[0] === 0xff && header[1] === 0xd8 && header[2] === 0xff) return 'image/jpeg';
+  const ascii6 = header.subarray(0, 6).toString('ascii');
+  if (ascii6 === 'GIF87a' || ascii6 === 'GIF89a') return 'image/gif';
+  if (header.subarray(0, 4).toString('ascii') === 'RIFF' && header.subarray(8, 12).toString('ascii') === 'WEBP') return 'image/webp';
+  if (header.length >= 2 && header[0] === 0x42 && header[1] === 0x4d) return 'image/bmp';
+  if (header.length >= 4 && header[0] === 0x00 && header[1] === 0x00 && header[2] === 0x01 && header[3] === 0x00) return 'image/x-icon';
+  const ftyp = header.subarray(8, 12).toString('ascii');
+  if (header.subarray(4, 8).toString('ascii') === 'ftyp' && (ftyp === 'avif' || ftyp === 'avis')) return 'image/avif';
+  throw new Error('unsupported_image');
+}
+function readLocalImage(args) {
+  let fd = null;
+  try {
+    const value = args.path;
+    const offset = args.offset ?? 0;
+    if (typeof value !== 'string' || value.length <= 1 || value.length > 4096) throw new Error('invalid_path');
+    for (let i = 0; i < value.length; i++) if (value.charCodeAt(i) < 32) throw new Error('invalid_path');
+    if (!(value.startsWith('/') || value.startsWith('~/'))) throw new Error('invalid_path');
+    if (typeof offset !== 'number' || !Number.isInteger(offset) || offset < 0 || offset >= MAX_IMAGE_SIZE) throw new Error('invalid_offset');
+    const resolved = value.startsWith('~/') ? join(homedir(), value.slice(2)) : value;
+    fd = openSync(resolved, constants.O_RDONLY | constants.O_NONBLOCK);
+    const info = fstatSync(fd, {bigint: true});
+    if (!info.isFile()) throw new Error('not_file');
+    if (info.size <= 0n || info.size > BigInt(MAX_IMAGE_SIZE)) throw new Error('image_size');
+    const snapshot = `${info.dev}:${info.ino}:${info.size}:${info.mtimeNs}`;
+    if (offset && args.snapshot !== snapshot) throw new Error('image_changed');
+    const size = Number(info.size);
+    if (offset >= size) throw new Error('invalid_offset');
+    const header = Buffer.allocUnsafe(Math.min(32, size));
+    const headerRead = readSync(fd, header, 0, header.length, 0);
+    const mime = imageMime(header.subarray(0, headerRead));
+    const chunkLen = Math.min(IMAGE_CHUNK, size - offset);
+    const data = Buffer.allocUnsafe(chunkLen);
+    const dataRead = readSync(fd, data, 0, chunkLen, offset);
+    const after = fstatSync(fd, {bigint: true});
+    if (after.mtimeNs !== info.mtimeNs || after.size !== info.size) throw new Error('image_changed');
+    return {ok: true, value: {data: data.subarray(0, dataRead).toString('base64'), offset, size, mime, snapshot}};
+  } catch (error) {
+    if (error?.code === 'ENOENT') return fail('path_missing', 'Этот путь не существует на этом Mac');
+    if (['image_size', 'image_changed', 'unsupported_image', 'invalid_path', 'invalid_offset', 'not_file'].includes(error?.message)) {
+      const code = ['image_size', 'image_changed', 'unsupported_image'].includes(error.message) ? error.message : 'invalid_path';
+      const messages = {
+        image_size: 'Изображение превышает 16 МБ или пустое',
+        image_changed: 'Изображение изменилось во время загрузки',
+        unsupported_image: 'Этот формат изображения не поддерживается',
+      };
+      return fail(code, messages[code] || 'Нужен абсолютный локальный путь');
+    }
+    return fail('finder_failed', 'Не удалось показать путь в Finder');
+  } finally {
+    if (fd !== null) { try { closeSync(fd); } catch {} }
+  }
+}
 async function invoke(ws, request) {
   const binding = Object.hasOwn(components.handlers, request.handler) ? components.handlers[request.handler] : null;
   if (!binding || !originAllowed(ws.data.origin, binding.origins)) return fail('handler_denied', 'Handler is not granted to this origin');
+  if (request.handler === 'tap.local-paths' && request.args && typeof request.args === 'object' && request.args.action === 'read_image') {
+    return readLocalImage(request.args);
+  }
   if (active >= 8 || ws.data.pending >= 4) return fail('busy', 'Handler capacity exceeded');
   // The original five-second budget remains the default. A pack may explicitly
   // request a longer, still bounded wait for a user-initiated local operation.
@@ -186,7 +288,8 @@ async function invoke(ws, request) {
       session_id: ws.data.session, request_id: request.id, config: binding.config, profile_root: root,
       state_dir: join(root, 'state/handlers', request.handler), output_dir: join(root, 'data/handlers', request.handler),
       log_dir: join(root, 'logs/handlers', request.handler)};
-    child = Bun.spawn([components.python, '-B', join(here, 'guardian.py'), String(process.pid), ...binding.command], {
+    const cmd = binding.command.map((arg, i) => i === 0 && arg === '/usr/bin/python3' ? pythonBin : arg);
+    child = Bun.spawn([pythonBin, '-B', join(here, 'guardian.py'), String(process.pid), ...cmd], {
       cwd: root, detached: true, stdin: 'pipe', stdout: 'pipe', stderr: 'pipe',
       env: {...process.env, TAP_PACK_CONTEXT: encode(context)},
     });

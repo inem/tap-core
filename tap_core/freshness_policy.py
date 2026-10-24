@@ -164,6 +164,9 @@ def decide(state, ctx, policy=None):
         if age < policy["min_manual_interval"]:
             return verdict(SKIP, "fresh_enough", seen + policy["min_manual_interval"])
         return verdict(REFRESH, "manual")
+    expires = state.get("last_authoritative_until")
+    if name not in ("night", "away") and type(expires) in (int, float) and math.isfinite(expires) and now >= expires:
+        return verdict(REFRESH, "quota_expired")
     if age >= interval:
         return verdict(REFRESH, {"night": "safety_wake", "away": "safety_wake"}.get(name, "due_" + name))
     quiet = {"night": "night_quiet", "away": "away_quiet", "idle": "idle_decay"}.get(name)
@@ -226,7 +229,8 @@ def finished(state, outcome, now, policy=None, quota_observed_at=None, retry_aft
     if outcome in ("success", "unchanged"):
         if _believable(quota_observed_at, now, policy):
             out.update(failures=0, retry_at=None, last_authoritative_via="live-adapter",
-                       last_authoritative_at=max(quota_observed_at, state.get("last_authoritative_at") or 0))
+                       last_authoritative_at=max(quota_observed_at, state.get("last_authoritative_at") or 0),
+                       last_authoritative_until=None)
             return out
         # The call succeeded but no provider-stated quota came with it (or its
         # timestamp is impossible). That is not freshness: it is a failed look.
@@ -259,7 +263,7 @@ def _believable(observed_at, now, policy):
             and observed_at <= now + policy["max_clock_skew"])
 
 
-def observed_quota(state, quota_observed_at, via, now, policy=None):
+def observed_quota(state, quota_observed_at, via, now, policy=None, *, valid_until=None):
     """Provider-stated quota arrived without us asking (capture saw the client's
     own call, or the transitional scheduled producer wrote it)."""
     policy = policy or DEFAULT_POLICY
@@ -268,7 +272,8 @@ def observed_quota(state, quota_observed_at, via, now, policy=None):
     stored = state.get("last_authoritative_at")
     if _believable(stored, now, policy) and quota_observed_at <= stored:
         return state
-    return dict(state, last_authoritative_at=quota_observed_at, last_authoritative_via=via)
+    return dict(state, last_authoritative_at=quota_observed_at, last_authoritative_via=via,
+                last_authoritative_until=valid_until)
 
 
 def observed_activity(state, observed_at, now, policy=None):

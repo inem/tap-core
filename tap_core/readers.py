@@ -32,7 +32,8 @@ def private_dir(path):
     if path.is_symlink():
         raise ReaderError("Reader-owned directory must not be a symlink")
     path.mkdir(mode=0o700, parents=True, exist_ok=True)
-    path.chmod(0o700)
+    if (path.stat().st_mode & 0o777) != 0o700:
+        path.chmod(0o700)
 
 
 def save(path, value):
@@ -156,18 +157,11 @@ class Reader:
         return result
 
     def begin_now(self, spec):
-        """Activate a detached live reader at the current tail, without backfill.
-
-        Each new attachment starts a fresh generation. The prior checkpoint stays
-        untouched until this validated, locked transition completes; no reader
-        worker may be running under the same name when this is called.
-        """
+        """Activate a detached live reader at the current tail, without backfill."""
         validate_definition(spec)
         self.prepare()
-        with profile_lock(self.state, busy_message=f"Reader '{self.name}' is busy"):
+        with profile_lock(self.state, busy_message=f"Reader '{self.name}' is busy", wait_seconds=5):
             previous = self.load()
-            if previous is not None and previous['definition'] != fingerprint(spec):
-                raise ReaderError('Reader definition changed; progress was not rebound')
             state = self.initial(spec, previous['generation'] + 1 if previous else 1)
             state['cursor'] = Journal(self.profile.root / 'data').tail()
             self.store(state)
@@ -179,11 +173,12 @@ class Reader:
             raise ReaderError('Only a fresh lane can follow the tail')
         validate_definition(spec)
         self.prepare()
-        with profile_lock(self.state, busy_message=f"Reader '{self.name}' is busy"):
+        with profile_lock(self.state, busy_message=f"Reader '{self.name}' is busy", wait_seconds=5):
             previous = self.load()
             if previous is not None:
                 if previous['definition'] != fingerprint(spec):
-                    raise ReaderError('Fresh reader definition changed; progress was not reset')
+                    self.store(previous, definition=fingerprint(spec), generation=previous['generation'] + 1,
+                               inflight=None, phase='ready', error=None)
             else:
                 state = self.initial(spec)
                 state['cursor'] = Journal(self.profile.root / 'data').tail()
@@ -256,8 +251,10 @@ class Reader:
                     state['cursor'] = Journal(self.profile.root / 'data').tail()
                 self.store(state)
             if state['definition'] != fingerprint(spec):
-                raise ReaderError('Reader definition changed; use a new reader name or explicit replay')
+                self.store(state, definition=fingerprint(spec), generation=state['generation'] + 1,
+                           inflight=None, phase='ready', error=None)
             completed = invoked = 0
+            dirty = False
             try:
                 recovered_gap = False
                 while True:
@@ -265,10 +262,14 @@ class Reader:
                         with closing(Journal(self.profile.root / 'data').scan(after=state['cursor'])) as entries:
                             for entry in entries:
                                 if cancelled and cancelled():
+                                    if dirty:
+                                        self.store(state)
+                                        dirty = False
                                     raise ReaderError('Reader stopped; cursor was not advanced')
                                 if allowed_origins is not None and record_origin(entry.record) not in allowed_origins:
-                                    self.store(state, cursor=entry.cursor, processed=state['processed'] + 1,
-                                               inflight=None, phase='ready', error=None)
+                                    state.update(cursor=entry.cursor, processed=state['processed'] + 1,
+                                                 inflight=None, phase='ready', error=None, updated_at=time.time())
+                                    dirty = True
                                     completed += 1
                                     if completed == max_records:
                                         break
@@ -276,6 +277,7 @@ class Reader:
                                 delivery_id = hashlib.sha256(entry.cursor.encode()).hexdigest()
                                 invocation_id = fingerprint([self.name, state['generation'], delivery_id])
                                 self.store(state, phase='running', inflight=invocation_id, error=None)
+                                dirty = False
                                 self.execute(spec, entry.record, delivery_id, invocation_id, state['generation'], timeout, lock,
                                              guard_parent, cancelled)
                                 self.store(state, cursor=entry.cursor, processed=state['processed'] + 1,
@@ -292,6 +294,7 @@ class Reader:
                                                  'recovered_at': time.time()})
                             self.store(state, cursor=Journal(self.profile.root / 'data').tail(),
                                        inflight=None, phase='ready', error='JournalGap: ' + str(gap))
+                            dirty = False
                             break
                         # Retention has already made the old prefix unavailable.
                         # Preserve a receipt, drop only the unusable position and
@@ -308,8 +311,10 @@ class Reader:
                         })
                         self.store(state, cursor=None, inflight=None, phase='ready',
                                    error='JournalGap skipped: ' + str(gap))
+                        dirty = False
                         recovered_gap = True
-                self.store(state, phase='idle', error=None)
+                if dirty or completed or recovered_gap or state.get('phase') != 'idle' or state.get('error') is not None:
+                    self.store(state, phase='idle', error=None)
             except Exception as error:
                 # Keep the last acknowledged cursor, including after a timeout or
                 # a crash between output and checkpoint. An explicit run retries.
@@ -333,7 +338,9 @@ class Reader:
             with tempfile.TemporaryFile(dir=self.state) as source, selectors.DefaultSelector() as selector:
                 source.write((json.dumps(record, ensure_ascii=False) + '\n').encode())
                 source.seek(0)
-                command = spec['command']
+                command = list(spec['command'])
+                if command and command[0] == '/usr/bin/python3':
+                    command[0] = sys.executable
                 if guard_parent:
                     command = [sys.executable, '-B', str(Path(__file__).with_name('guardian.py')), str(os.getpid()), *command]
                 process = subprocess.Popen(command, stdin=source, stdout=subprocess.PIPE,

@@ -46,7 +46,7 @@ def consume(root, origin, path, headers, only_pack=None):
     if not candidates:
         return
 
-    with profile_lock(root):
+    with profile_lock(root, wait_seconds=5):
         current = store.load()
         for pack_id, version, names in candidates:
             record = current['packs'].get(pack_id)
