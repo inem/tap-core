@@ -136,10 +136,13 @@ def main():
         """Change only reader workers; never restart the controller, Hub or proxy."""
         desired = {name: (spec, reader_origins.get(name), name in fresh_readers)
                    for name, spec in desired_components['readers'].items()}
+        replaced = set()
         # Stop changed workers before starting replacements: no duplicate writes.
         for name, (spec, origins, fresh, stop_reader, thread) in list(reader_jobs.items()):
             if desired.get(name) == (spec, origins, fresh):
                 continue
+            if name in desired:
+                replaced.add(name)
             stop_reader.set()
             thread.join(timeout=4)
             if thread.is_alive():
@@ -152,8 +155,8 @@ def main():
             if name in reader_jobs:
                 continue
             # Newly attached readers are subscriptions to future events only.
-            # Startup readers retain the existing persisted recovery behavior.
-            if live_attach:
+            # Startup readers and in-place live updates retain persisted progress.
+            if live_attach and name not in replaced:
                 Reader(profile, name).begin_now(spec)
                 if fresh:
                     Reader(profile, name, lane='fresh').begin_now(spec)
@@ -188,11 +191,13 @@ def main():
         hub = None
         service_processes = {}
         hub_pid = None
+        python_bin = sys.executable if components.get('python') == '/usr/bin/python3' else components.get('python', sys.executable)
         try:
             if needs_hub(components, profile.bridge):
-                command = [components['python'], '-B', str(ROOT / 'guardian.py'), str(os.getpid()),
+                command = [python_bin, '-B', str(ROOT / 'guardian.py'), str(os.getpid()),
                            components['bun'], str(ROOT / 'hub.mjs'), str(profile.root)]
-                hub = subprocess.Popen(command, start_new_session=True)
+                hub = subprocess.Popen(command, start_new_session=True,
+                                       env={**os.environ, 'TAP_PYTHON': python_bin})
                 deadline = time.monotonic() + 10
                 while not stopping.is_set() and hub.poll() is None:
                     try:
@@ -213,7 +218,7 @@ def main():
             service_deadline = {}
             service_announced = {}
             for name, spec in components.get('services', {}).items():
-                command = [components['python'], '-B', str(ROOT / 'guardian.py'), str(os.getpid()), *spec['command']]
+                command = [python_bin, '-B', str(ROOT / 'guardian.py'), str(os.getpid()), *spec['command']]
                 process = subprocess.Popen(command, start_new_session=True)
                 service_processes[name] = (process, spec['port'])
                 service_deadline[name] = time.monotonic() + startup_grace
@@ -239,7 +244,7 @@ def main():
                 except ProcessLookupError:
                     pass
                 spec = components['services'][name]
-                command = [components['python'], '-B', str(ROOT / 'guardian.py'),
+                command = [python_bin, '-B', str(ROOT / 'guardian.py'),
                            str(os.getpid()), *spec['command']]
                 service_processes[name] = (subprocess.Popen(command, start_new_session=True), port)
                 service_starts[name] = ([t for t in service_starts[name]

@@ -517,9 +517,10 @@ class PackStore:
         return result
 
     def _refuse_incompatible_reader_progress(self, name, spec):
-        """Refuse pack activation that would strand an existing reader checkpoint."""
-        from .readers import fingerprint, validate_definition
+        """Validate existing reader checkpoint if present, adopting updated reader definitions automatically."""
+        from .readers import fingerprint, save, validate_definition
         validate_definition(spec)
+        target = fingerprint(spec)
         for lane, filename in (("replay", "checkpoint.json"), ("fresh", "fresh-checkpoint.json")):
             checkpoint = self.root / "state/readers" / name / filename
             if not checkpoint.exists() and not checkpoint.is_symlink():
@@ -529,15 +530,11 @@ class PackStore:
                 state = json.loads(checkpoint.read_text(encoding="utf-8"))
             except (OSError, UnicodeError, json.JSONDecodeError) as error:
                 raise PackError(f"reader {name!r} checkpoint unreadable: {error}") from error
-            if state.get("definition") == fingerprint(spec):
+            if state.get("definition") == target:
                 continue
-            raise PackError(
-                f"reader {name!r} has progress under another definition in {lane} lane; "
-                f"if the new reader is compatible, stop TAP and use `tap reader rebind {name}` "
-                f"with its new definition and the current checkpoint hash"
-                f"{' and --lane fresh' if lane == 'fresh' else ''}; otherwise replay "
-                f"or use a new reader name — {checkpoint} was not reset"
-            )
+            updated = dict(state, definition=target, generation=int(state.get("generation", 1)) + 1,
+                           inflight=None, phase="ready", error=None)
+            save(checkpoint, updated)
 
     def _effective_components(self, registry, base):
         """Project enabled pack reader/handler entrypoints onto managed components."""

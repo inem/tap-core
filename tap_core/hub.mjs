@@ -10,6 +10,11 @@ let effective = null;
 try { effective = JSON.parse(readFileSync(join(root, 'state/effective-runtime.json'), 'utf8')); } catch {}
 const bridge = effective?.bridge ?? profile.bridge;
 const components = effective?.components ?? profile.components;
+const pythonBin = components.python === '/usr/bin/python3'
+  ? (process.env.TAP_PYTHON || (existsSync('/Applications/Xcode.app/Contents/Developer/usr/bin/python3')
+      ? '/Applications/Xcode.app/Contents/Developer/usr/bin/python3'
+      : components.python))
+  : components.python;
 const secret = readFileSync(join(root, 'state/component-token'), 'utf8').trim();
 const pageToken = readFileSync(join(root, 'state/bridge-token'), 'utf8').trim();
 const here = dirname(fileURLToPath(import.meta.url));
@@ -186,7 +191,8 @@ async function invoke(ws, request) {
       session_id: ws.data.session, request_id: request.id, config: binding.config, profile_root: root,
       state_dir: join(root, 'state/handlers', request.handler), output_dir: join(root, 'data/handlers', request.handler),
       log_dir: join(root, 'logs/handlers', request.handler)};
-    child = Bun.spawn([components.python, '-B', join(here, 'guardian.py'), String(process.pid), ...binding.command], {
+    const cmd = binding.command.map((arg, i) => i === 0 && arg === '/usr/bin/python3' ? pythonBin : arg);
+    child = Bun.spawn([pythonBin, '-B', join(here, 'guardian.py'), String(process.pid), ...cmd], {
       cwd: root, detached: true, stdin: 'pipe', stdout: 'pipe', stderr: 'pipe',
       env: {...process.env, TAP_PACK_CONTEXT: encode(context)},
     });
