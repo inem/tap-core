@@ -39,7 +39,7 @@ class BackgroundTests(unittest.TestCase):
         self.store.install(artifact)
         self.store.enable('fixture.command', version, origins=['https://fixture.example'], capabilities=['command.execute', 'background.run'])
 
-    def install_usage_adapter(self, version='0.1.0'):
+    def install_usage_adapter(self, version='0.22.0'):
         source = self.root / 'usage-source'
         shutil.copytree(self.source, source)
         manifest = json.loads((source / 'pack.json').read_text())
@@ -59,7 +59,7 @@ class BackgroundTests(unittest.TestCase):
     def write_usage_freshness(self, observed_at, **per_provider):
         """The pack's sidecar after a live look: one key per provider it asked.
         Both admitted targets move together unless a provider is overridden."""
-        observed = {'codex': observed_at, 'antigravity': observed_at}
+        observed = {p: observed_at for p in ('codex', 'antigravity', 'cursor', 'factory', 'openrouter')}
         observed.update(per_provider)
         path = self.profile / 'data/readers/usage.meters/freshness.json'
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -106,93 +106,55 @@ class BackgroundTests(unittest.TestCase):
         self.store.disable('fixture.command')
         background.run_once(self.profile)
 
-    def test_freshness_coordinator_only_runs_when_a_target_is_due(self):
+    def test_freshness_coordinator_only_runs_selected_due_target(self):
         self.install_usage_adapter()
         now = 1_000_000.0
         self.write_usage_freshness(now)
         commands = background.tasks(self.profile)
-        with patch.object(background.time, 'time', return_value=now), \
-                patch.object(background, '_run_pack') as run:
+        with patch.object(background.time, 'time', return_value=now), patch.object(background, '_run_pack') as run:
             receipts = background.run_freshness_once(self.profile, commands)
-        self.assertEqual({r['target']['provider'] for r in receipts}, {'codex', 'antigravity'})
-        self.assertEqual({r['reason'] for r in receipts}, {'idle_decay'})
+        self.assertEqual(len(receipts), 5)
         run.assert_not_called()
-
         later = now + background.freshness_policy.DEFAULT_POLICY['idle_interval'] + 1
-        def collect(*_args, **_kwargs):
-            self.write_usage_freshness(later)
+        def collect(command, root, argv, **kwargs):
+            self.assertEqual(argv, ['antigravity', '--max-age', '19800'])
+            self.write_usage_freshness(now, antigravity=later)
             return 0
-
-        with patch.object(background.time, 'time', return_value=later), \
-                patch.object(background, '_run_pack', side_effect=collect) as run:
+        with patch.object(background.time, 'time', return_value=later), patch.object(background, '_run_pack', side_effect=collect) as run:
             receipts = background.run_freshness_once(self.profile, commands)
-        # Both targets are due; one wake approves one of them, the other is
-        # coalesced, and the single run serves both.
-        verdicts = {r['target']['provider']: (r['action'], r['reason']) for r in receipts}
-        self.assertEqual(sorted(verdicts.values()), [('refresh', 'due_idle'), ('skip', 'coalesced_wake')])
         run.assert_called_once()
+        self.assertEqual(sum(r['action'] == 'refresh' for r in receipts), 1)
         targets = self.freshness_targets()
-        self.assertEqual(set(targets), {'usage.meters:usage collect/codex',
-                                        'usage.meters:usage collect/antigravity'})
-        for target in targets.values():
-            self.assertEqual((target['last_authoritative_at'], target['failures'],
-                              target['last_authoritative_via']), (later, 0, 'live-adapter'))
-        executions = self.execution_receipts()
-        self.assertEqual(sorted((r['target']['provider'], r['ride_along'], r['outcome']) for r in executions),
-                         sorted([(p, verdicts[p][0] != 'refresh', 'unchanged') for p in verdicts]))
-        approved = next(r for r in receipts if r['action'] == 'refresh')
-        self.assertTrue(all(r['decision_id'] == approved['decision_id'] for r in executions))
+        for key, row in targets.items():
+            selected = row['provider'] == 'antigravity'
+            self.assertEqual(row['last_authoritative_at'], later if selected else now)
+            self.assertEqual(row['attempts'], [later] if selected else [])
+        self.assertEqual([(r['target']['provider'], r['ride_along']) for r in self.execution_receipts()], [('antigravity', False)])
 
-    def test_antigravity_activity_newer_than_its_snapshot_makes_it_active(self):
-        # Hub activity after the last look moves the Antigravity target to the
-        # 15-minute tier; Codex, with no activity source, stays idle and is not
-        # even due. The one run still refreshes both keys.
+    def test_antigravity_activity_does_not_pull_other_clients_along(self):
         self.install_usage_adapter()
         now = 1_000_000.0
-        looked = now - 1000
-        self.write_usage_freshness(looked)
-        self.write_usage_activity([
-            {'schema': 2, 'record': 'activity', 'client': 'gemini-cli', 'observed_at': now - 10},
-            'not json at all',
-            {'schema': 2, 'record': 'activity', 'client': 'antigravity-hub', 'observed_at': now - 300},
-            {'schema': 2, 'record': 'activity', 'client': 'antigravity-hub', 'observed_at': now - 900},
-        ])
-        commands = background.tasks(self.profile)
-
-        def collect(*_args, **_kwargs):
-            self.write_usage_freshness(now)
+        self.write_usage_freshness(now - 1000)
+        self.write_usage_activity([{'schema': 2, 'record': 'activity', 'client': 'antigravity-hub', 'observed_at': now - 10}])
+        def collect(command, root, argv, **kwargs):
+            self.assertEqual(argv[0], 'antigravity')
+            self.write_usage_freshness(now - 1000, antigravity=now)
             return 0
-
-        with patch.object(background.time, 'time', return_value=now), \
-                patch.object(background, '_run_pack', side_effect=collect) as run:
-            receipts = background.run_freshness_once(self.profile, commands)
+        with patch.object(background.time, 'time', return_value=now), patch.object(background, '_run_pack', side_effect=collect) as run:
+            receipts = background.run_freshness_once(self.profile, background.tasks(self.profile))
         by = {r['target']['provider']: r for r in receipts}
-        self.assertEqual((by['antigravity']['tier'], by['antigravity']['action'], by['antigravity']['reason']),
-                         ('active', 'refresh', 'due_active'))
-        self.assertEqual(by['antigravity']['inputs']['last_activity_at'], now - 300)
-        self.assertEqual((by['codex']['tier'], by['codex']['action'], by['codex']['reason']),
-                         ('idle', 'skip', 'idle_decay'))
-        self.assertIsNone(by['codex']['inputs']['last_activity_at'])
+        self.assertEqual((by['antigravity']['tier'], by['antigravity']['action']), ('active', 'refresh'))
         run.assert_called_once()
-        targets = self.freshness_targets()
-        self.assertEqual(targets['usage.meters:usage collect/antigravity']['last_authoritative_at'], now)
-        self.assertEqual(targets['usage.meters:usage collect/codex']['last_authoritative_at'], now)
-        self.assertEqual([(r['target']['provider'], r['ride_along']) for r in self.execution_receipts()],
-                         [('codex', True), ('antigravity', False)])
+        self.assertEqual(self.freshness_targets()['usage.meters:usage collect/codex']['last_authoritative_at'], now - 1000)
 
     def test_activity_the_snapshot_already_covers_keeps_antigravity_idle(self):
         self.install_usage_adapter()
         now = 1_000_000.0
         self.write_usage_freshness(now - 1000)
-        self.write_usage_activity([
-            {'schema': 2, 'record': 'activity', 'client': 'antigravity-hub', 'observed_at': now - 2000}])
-        commands = background.tasks(self.profile)
-        with patch.object(background.time, 'time', return_value=now), \
-                patch.object(background, '_run_pack') as run:
-            receipts = background.run_freshness_once(self.profile, commands)
-        by = {r['target']['provider']: r for r in receipts}
-        self.assertEqual((by['antigravity']['tier'], by['antigravity']['reason']), ('idle', 'idle_decay'))
-        self.assertEqual(by['antigravity']['inputs']['last_activity_at'], now - 2000)
+        self.write_usage_activity([{'schema': 2, 'record': 'activity', 'client': 'antigravity-hub', 'observed_at': now - 2000}])
+        with patch.object(background.time, 'time', return_value=now), patch.object(background, '_run_pack') as run:
+            receipts = background.run_freshness_once(self.profile, background.tasks(self.profile))
+        self.assertEqual({r['tier'] for r in receipts}, {'idle'})
         run.assert_not_called()
 
     def test_activity_tail_reads_the_newest_row_of_the_client_only(self):
@@ -240,7 +202,7 @@ class BackgroundTests(unittest.TestCase):
         self.assertEqual(targets['usage.meters:usage collect/codex']['attempts'], [now - 100])
         self.assertEqual(targets['usage.meters:usage collect/antigravity']['attempts'], [])
         self.assertEqual({r['target']['provider']: r['inputs']['budget_used'] for r in receipts},
-                         {'codex': 1, 'antigravity': 0})
+                         {'codex': 1, 'antigravity': 0, 'cursor': 0, 'factory': 0, 'openrouter': 0})
 
     def test_idle_refresh_has_slack_before_the_usage_view_turns_stale(self):
         # client-usage shows "seen ... ago" at six hours.  The coordinator
@@ -254,60 +216,120 @@ class BackgroundTests(unittest.TestCase):
         )
         self.assertLess(latest_possible_refresh, presentation_stale_after)
 
-    def test_freshness_coordinator_backs_off_only_the_target_that_asked(self):
-        # No sidecar at all: both targets are due, one is approved, the run
-        # reports no quota. The approved target backs off; the neighbour it was
-        # meant to serve is recorded as a failed ride-along but keeps its budget.
+    def test_failure_backs_off_only_selected_client(self):
         self.install_usage_adapter()
         now = 1_000_000.0
-        commands = background.tasks(self.profile)
-        with patch.object(background.time, 'time', return_value=now), \
-                patch.object(background, '_run_pack', return_value=0) as run:
-            receipts = background.run_freshness_once(self.profile, commands)
-        run.assert_called_once()
-        approved = next(r for r in receipts if r['action'] == 'refresh')
-        other = next(r for r in receipts if r['action'] != 'refresh')
-        self.assertEqual((approved['reason'], other['reason']), ('due_idle', 'coalesced_wake'))
-        targets = self.freshness_targets()
-        asked = targets['usage.meters:usage collect/' + approved['target']['provider']]
-        neighbour = targets['usage.meters:usage collect/' + other['target']['provider']]
-        self.assertEqual((asked['failures'], asked['last_error']), (1, 'error'))
-        self.assertEqual(asked['retry_at'], now + background.freshness_policy.DEFAULT_POLICY['backoff']['base'])
-        self.assertEqual((neighbour['failures'], neighbour['retry_at'], neighbour['attempts']), (0, None, []))
-        self.assertEqual(sorted((r['ride_along'], r['outcome']) for r in self.execution_receipts()),
-                         [(False, 'error'), (True, 'error')])
+        with patch.object(background.time, 'time', return_value=now), patch.object(background, '_run_pack', return_value=0):
+            receipts = background.run_freshness_once(self.profile, background.tasks(self.profile))
+        selected = next(r['target']['provider'] for r in receipts if r['action'] == 'refresh')
+        for target in self.freshness_targets().values():
+            self.assertEqual(target['failures'], 1 if target['provider'] == selected else 0)
+            self.assertEqual(target['attempts'], [now] if target['provider'] == selected else [])
+        self.assertEqual(len(self.execution_receipts()), 1)
 
-    def test_ride_along_success_clears_the_neighbours_backoff(self):
-        # Antigravity is backing off after a failed look of its own; Codex's
-        # approved run moves the Antigravity key too. That is a successful look
-        # for Antigravity: streak cleared, snapshot time advanced, no attempt spent.
+    def test_another_clients_success_does_not_clear_backoff(self):
         self.install_usage_adapter()
         now = 1_000_000.0
-        policy = background.freshness_policy.DEFAULT_POLICY
-        self.write_usage_freshness(now - policy['idle_interval'] - 1, antigravity=now - 60)
+        self.write_usage_freshness(now, codex=now - 20000)
         state = background.read_state(self.profile)
         stuck = background.freshness_policy.new_state('antigravity', adapter='usage.meters:usage collect')
         stuck.update(failures=3, retry_at=now + 3600, last_error='timeout')
-        state['usage_freshness'] = {'version': 1, 'next_wake_at': 0,
-                                    'targets': {'usage.meters:usage collect/antigravity': stuck}}
+        state['usage_freshness'] = {'version': 1, 'next_wake_at': 0, 'targets': {'usage.meters:usage collect/antigravity': stuck}}
         background.atomic_json(self.profile / 'state/background.json', state)
-
-        def collect(*_args, **_kwargs):
+        def collect(command, root, argv, **kwargs):
+            self.assertEqual(argv[0], 'codex')
             self.write_usage_freshness(now)
             return 0
+        with patch.object(background.time, 'time', return_value=now), patch.object(background, '_run_pack', side_effect=collect):
+            background.run_freshness_once(self.profile, background.tasks(self.profile))
+        anti = self.freshness_targets()['usage.meters:usage collect/antigravity']
+        self.assertEqual((anti['failures'], anti['retry_at'], anti['attempts']), (3, now + 3600, []))
 
-        with patch.object(background.time, 'time', return_value=now), \
-                patch.object(background, '_run_pack', side_effect=collect) as run:
+    def write_passive_quota(self, client, ts, until=None, account=None):
+        path = self.profile / 'data/readers/usage.meters/capture-freshness.json'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            data = json.loads(path.read_text())
+        except FileNotFoundError:
+            data = {'schema': 'tap.usage-passive-quota/v1', 'clients': {}}
+        data['clients'][client] = {account or '': {'account': account, 'observed_at': ts, 'valid_until': until}}
+        path.write_text(json.dumps(data))
+
+    def test_fresh_capture_prevents_network_for_each_client(self):
+        self.install_usage_adapter()
+        now = 1_000_000.0
+        self.write_usage_freshness(now - 30000)
+        for client in ('codex', 'antigravity', 'cursor', 'factory', 'openrouter'):
+            self.write_passive_quota(client, now - 10)
+        with patch.object(background.time, 'time', return_value=now), patch.object(background, '_run_pack') as run:
             receipts = background.run_freshness_once(self.profile, background.tasks(self.profile))
-        by = {r['target']['provider']: r for r in receipts}
-        self.assertEqual((by['codex']['action'], by['antigravity']['reason']), ('refresh', 'backoff'))
+        run.assert_not_called()
+        self.assertTrue(all(r['action'] == 'skip' for r in receipts))
+        self.assertTrue(all(t['last_authoritative_via'] == 'passive-capture' for t in self.freshness_targets().values()))
+        self.assertTrue(all(not t['attempts'] for t in self.freshness_targets().values()))
+
+    def test_capture_expiry_remains_due_across_wakes(self):
+        self.install_usage_adapter()
+        now = 1_000_000.0
+        self.write_usage_freshness(now - 30000)
+        for client in ('codex', 'antigravity', 'cursor', 'factory', 'openrouter'):
+            self.write_passive_quota(client, now - 10, now + 120)
+        with patch.object(background.time, 'time', return_value=now), patch.object(background, '_run_pack') as run:
+            background.run_freshness_once(self.profile, background.tasks(self.profile))
+        run.assert_not_called()
+        with patch.object(background.time, 'time', return_value=now + 121), patch.object(background, '_run_pack', return_value=0) as run:
+            receipts = background.run_freshness_once(self.profile, background.tasks(self.profile))
         run.assert_called_once()
-        targets = self.freshness_targets()
-        anti = targets['usage.meters:usage collect/antigravity']
-        self.assertEqual((anti['failures'], anti['retry_at'], anti['last_error'], anti['attempts']),
-                         (0, None, None, []))
-        self.assertEqual((anti['last_authoritative_at'], anti['last_authoritative_via']), (now, 'live-adapter'))
-        self.assertEqual(targets['usage.meters:usage collect/codex']['attempts'], [now])
+        selected = next(r for r in receipts if r['action'] == 'refresh')
+        self.assertEqual(selected['reason'], 'quota_expired')
+
+    def test_capture_arriving_during_dispatch_settles_as_passive(self):
+        self.install_usage_adapter()
+        now = 1_000_000.0
+        self.write_usage_freshness(now, cursor=now - 30000)
+        def collect(command, root, argv, **kwargs):
+            self.assertEqual(argv[0], 'cursor')
+            # The pack's own pre-request check returns without contacting API.
+            self.write_passive_quota('cursor', now)
+            return 0
+        with patch.object(background.time, 'time', return_value=now), patch.object(background, '_run_pack', side_effect=collect):
+            background.run_freshness_once(self.profile, background.tasks(self.profile))
+        row = self.freshness_targets()['usage.meters:usage collect/cursor']
+        self.assertEqual((row['failures'], row['last_authoritative_via']), (0, 'passive-capture'))
+        self.assertEqual(self.execution_receipts()[0]['outcome'], 'passive_fresh')
+
+    def test_upgrade_does_not_wait_for_old_batch_deadline(self):
+        self.install_usage_adapter()
+        now = 1_000_000.0
+        self.write_usage_freshness(now)
+        state = background.read_state(self.profile)
+        state['usage_freshness'] = {'version': 1, 'next_wake_at': now + 900, 'targets': {}}
+        background.atomic_json(self.profile / 'state/background.json', state)
+        with patch.object(background.time, 'time', return_value=now), patch.object(background, '_run_pack') as run:
+            receipts = background.run_freshness_once(self.profile, background.tasks(self.profile))
+        self.assertEqual(len(receipts), 5)
+        run.assert_not_called()
+        account = background.read_state(self.profile)['usage_freshness']
+        self.assertEqual(account['next_wake_at'], now + 60)
+        self.assertEqual(account['selector_version'], 1)
+
+    def test_legacy_pack_is_never_called_with_ignored_selector(self):
+        self.install_usage_adapter(version='0.21.0')
+        with patch.object(background, '_run_pack') as run:
+            background.run_freshness_once(self.profile, background.tasks(self.profile))
+            background.run_once(self.profile)
+        run.assert_not_called()
+
+    def test_bad_future_expired_or_wrong_account_capture_is_ignored(self):
+        spec = background.FRESHNESS_ADAPTERS[('usage.meters', ('usage', 'collect'))]['targets'][0]
+        now = 1_000_000.0
+        for ts, until in ((float('nan'), None), (now + 1000, None), (now, now - 1)):
+            self.write_passive_quota('codex', ts, until)
+            self.assertIsNone(background._passive_at(self.profile, spec, now))
+        self.write_passive_quota('codex', now, account='other')
+        live = self.profile / 'data/readers/usage.meters/freshness.json'
+        live.write_text(json.dumps({'version': 1, 'observed_at': {}, 'accounts': {'codex': 'current'}}))
+        self.assertIsNone(background._passive_at(self.profile, spec, now))
 
     def test_background_does_not_also_run_the_legacy_usage_interval(self):
         self.install_usage_adapter()
