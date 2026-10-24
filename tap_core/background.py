@@ -297,6 +297,17 @@ def _start_scheduled(root, key, expected_fingerprint, provider_id):
                    'fingerprint': fingerprint, 'run': run_id,
                    'started_at': now, 'phase': 'running',
                    'next_at': now + schedule['interval_seconds']}
+            receipt_dir = root / 'state/background-runs' / run_id
+            receipt_dir.mkdir(mode=0o700, parents=True)
+            row['receipt_dir'] = str(receipt_dir)
+            atomic_json(receipt_dir / 'started.json', {
+                'schema': 'tap.background-run/v1', **row, 'command': list(command.path),
+                'trigger': {'kind': 'schedule', 'due_at': previous.get('next_at')
+                            if previous.get('fingerprint') == fingerprint else None,
+                            'schedule': schedule},
+                'implementation': {'path': str(command.root),
+                                   'manifest_sha256': hashlib.sha256((command.root / 'pack.json').read_bytes()).hexdigest()},
+            })
             state['jobs'][key] = row
             atomic_json(root / 'state/background.json', state)
         job = dict(key=key, command=command, schedule=schedule, row=row,
@@ -310,7 +321,8 @@ def _start_scheduled(root, key, expected_fingerprint, provider_id):
             log = resources.enter_context(logpath.open('ab'))
             os.chmod(logpath, 0o600)
             job['process'] = _start_pack(command, root, [], lease_fd=lease.fileno(),
-                timeout=schedule['timeout_seconds'], log=log, extra_fds=(scheduled_lease.fileno(),))
+                timeout=schedule['timeout_seconds'], log=log, extra_fds=(scheduled_lease.fileno(),),
+                execution={'id': run_id, 'kind': 'schedule', 'receipt_dir': str(receipt_dir)})
             job['deadline'] = time.monotonic() + schedule['timeout_seconds']
         except (TapError, OSError):
             job['code'] = 125
@@ -357,6 +369,9 @@ def _finish_scheduled(root, job, code):
         row.update(finished_at=now, exit_code=code,
                    phase='unknown' if code in (124, 130) else 'ok' if code == 0 else 'failed',
                    next_at=now + job['schedule']['interval_seconds'])
+        atomic_json(Path(row['receipt_dir']) / 'finished.json', {
+            'schema': 'tap.background-run/v1', **row, 'command': list(job['command'].path),
+        })
         state['jobs'][job['key']] = row
         atomic_json(root / 'state/background.json', state)
     command = job['command']
