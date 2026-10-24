@@ -13,8 +13,28 @@ const secret = readFileSync(join(root, 'state/component-token'), 'utf8').trim();
 const pageToken = readFileSync(join(root, 'state/bridge-token'), 'utf8').trim();
 const here = dirname(fileURLToPath(import.meta.url));
 const VERSION = 'tap.bridge/v1';
+const MAX_REQUEST_BYTES = 5 * 1024 * 1024;
+const MAX_RESULT_BYTES = 5 * 1024 * 1024;
 const peers = new Set();
 const pages = new Map(), commands = new Map();
+const signalsFile = join(root, 'data/signals.jsonl');
+const signalSubscribers = new Set();
+function recordSignal(ws, name, payload) {
+  const record = {
+    version: VERSION,
+    ts: Date.now() / 1000,
+    page: ws.data.page,
+    origin: ws.data.origin,
+    signal: name,
+    payload: payload ?? null
+  };
+  try {
+    writeFileSync(signalsFile, JSON.stringify(record) + '\n', { flag: 'a' });
+  } catch {}
+  for (const sub of signalSubscribers) {
+    try { sub(record); } catch {}
+  }
+}
 let active = 0;
 let planRevision = null;
 const equal = (a, b) => typeof a === 'string' && Buffer.byteLength(a) === Buffer.byteLength(b) && timingSafeEqual(Buffer.from(a), Buffer.from(b));
@@ -61,6 +81,36 @@ async function controller(request, url) {
   if (!controllerAllowed(request)) return new Response('Denied', {status:403});
   if (request.method === 'GET' && url.pathname === '/v1/pages')
     return Response.json({version:VERSION, pages:[...pages.values()].map(publicPage)});
+  if (request.method === 'GET' && url.pathname === '/v1/signals') {
+    if (request.headers.get('accept') === 'text/event-stream') {
+      let sub;
+      const stream = new ReadableStream({
+        start(ctrl) {
+          sub = (record) => {
+            try { ctrl.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(record)}\n\n`)); } catch {}
+          };
+          signalSubscribers.add(sub);
+        },
+        cancel() {
+          if (sub) signalSubscribers.delete(sub);
+        }
+      });
+      return new Response(stream, {
+        headers: {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive'
+        }
+      });
+    }
+    try {
+      const content = readFileSync(signalsFile, 'utf8');
+      const lines = content.trim().split('\n').filter(Boolean).slice(-50).map(l => JSON.parse(l));
+      return Response.json({version:VERSION, signals:lines});
+    } catch {
+      return Response.json({version:VERSION, signals:[]});
+    }
+  }
   const match = url.pathname.match(/^\/v1\/pages\/([^/]+)\/commands$/);
   if (request.method !== 'POST' || !match) return new Response('Not found', {status:404});
   const ws = pages.get(decodeURIComponent(match[1]));
@@ -68,7 +118,7 @@ async function controller(request, url) {
   if (commands.size >= 8 || [...commands.values()].filter(command => command.ws === ws).length >= 4)
     return Response.json({ok:false,error:{code:'busy'}},{status:503});
   let body;
-  try { const text = await request.text(); if (Buffer.byteLength(text) > 65536) throw new Error('input_limit'); body = JSON.parse(text); }
+  try { const text = await request.text(); if (Buffer.byteLength(text) > MAX_REQUEST_BYTES) throw new Error('input_limit'); body = JSON.parse(text); }
   catch (cause) { return Response.json({ok:false,error:{code:cause.message === 'input_limit' ? 'input_limit' : 'invalid_json'}},{status:400}); }
   if (!body || typeof body.operation !== 'string' || !/^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)+$/.test(body.operation) || !Object.hasOwn(body,'args'))
     return Response.json({ok:false,error:{code:'invalid_command'}},{status:400});
@@ -128,7 +178,7 @@ async function invoke(ws, request) {
     child.stdin.write(encode({version: 1, request_id: request.id, args: request.args}) + '\n');
     child.stdin.end();
     const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('handler_timeout')), timeoutMs); });
-    const [output, diagnostic, code] = await Promise.race([Promise.all([bounded(child.stdout, 262144), bounded(child.stderr, 65536), child.exited]), timeout]);
+    const [output, diagnostic, code] = await Promise.race([Promise.all([bounded(child.stdout, MAX_RESULT_BYTES), bounded(child.stderr, 65536), child.exited]), timeout]);
     let result;
     try { result = JSON.parse(output); } catch {}
     const typedFailure = handlerFailure(result);
@@ -166,7 +216,9 @@ const server = Bun.serve({
     return new Response('Expected WebSocket', {status: 400});
   },
   websocket: {
-    maxPayloadLength: 65536, idleTimeout: 30,
+    // Page requests, command results and handler results share a 5 MiB cap.
+    // The socket must accept the full transport envelope in either direction.
+    maxPayloadLength: MAX_RESULT_BYTES, idleTimeout: 30,
     open(ws) { peers.add(ws); ws.data.timer = setTimeout(() => reject(ws, 'hello_timeout'), 3000); },
     async message(ws, raw) {
       if (typeof raw !== 'string') return reject(ws, 'text_required');
@@ -190,8 +242,13 @@ const server = Bun.serve({
         command.resolve(value.ok ? {ok:true,value:value.value ?? null} : {ok:false,error:value.error || {code:'operation_failed'}});
         return;
       }
+      if (value.kind === 'Signal' && value.session === ws.data.session && typeof value.name === 'string') {
+        recordSignal(ws, value.name, value.payload);
+        return;
+      }
       if (value.kind !== 'Request' || value.session !== ws.data.session || typeof value.id !== 'string' || !/^[a-f0-9-]{36}$/.test(value.id)
           || typeof value.handler !== 'string' || !Object.hasOwn(value, 'args')) return reject(ws, 'invalid_request');
+      if (Buffer.byteLength(raw) > MAX_REQUEST_BYTES) return reject(ws, 'input_limit');
       if (ws.data.seen.has(value.id) || ws.data.seen.size >= 1024) return reject(ws, 'duplicate_or_limit');
       ws.data.seen.add(value.id);
       const result = await invoke(ws, value);

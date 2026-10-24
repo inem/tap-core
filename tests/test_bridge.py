@@ -280,9 +280,10 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(bridge.page_plan('https://example.test')['packs'],
                          [{'id': 'fixture.first', 'version': '1.2.3',
                            'features': [{'id': 'copy', 'label': 'Copy', 'value': 'One click',
-                                         'folder': 'data/readers/fixture.first'}]}])
+                                         'folder': 'data/readers/fixture.first'}],
+                           'tools': []}])
         self.assertEqual(bridge.page_plan('https://third.test')['packs'],
-                         [{'id': 'fixture.second', 'version': '2.0.0', 'features': []}])
+                         [{'id': 'fixture.second', 'version': '2.0.0', 'features': [], 'tools': []}])
 
     def test_injected_bootstrap_carries_applied_plan_and_ws_mode(self):
         self.bridge.ws_origins = set()

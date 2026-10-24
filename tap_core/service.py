@@ -65,7 +65,7 @@ def main():
             return fresh_reader_loop(name, spec, allowed_origins, stop_reader, cancelled)
         while not cancelled():
             try:
-                reader.run(spec, max_records=1 if first else 50, timeout=10, guard_parent=True,
+                reader.run(spec, max_records=1 if first else 50, timeout=45, guard_parent=True,
                            cancelled=cancelled, allowed_origins=allowed_origins)
                 failures, first = 0, False
                 row = {'healthy': True, 'phase': 'waiting', 'progress': reader.load(), 'error': None}
@@ -96,7 +96,7 @@ def main():
                     fresh_error = type(error).__name__ + ': ' + str(error)
             if initialized:
                 try:
-                    fresh.run(spec, max_records=500, max_invocations=5, timeout=10, guard_parent=True,
+                    fresh.run(spec, max_records=500, max_invocations=5, timeout=45, guard_parent=True,
                               cancelled=cancelled, allowed_origins=allowed_origins)
                     fresh_failures = 0
                     if not any(fresh.state.glob('fresh-failure-*.json')):
@@ -112,7 +112,7 @@ def main():
                             fresh_error += '; recovery failed: ' + str(skip_error)
             if replay_failures < 3:
                 try:
-                    replay.run(spec, max_records=1, timeout=10,
+                    replay.run(spec, max_records=1, timeout=45,
                                guard_parent=True, cancelled=cancelled,
                                allowed_origins=allowed_origins)
                     replay_failures = 0
@@ -121,10 +121,13 @@ def main():
                     replay_failures += 1
                     replay_error = type(error).__name__ + ': ' + str(error)
             error = fresh_error or replay_error
+            failures_count = fresh_failures or replay_failures
             row = {'healthy': error is None, 'phase': 'waiting' if error is None else
                    ('failed' if replay_failures >= 3 else 'backoff'),
                    'progress': replay.load(), 'fresh_progress': fresh.load(),
                    'fresh_skipped': len(list(fresh.state.glob('fresh-failure-*.json'))), 'error': error}
+            if error is not None:
+                row['failures'] = failures_count
             with mutex:
                 rows[name] = row
             stop_reader.wait(0.25 if fresh_failures == 0 else min(4, 2 ** (fresh_failures - 1)))

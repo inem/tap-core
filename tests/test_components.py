@@ -240,7 +240,7 @@ class ComponentTests(unittest.TestCase):
             handlers[name] = {'command':fixture, 'config':value, 'origins':['https://example.test']}
         for name, source in [('invalid','print("not JSON")'),
                              ('failed','import json; print(json.dumps({"ok":False,"error":{"code":"runtime_timeout","message":"Local runtime exceeded its time budget","details":{"phase":"base proposal","timeout_ms":60000,"secret":"must not reach page"}}})); raise SystemExit(2)'),
-                             ('oversize','print("x"*300000)')]:
+                             ('oversize','print("x"*(5*1024*1024+1))')]:
             handlers[name] = {'command':[sys.executable,'-c',source], 'config':{}, 'origins':['https://example.test']}
         handlers['missing'] = {'command':[str(self.root/'missing')], 'config':{}, 'origins':['https://example.test']}
         handlers['denied'] = {'command':fixture, 'config':{}, 'origins':['https://elsewhere.test']}

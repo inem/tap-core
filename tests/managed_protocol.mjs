@@ -74,6 +74,11 @@ try {
   assert.equal(command.operation,'fixture.inspect'); assert.deepEqual(command.args,{selector:'main'});
   a.send({version,kind:'CommandResult',session:a.session,id:command.id,ok:true,value:{matches:1}});
   assert.deepEqual(await controlled,{ok:true,value:{matches:1}}); checks++;
+  const material = 'm'.repeat(5 * 1024 * 1024 - 8192);
+  const materialControlled = fetch(base+'/v1/pages/'+encodeURIComponent(a.page)+'/commands', {method:'POST',headers:{authorization:'Bearer '+secret,'content-type':'application/json'},body:JSON.stringify({operation:'fixture.inspect',args:{}})}).then(response=>response.json());
+  const materialCommand = await a.next('Command');
+  a.send({version,kind:'CommandResult',session:a.session,id:materialCommand.id,ok:true,value:{material}});
+  assert.equal((await materialControlled).value.material.length, material.length); checks++;
   assert.equal(a.welcome.revision, 'a'.repeat(64));
   writeFileSync(join(root, 'state/bridge.json'), JSON.stringify({configuration:'b'.repeat(64)}));
   assert.equal((await a.next('PlanChanged')).revision, 'b'.repeat(64));
@@ -82,6 +87,8 @@ try {
   assert.equal(result.value.args.exact,'stdin reaches handler');
   assert.equal(result.session,a.session); assert.equal(result.value.page,a.page);
   assert.notEqual(a.session,b.session); assert.equal(b.messages.length,0); checks++;
+  const largeEcho = await a.request('echo', {material}).result();
+  assert.equal(largeEcho.ok,true); assert.equal(largeEcho.value.args.material,material); checks++;
   for (const [name, code] of [['absent','handler_denied'],['__proto__','handler_denied'],['denied','handler_denied'],
       ['invalid','handler_protocol'],['missing','handler_failed'],
       ['oversize','handler_failed'],['hang','handler_timeout']]) {
