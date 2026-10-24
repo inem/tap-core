@@ -337,7 +337,8 @@ class Reader:
                 self.store(state, phase='gap' if isinstance(error, JournalGap) else 'failed',
                            error=type(error).__name__ + ': ' + str(error))
                 raise
-        return {'reader': self.name, 'completed_this_run': completed, 'progress': state}
+        return {'reader': self.name, 'completed_this_run': completed, 'invoked_this_run': invoked,
+                'progress': state}
 
     def execute(self, spec, record, delivery_id, invocation_id, generation, timeout, lock,
                 guard_parent=False, cancelled=None):

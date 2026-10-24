@@ -19,6 +19,10 @@ from tap_core.fs_watch import GrowthSignal, WatchUnavailable
 # rotation), with a long backstop. Scans keep the previous pacing as a floor,
 # so a busy stream costs no more than the former fixed 0.25 s loop.
 READER_MIN_SCAN_SECONDS = 0.25
+# A caught-up reader rescans no sooner than this. The capture stream is rarely
+# quiet, so growth alone would rescan every few hundred milliseconds; scans
+# that deliver nothing are what the controller's CPU goes to (measured live).
+READER_IDLE_SCAN_SECONDS = 1.5
 READER_IDLE_BACKSTOP_SECONDS = 30.0
 # Records advanced per replay run. Filtered records are cheap (no child process,
 # no per-record checkpoint write); each admitted record is still one invocation.
@@ -59,8 +63,8 @@ def main():
     configuration = identity(profile)
     growth = GrowthSignal(profile.root / 'data/stream.jsonl')
 
-    def idle_wait(seen, started, stop_reader, cancelled):
-        stop_reader.wait(max(0.0, started + READER_MIN_SCAN_SECONDS - time.monotonic()))
+    def idle_wait(seen, started, stop_reader, cancelled, floor=READER_IDLE_SCAN_SECONDS):
+        stop_reader.wait(max(0.0, started + floor - time.monotonic()))
         if growth.available and not cancelled():
             growth.wait(seen, READER_IDLE_BACKSTOP_SECONDS, cancelled)
 
@@ -82,7 +86,7 @@ def main():
         if fresh_enabled:
             return fresh_reader_loop(name, spec, allowed_origins, path_prefixes, stop_reader, cancelled)
         while not cancelled():
-            seen, started, busy = growth.generation, time.monotonic(), False
+            seen, started, busy, delivered = growth.generation, time.monotonic(), False, False
             try:
                 batch = 1 if first else REPLAY_BATCH
                 result = reader.run(spec, max_records=batch, timeout=10,
@@ -90,6 +94,7 @@ def main():
                                     allowed_origins=allowed_origins, path_prefixes=path_prefixes)
                 failures, first = 0, False
                 busy = result['completed_this_run'] >= batch  # a full batch: backlog remains
+                delivered = result['invoked_this_run'] > 0
                 row = {'healthy': True, 'phase': 'waiting', 'progress': reader.load(), 'error': None}
             except Exception as error:
                 failures += 1
@@ -102,7 +107,8 @@ def main():
             if failures:
                 stop_reader.wait(min(4, 2 ** (failures - 1)))
             elif not busy:
-                idle_wait(seen, started, stop_reader, cancelled)
+                idle_wait(seen, started, stop_reader, cancelled,
+                          READER_MIN_SCAN_SECONDS if delivered else READER_IDLE_SCAN_SECONDS)
 
     def fresh_reader_loop(name, spec, allowed_origins, path_prefixes, stop_reader, cancelled):
         replay = Reader(profile, name)
@@ -111,7 +117,7 @@ def main():
         replay_failures = fresh_failures = 0
         replay_error = fresh_error = None
         while not cancelled():
-            seen, started, busy = growth.generation, time.monotonic(), False
+            seen, started, busy, delivered = growth.generation, time.monotonic(), False, False
             if not initialized:
                 try:
                     fresh.follow_tail(spec)
@@ -126,6 +132,7 @@ def main():
                                        cancelled=cancelled, allowed_origins=allowed_origins,
                                        path_prefixes=path_prefixes)
                     busy = result['completed_this_run'] > 0
+                    delivered = result['invoked_this_run'] > 0
                     fresh_failures = 0
                     if not any(fresh.state.glob('fresh-failure-*.json')):
                         fresh_error = None
@@ -146,6 +153,7 @@ def main():
                                         guard_parent=True, cancelled=cancelled,
                                         allowed_origins=allowed_origins, path_prefixes=path_prefixes)
                     busy = busy or result['completed_this_run'] > 0
+                    delivered = delivered or result['invoked_this_run'] > 0
                     replay_failures = 0
                     replay_error = None
                 except Exception as error:
@@ -160,9 +168,10 @@ def main():
                 rows[name] = row
             if fresh_failures or not initialized:
                 stop_reader.wait(min(4, 2 ** (max(fresh_failures, 1) - 1)))
-            elif busy or 0 < replay_failures < 3:
+            elif delivered or 0 < replay_failures < 3:
                 stop_reader.wait(max(0.0, started + READER_MIN_SCAN_SECONDS - time.monotonic()))
             else:
+                # Filtered-only or empty passes: idle floor, then wait for growth.
                 idle_wait(seen, started, stop_reader, cancelled)
 
     def sync_readers(desired_components, reader_origins, fresh_readers, reader_prefixes, *, live_attach=False):
