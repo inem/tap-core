@@ -84,11 +84,12 @@ def main():
         while not cancelled():
             seen, started, busy = growth.generation, time.monotonic(), False
             try:
-                result = reader.run(spec, max_records=1 if first else REPLAY_BATCH, timeout=10,
+                batch = 1 if first else REPLAY_BATCH
+                result = reader.run(spec, max_records=batch, timeout=10,
                                     guard_parent=True, cancelled=cancelled,
                                     allowed_origins=allowed_origins, path_prefixes=path_prefixes)
                 failures, first = 0, False
-                busy = result['completed_this_run'] > 0
+                busy = result['completed_this_run'] >= batch  # a full batch: backlog remains
                 row = {'healthy': True, 'phase': 'waiting', 'progress': reader.load(), 'error': None}
             except Exception as error:
                 failures += 1

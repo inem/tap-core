@@ -584,6 +584,7 @@ def reconcile(root, adapter, remove=False):
         if result.returncode == 0:
             adapter.run(['/bin/launchctl', 'bootout', target])
         plist.unlink(missing_ok=True)
+        _host_path(root).unlink(missing_ok=True)  # no host: no stale watch report
         return
     log = root / 'logs/background-host.log'
     log.parent.mkdir(parents=True, exist_ok=True)
