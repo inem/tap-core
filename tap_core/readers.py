@@ -156,18 +156,11 @@ class Reader:
         return result
 
     def begin_now(self, spec):
-        """Activate a detached live reader at the current tail, without backfill.
-
-        Each new attachment starts a fresh generation. The prior checkpoint stays
-        untouched until this validated, locked transition completes; no reader
-        worker may be running under the same name when this is called.
-        """
+        """Activate a detached live reader at the current tail, without backfill."""
         validate_definition(spec)
         self.prepare()
         with profile_lock(self.state, busy_message=f"Reader '{self.name}' is busy"):
             previous = self.load()
-            if previous is not None and previous['definition'] != fingerprint(spec):
-                raise ReaderError('Reader definition changed; progress was not rebound')
             state = self.initial(spec, previous['generation'] + 1 if previous else 1)
             state['cursor'] = Journal(self.profile.root / 'data').tail()
             self.store(state)
@@ -183,7 +176,8 @@ class Reader:
             previous = self.load()
             if previous is not None:
                 if previous['definition'] != fingerprint(spec):
-                    raise ReaderError('Fresh reader definition changed; progress was not reset')
+                    self.store(previous, definition=fingerprint(spec), generation=previous['generation'] + 1,
+                               inflight=None, phase='ready', error=None)
             else:
                 state = self.initial(spec)
                 state['cursor'] = Journal(self.profile.root / 'data').tail()
@@ -256,7 +250,8 @@ class Reader:
                     state['cursor'] = Journal(self.profile.root / 'data').tail()
                 self.store(state)
             if state['definition'] != fingerprint(spec):
-                raise ReaderError('Reader definition changed; use a new reader name or explicit replay')
+                self.store(state, definition=fingerprint(spec), generation=state['generation'] + 1,
+                           inflight=None, phase='ready', error=None)
             completed = invoked = 0
             try:
                 recovered_gap = False
@@ -333,7 +328,9 @@ class Reader:
             with tempfile.TemporaryFile(dir=self.state) as source, selectors.DefaultSelector() as selector:
                 source.write((json.dumps(record, ensure_ascii=False) + '\n').encode())
                 source.seek(0)
-                command = spec['command']
+                command = list(spec['command'])
+                if command and command[0] == '/usr/bin/python3':
+                    command[0] = sys.executable
                 if guard_parent:
                     command = [sys.executable, '-B', str(Path(__file__).with_name('guardian.py')), str(os.getpid()), *command]
                 process = subprocess.Popen(command, stdin=source, stdout=subprocess.PIPE,

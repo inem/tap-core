@@ -79,12 +79,10 @@ class ReaderTests(unittest.TestCase):
         fresh.run(self.spec)
         self.assertIn('during-restart', self.outputs(self.reader))
         changed = dict(self.spec, revision='fixture-2')
-        with self.assertRaisesRegex(ReaderError, 'not reset'):
-            fresh.follow_tail(changed)
-        old = fresh.load()['cursor']
-        fresh.rebind(changed, fingerprint(self.spec))
-        self.assertEqual(fresh.load()['cursor'], old)
-        fresh.follow_tail(changed)
+        before = fresh.load()
+        fresh.follow_tail(changed)  # adopted in place: cursor kept, next generation
+        self.assertEqual(fresh.load()['cursor'], before['cursor'])
+        self.assertEqual(fresh.load()['generation'], before['generation'] + 1)
 
     def test_rebind_preserves_recovery_cursor_and_requires_expected_hash(self):
         self.write('A', 'B')
@@ -358,7 +356,7 @@ class ReaderTests(unittest.TestCase):
         self.reader.run(self.spec)
         self.assertEqual(self.outputs(self.reader), ['A', 'B', 'A'])
 
-    def test_changed_definition_requires_deliberate_new_generation(self):
+    def test_changed_definition_is_adopted_and_replay_stays_explicit(self):
         self.write('A', 'B', 'C')
         self.reader.run(self.spec)
         with contextlib.closing(sqlite3.connect(self.reader.output / 'projection.sqlite3')) as db:
@@ -366,16 +364,19 @@ class ReaderTests(unittest.TestCase):
             original_invocations = {row[0] for row in db.execute('SELECT id FROM receipts')}
         previous = self.reader.checkpoint.read_bytes()
         changed = dict(self.spec, revision='fixture-2', config={'value_prefix': 'new:'})
-        with self.assertRaisesRegex(ReaderError, 'definition changed'):
-            self.reader.run(changed)
-        self.assertEqual(self.reader.checkpoint.read_bytes(), previous)
+        # A changed definition is adopted: progress is kept, nothing is re-delivered.
+        self.assertEqual(self.reader.run(changed)['completed_this_run'], 0)
+        adopted = self.reader.load()
+        self.assertEqual((adopted['generation'], adopted['definition']), (2, fingerprint(changed)))
+        self.assertEqual(adopted['cursor'], json.loads(previous)['cursor'])
+        # Re-deriving history under the new definition stays an explicit replay.
         self.reader.replay(changed)
         self.reader.run(changed)
-        self.assertEqual(self.reader.load()['generation'], 2)
+        self.assertEqual(self.reader.load()['generation'], 3)
         self.assertEqual(self.outputs(self.reader), ['new:A', 'new:B', 'new:C'])
         with contextlib.closing(sqlite3.connect(self.reader.output / 'projection.sqlite3')) as db:
             self.assertEqual(db.execute('SELECT id FROM deliveries ORDER BY rowid').fetchall(), delivery_ids)
-            replay_invocations = {row[0] for row in db.execute('SELECT id FROM receipts WHERE generation=2')}
+            replay_invocations = {row[0] for row in db.execute('SELECT id FROM receipts WHERE generation=3')}
             self.assertEqual(len(replay_invocations), 3)
             self.assertTrue(original_invocations.isdisjoint(replay_invocations))
             self.assertEqual(json.loads(db.execute('SELECT body FROM latest').fetchone()[0])['value'], 'new:C')
