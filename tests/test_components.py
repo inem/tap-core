@@ -244,6 +244,7 @@ class ComponentTests(unittest.TestCase):
             handlers[name] = {'command':[sys.executable,'-c',source], 'config':{}, 'origins':['https://example.test']}
         handlers['missing'] = {'command':[str(self.root/'missing')], 'config':{}, 'origins':['https://example.test']}
         handlers['denied'] = {'command':fixture, 'config':{}, 'origins':['https://elsewhere.test']}
+        handlers['tap.local-paths'] = {'command':[str(self.root/'missing')], 'config':{}, 'origins':['https://example.test']}
         self.profile.components = self.binding
         self.profile.save()
         result = subprocess.run([bun, str(ROOT/'tests/managed_protocol.mjs'), str(self.root), str(ROOT/'tap_core/hub.mjs')],
