@@ -650,3 +650,25 @@ class BackgroundTests(unittest.TestCase):
         self.assertTrue(value['KeepAlive'])
         self.assertNotIn('StartInterval', value)
         self.assertEqual(value['ProgramArguments'][-1], '--resident')
+
+    def test_coalescing_runs_an_interval_job_slightly_early_only_when_asked(self):
+        self.install()
+        background.run_once(self.profile)
+        key = next(iter(background.read_state(self.profile)['jobs']))
+        state = background.read_state(self.profile)
+        state['jobs'][key]['next_at'] = time.time() + 1.5
+        background.atomic_json(self.profile / 'state/background.json', state)
+        background.run_once(self.profile)
+        self.assertEqual(len(self.runs()), 1)
+        background.run_once(self.profile, early=2)
+        self.assertEqual(len(self.runs()), 2)
+
+    def test_verify_memo_rehashes_after_any_content_change(self):
+        self.install()
+        background.tasks(self.profile)
+        with patch('tap_core.pack_store._tree_hashes', side_effect=AssertionError('rehashed')):
+            self.assertEqual(len(background.tasks(self.profile)), 1)  # unchanged tree: memo
+        time.sleep(0.01)
+        self.tamper('fixture.command', '0.1.0')
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(background.tasks(self.profile, account={}), [])  # drift is still caught

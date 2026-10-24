@@ -333,10 +333,11 @@ def run_freshness_once(root, commands):
     return receipts
 
 
-def run_once(root, wake=()):
+def run_once(root, wake=(), early=0):
     """One scheduling pass. Keys in ``wake`` are due now regardless of their
     next eligible time (a watch trigger fired); everything else keeps its
-    interval. Returns the active (command, schedule) pairs."""
+    interval, or runs up to ``early`` seconds ahead of it so jobs due close
+    together share one pass. Returns the active (command, schedule) pairs."""
     root = Path(root).resolve()
     wake = frozenset(wake)
     # Discovery and schedule selection are a short profile snapshot. Provider
@@ -355,7 +356,8 @@ def run_once(root, wake=()):
             previous = state['jobs'].get(key, {})
             fingerprint = task_fingerprint(command, schedule)
             now = time.time()
-            if key not in wake and previous.get('fingerprint') == fingerprint and previous.get('next_at', 0) > now:
+            if key not in wake and previous.get('fingerprint') == fingerprint \
+                    and previous.get('next_at', 0) > now + early:
                 continue
             due.append((key, fingerprint, command.provider_id))
         atomic_json(root / 'state/background.json', state)
@@ -381,7 +383,7 @@ def run_once(root, wake=()):
                 previous = state['jobs'].get(key, {})
                 now = time.time()
                 if key not in wake and previous.get('fingerprint') == fingerprint \
-                        and previous.get('next_at', 0) > now:
+                        and previous.get('next_at', 0) > now + early:
                     continue
                 run_id = hashlib.sha256(f'{key}\0{fingerprint}\0{time.time_ns()}'.encode()).hexdigest()
                 row = {'provider': command.provider_id, 'version': command.provider_version,
@@ -432,6 +434,7 @@ def run_once(root, wake=()):
 # tick: it sleeps until the earliest interval deadline, a watch trigger, or
 # RESIDENT_MAX_SLEEP_SECONDS (which bounds pickup of pack changes).
 RESIDENT_MAX_SLEEP_SECONDS = 30
+RESIDENT_COALESCE_SECONDS = 2   # interval jobs due this close together share a pass
 TRIGGER_MAX_DELAY_SECONDS = 30  # a change that never quiets still runs
 WATCH_FALLBACK_SECONDS = 60     # trigger cadence when the OS watch is unavailable
 _CODE = Path(__file__).resolve().parent
@@ -500,7 +503,7 @@ def serve(root, stop=None, watch_factory=PathWatch):
                 for key in ready:
                     del pending[key]
             try:
-                active = run_once(root, wake=ready)
+                active = run_once(root, wake=ready, early=RESIDENT_COALESCE_SECONDS)
             except TapError as exc:
                 # Busy profile or command lease: keep the wakes and retry soon.
                 print(stamped(str(exc)), file=sys.stderr, flush=True)

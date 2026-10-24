@@ -6,6 +6,7 @@ valid but cannot be enabled until their host bindings exist. No second pack stor
 """
 
 import argparse
+import copy
 import gzip
 import hashlib
 import io
@@ -76,6 +77,23 @@ def _tree_hashes(root, manifest):
     require(observed == expected,
             f"installed pack file set changed: expected {sorted(expected)}, got {sorted(observed)}")
     return {name: _digest(root / name) for name in sorted(expected)}
+
+
+# Verified installed trees, by file identity. A resident scheduler verifies
+# every enabled pack on each pass; re-hashing unchanged files is pure cost.
+# Any write to a file changes its ctime (not settable by user processes), and
+# any added/removed/renamed file changes the listing, so a hit is the same
+# bytes that were hashed. Per process; never persisted.
+_VERIFIED = {}
+
+
+def _tree_signature(root):
+    entries = []
+    for path in root.rglob("*"):
+        status = path.lstat()
+        entries.append((path.relative_to(root).as_posix(), status.st_mode, status.st_dev, status.st_ino,
+                        status.st_size, status.st_mtime_ns, status.st_ctime_ns))
+    return tuple(sorted(entries))
 
 
 def artifact_pack_id(artifact):
@@ -323,11 +341,17 @@ class PackStore:
         root = self.version_root(pack_id, version)
         require(root.is_dir() and not root.is_symlink(),
                 f"installed pack code is missing: {pack_id}@{version}")
+        key = (str(root), pack_id, version)
+        signature = (_tree_signature(root), json.dumps(metadata["hashes"], sort_keys=True))
+        cached = _VERIFIED.get(key)
+        if cached is not None and cached[0] == signature:
+            return root, copy.deepcopy(cached[1])
         manifest = load_manifest(root)
         require(manifest["id"] == pack_id and manifest["version"] == version,
                 "installed pack identity does not match its registry path")
         require(_tree_hashes(root, manifest) == metadata["hashes"],
                 f"installed pack integrity check failed: {pack_id}@{version}")
+        _VERIFIED[key] = (signature, copy.deepcopy(manifest))
         return root, manifest
 
     def _profile_bridge(self):

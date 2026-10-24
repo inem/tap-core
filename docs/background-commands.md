@@ -11,13 +11,17 @@ The pack must request and receive `background.run`, as well as
 normal command context. Intervals are 10–86400 seconds and timeouts 1–3600.
 This is an extension of the command manifest: earlier Core validators reject it.
 
-Core owns one LaunchAgent per profile. Every tick briefly takes the profile
+A command may also declare a watch `trigger`, which makes its interval an
+optional backstop; see [event-driven triggers](event-triggers.md).
+
+Core owns one resident LaunchAgent per profile (`KeepAlive`). It sleeps until a
+job is due or a watched path changes. Each pass briefly takes the profile
 lease to discover enabled, verified, selected command providers and select due
 runs. A provider executes under a separate inherited command-execution lease;
 slow external work therefore does not block capture/network lifecycle. Pack
 mutation still contends on the execution lease so it cannot disable or remove a
 selected version underneath a running child. Version/config changes become
-effective on the next tick. A busy profile or command runner retries later;
+effective on the next pass, within 30 s. A busy profile or command runner retries later;
 this is periodic best-effort work, not an exact clock.
 Intervals start after completion. Commands must tolerate repeated execution.
 
