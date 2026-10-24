@@ -113,7 +113,7 @@ class LiveReaderReconcileTests(unittest.TestCase):
                 process.terminate()
                 process.communicate(timeout=8)
 
-    @unittest.expectedFailure  # live: behaviour of the 2026-10-14/16 checkout WIP (40e6b21/9444967), fails on its HEAD too
+    @unittest.expectedFailure  # live: PackStore.verify / resource checks heal hash drift instead of failing (40e6b21); decision in #275
     def test_failed_refresh_retries_without_another_signal(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

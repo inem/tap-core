@@ -265,7 +265,6 @@ class BridgeTests(unittest.TestCase):
         self.bridge.requestheaders(asset)
         self.assertEqual(asset.response.status_code, 403)
 
-    @unittest.expectedFailure  # live: behaviour of the 2026-10-14/16 checkout WIP (40e6b21/9444967), fails on its HEAD too
     def test_page_plan_exposes_only_origin_scoped_pack_identity(self):
         effective = config(allow_origins=['https://example.test', 'https://third.test'],
                            exclude_origins=[], page_scripts=['/one.js', '/two.js'])
@@ -281,9 +280,10 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(bridge.page_plan('https://example.test')['packs'],
                          [{'id': 'fixture.first', 'version': '1.2.3',
                            'features': [{'id': 'copy', 'label': 'Copy', 'value': 'One click',
-                                         'folder': 'data/readers/fixture.first'}]}])
+                                         'folder': 'data/readers/fixture.first'}],
+                           'tools': []}])
         self.assertEqual(bridge.page_plan('https://third.test')['packs'],
-                         [{'id': 'fixture.second', 'version': '2.0.0', 'features': []}])
+                         [{'id': 'fixture.second', 'version': '2.0.0', 'features': [], 'tools': []}])
 
     def test_injected_bootstrap_carries_applied_plan_and_ws_mode(self):
         self.bridge.ws_origins = set()
