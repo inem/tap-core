@@ -149,6 +149,65 @@ def origin_granted(requested, granted):
     return requested == ALL_ORIGINS and ALL_ORIGINS in granted or requested in granted or ALL_ORIGINS in granted
 
 
+TRIGGER_DEFAULTS = {"debounce_ms": 500, "min_interval_seconds": 10}
+TRIGGER_BACKSTOP_SECONDS = 3600
+
+
+def validate_trigger(trigger):
+    """A command's watch trigger: host paths whose changes request a run."""
+    fields(trigger, ("watch",), optional=tuple(TRIGGER_DEFAULTS), label="command.trigger")
+    strings(trigger["watch"], "command.trigger.watch")
+    require(1 <= len(trigger["watch"]) <= 16, "command.trigger.watch: expected 1..16 paths")
+    for path in trigger["watch"]:
+        parts = PurePosixPath(path).parts
+        require(0 < len(path) <= 1024 and "\x00" not in path and ".." not in parts
+                and all(character.isprintable() for character in path)
+                and (path.startswith(("/", "~/")) or str(PurePosixPath(path)) == path),
+                "command.trigger.watch: expected '~/…', an absolute path, or a canonical "
+                "profile-relative path without '..'")
+    require("debounce_ms" not in trigger
+            or type(trigger["debounce_ms"]) is int and 0 <= trigger["debounce_ms"] <= 60000,
+            "command.trigger.debounce_ms must be 0..60000")
+    require("min_interval_seconds" not in trigger
+            or type(trigger["min_interval_seconds"]) is int and 1 <= trigger["min_interval_seconds"] <= 86400,
+            "command.trigger.min_interval_seconds must be 1..86400")
+
+
+def command_schedule(declaration):
+    """The effective schedule of a command declaration, defaults applied.
+
+    A declaration without a trigger yields its schedule unchanged, so existing
+    scheduled commands keep their fingerprint and timing.
+    """
+    schedule = declaration.get("schedule")
+    if schedule is None or "trigger" not in declaration:
+        return schedule
+    return {"interval_seconds": schedule.get("interval_seconds", TRIGGER_BACKSTOP_SECONDS),
+            "timeout_seconds": schedule["timeout_seconds"],
+            "trigger": {"watch": list(declaration["trigger"]["watch"]),
+                        **{name: declaration["trigger"].get(name, default)
+                           for name, default in TRIGGER_DEFAULTS.items()}}}
+
+
+def validate_reader_input(value, access):
+    """Optional per-origin URL path prefixes a reader is limited to."""
+    fields(value, ("path_prefixes",), label="entrypoints.reader.input")
+    prefixes = value["path_prefixes"]
+    require(type(prefixes) is dict and bool(prefixes),
+            "entrypoints.reader.input.path_prefixes: expected nonempty object keyed by origin")
+    for origin, paths in prefixes.items():
+        exact_origin(origin)
+        require(origin_granted(origin, set(access["origins"])),
+                f"entrypoints.reader.input.path_prefixes: {origin} is not in access.origins")
+        strings(paths, f"entrypoints.reader.input.path_prefixes[{origin}]")
+        require(1 <= len(paths) <= 64,
+                f"entrypoints.reader.input.path_prefixes[{origin}]: expected 1..64 prefixes")
+        for path in paths:
+            require(path.startswith("/") and len(path) <= 512 and "?" not in path and "#" not in path
+                    and all(character.isprintable() for character in path),
+                    "entrypoints.reader.input.path_prefixes: expected printable URL path prefixes")
+
+
 def pack_file(root, name):
     require(type(name) is str and bool(name), "files: expected nonempty relative path")
     path = PurePosixPath(name)
@@ -242,11 +301,18 @@ def validate_manifest(manifest, root, host_api=PACK_API):
             paths = set()
             for declaration in entry["commands"]:
                 fields(declaration, ("path", "summary", "usage", "profile"),
-                       optional=("schedule",), label="entrypoints.command.commands[]")
+                       optional=("schedule", "trigger"), label="entrypoints.command.commands[]")
+                if "trigger" in declaration:
+                    require("schedule" in declaration, "command.trigger requires command.schedule")
+                    validate_trigger(declaration["trigger"])
                 if "schedule" in declaration:
                     schedule = declaration["schedule"]
-                    fields(schedule, ("interval_seconds", "timeout_seconds"), label="command.schedule")
-                    require(type(schedule["interval_seconds"]) is int and 10 <= schedule["interval_seconds"] <= 86400,
+                    # With a trigger the interval is an optional backstop.
+                    fields(schedule, ("timeout_seconds",) if "trigger" in declaration
+                           else ("interval_seconds", "timeout_seconds"),
+                           optional=("interval_seconds",), label="command.schedule")
+                    require("interval_seconds" not in schedule
+                            or type(schedule["interval_seconds"]) is int and 10 <= schedule["interval_seconds"] <= 86400,
                             "command.schedule interval must be 10..86400 seconds")
                     require(type(schedule["timeout_seconds"]) is int and 1 <= schedule["timeout_seconds"] <= 3600,
                             "command.schedule timeout must be 1..3600 seconds")
@@ -267,7 +333,7 @@ def validate_manifest(manifest, root, host_api=PACK_API):
                 require(declaration["profile"] == "required",
                         "entrypoints.command.commands[].profile: v1 requires 'required'")
         else:
-            fields(entry, ("file", "interface"), optional=("delivery",) if role == "reader" else (),
+            fields(entry, ("file", "interface"), optional=("delivery", "input") if role == "reader" else (),
                    label=f"entrypoints.{role}")
             require(type(entry["file"]) is str and entry["file"] in manifest["files"],
                     f"entrypoints.{role}: file must be declared in files")
@@ -289,6 +355,8 @@ def validate_manifest(manifest, root, host_api=PACK_API):
     for origin in access["origins"]:
         exact_or_all_origin(origin)
     strings(access["capabilities"], "access.capabilities")
+    if "input" in entries.get("reader", {}):
+        validate_reader_input(entries["reader"]["input"], access)
     capture = manifest.get("capture")
     if capture is not None:
         fields(capture, ("request_body_paths",), label="capture")

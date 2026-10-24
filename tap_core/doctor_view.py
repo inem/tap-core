@@ -112,6 +112,12 @@ def _limitations(result):
     quarantined = background.get("quarantined")
     if isinstance(quarantined, list) and quarantined:
         items.append(("background", "quarantined packs: " + ", ".join(map(str, quarantined))))
+    host = background.get("host") if isinstance(background.get("host"), dict) else {}
+    watches = host.get("watches") if isinstance(host.get("watches"), dict) else {}
+    polling = sorted(str(name) for name, watch in watches.items()
+                     if isinstance(watch, dict) and watch.get("state") != "watching")
+    if polling:
+        items.append(("background", "watch unavailable, polling instead: " + ", ".join(polling)))
     failures = background.get("verify_failures")
     if isinstance(failures, dict) and failures:
         visible = []

@@ -9,12 +9,14 @@ import plistlib
 import signal
 import subprocess
 import sys
+import threading
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tap_core.runtime import TapError, atomic_json, command_execution_lock, profile_lock, stamped
 from tap_core.pack_store import PackStore
-from tap_core.packs import PackError
+from tap_core.packs import PackError, command_schedule
+from tap_core.fs_watch import PathWatch, WatchUnavailable, expand
 from tap_core.commands import discover, _run_pack, _start_pack
 from tap_core import freshness_policy
 
@@ -97,7 +99,7 @@ def tasks(root, *, account=None):
         if account is not None:
             failures.pop(pack_id, None)  # verified: clear any prior failure/quarantine
         for declaration in manifest['entrypoints'].get('command', {}).get('commands', []):
-            schedule = declaration.get('schedule')
+            schedule = command_schedule(declaration)
             command = commands.get(tuple(declaration['path']))
             if schedule and command and command.provider_id == pack_id:
                 result.append((command, schedule))
@@ -398,7 +400,10 @@ DISCOVERY_SECONDS = 10
 POLL_SECONDS = 0.1
 
 
-def _scheduled_snapshot(root, *, account_failures=False):
+def _scheduled_snapshot(root, *, account_failures=False, wake=frozenset(), early=0):
+    """Due scheduled jobs. Keys in ``wake`` are due now (a watch trigger fired);
+    others are due at their next time, or up to ``early`` seconds ahead of it so
+    jobs due close together start in one pass."""
     state = read_state(root)
     active = tasks(root, account=state if account_failures else None)
     scheduled = [(c, s) for c, s in active if freshness_adapter(c) is None]
@@ -411,7 +416,7 @@ def _scheduled_snapshot(root, *, account_failures=False):
         fingerprint = task_fingerprint(command, schedule)
         same = previous.get('fingerprint') == fingerprint
         next_at = previous.get('next_at', 0) if same else 0
-        if next_at <= time.time():
+        if key in wake or next_at <= time.time() + early:
             due.append((next_at, key, fingerprint, command.provider_id))
     state['checked_at'] = time.time()
     atomic_json(root / 'state/background.json', state)
@@ -419,7 +424,7 @@ def _scheduled_snapshot(root, *, account_failures=False):
     return active, sorted(due, key=lambda item: item[0])
 
 
-def _start_scheduled(root, key, expected_fingerprint, provider_id):
+def _start_scheduled(root, key, expected_fingerprint, provider_id, *, woken=False, early=0):
     resources = ExitStack()
     try:
         # Separate from the shared command/mutation lease: only scheduled writers
@@ -441,7 +446,7 @@ def _start_scheduled(root, key, expected_fingerprint, provider_id):
         state = read_state(root)
         previous = state['jobs'].get(key, {})
         now = time.time()
-        if previous.get('fingerprint') == fingerprint and previous.get('next_at', 0) > now:
+        if not woken and previous.get('fingerprint') == fingerprint and previous.get('next_at', 0) > now + early:
             return None
         run_id = hashlib.sha256(f'{key}\0{fingerprint}\0{time.time_ns()}'.encode()).hexdigest()
         row = {'provider': command.provider_id, 'version': command.provider_version,
@@ -453,7 +458,7 @@ def _start_scheduled(root, key, expected_fingerprint, provider_id):
         row['receipt_dir'] = str(receipt_dir)
         atomic_json(receipt_dir / 'started.json', {
             'schema': 'tap.background-run/v1', **row, 'command': list(command.path),
-            'trigger': {'kind': 'schedule', 'due_at': previous.get('next_at')
+            'trigger': {'kind': 'watch' if woken else 'schedule', 'due_at': previous.get('next_at')
                         if previous.get('fingerprint') == fingerprint else None,
                         'schedule': schedule},
             'implementation': {'path': str(command.root),
@@ -536,9 +541,15 @@ def run_once(root):
         _run_cycle(root)
 
 
-def _run_cycle(root):
+def _run_cycle(root, take_wake=None, early=0):
+    """Start due jobs (up to MAX_RUNNING_PACKS packs at once) and wait for them.
+
+    ``take_wake()`` returns trigger keys that became ready; it is consulted at
+    every discovery point, so a watch firing while jobs run starts its task in
+    the same cycle. Returns (active tasks, woken keys that did not start)."""
     running = {}
-    active, due = _scheduled_snapshot(root, account_failures=True)
+    wake = set(take_wake()) if take_wake else set()
+    active, due = _scheduled_snapshot(root, account_failures=True, wake=frozenset(wake), early=early)
     next_discovery = time.monotonic() + DISCOVERY_SECONDS
     try:
         while True:
@@ -558,8 +569,10 @@ def _run_cycle(root):
                 del running[provider_id]
                 completed = True
             if completed or time.monotonic() >= next_discovery:
+                if take_wake:
+                    wake |= set(take_wake())
                 try:
-                    active, due = _scheduled_snapshot(root)
+                    active, due = _scheduled_snapshot(root, wake=frozenset(wake), early=early)
                 except TapError:
                     due = []  # Retry fresh discovery, never stale authority.
                 next_discovery = time.monotonic() + DISCOVERY_SECONDS
@@ -569,9 +582,11 @@ def _run_cycle(root):
                 if provider_id in running:
                     continue
                 try:
-                    job = _start_scheduled(root, key, fingerprint, provider_id)
+                    job = _start_scheduled(root, key, fingerprint, provider_id,
+                                           woken=key in wake, early=early)
                 except TapError:
                     continue  # Pack/profile mutation or an inherited orphan lease.
+                wake.discard(key)  # started, or no longer startable at this fingerprint
                 if job is not None:
                     running[provider_id] = job
             due = []
@@ -591,6 +606,155 @@ def _run_cycle(root):
             finally:
                 job['resources'].close()
     run_freshness_once(root, active)
+    return active, wake
+
+
+# Resident host (launchd KeepAlive). It replaces the 10-second interpreter
+# tick: it sleeps until the earliest interval deadline, a watch trigger, or
+# RESIDENT_MAX_SLEEP_SECONDS (which bounds pickup of pack changes).
+RESIDENT_MAX_SLEEP_SECONDS = 30
+RESIDENT_COALESCE_SECONDS = 2   # interval jobs due this close together share a cycle
+TRIGGER_MAX_DELAY_SECONDS = 30  # a change that never quiets still runs
+WATCH_FALLBACK_SECONDS = 60     # trigger cadence when the OS watch is unavailable
+_CODE = Path(__file__).resolve().parent
+
+
+def _code_mark():
+    """Installed core code identity; a change makes the host exit for restart."""
+    return tuple(sorted((path.name, path.stat().st_mtime_ns) for path in _CODE.glob('*.py')))
+
+
+def _host_path(root):
+    return Path(root) / 'state/background-host.json'
+
+
+def _trigger_ready(trigger, pending, previous, now_wall, now):
+    """Earliest monotonic time a pending trigger may run (debounce, then floor)."""
+    first, last = pending
+    quiet = min(last + trigger['debounce_ms'] / 1000, first + TRIGGER_MAX_DELAY_SECONDS)
+    finished = previous.get('finished_at') or previous.get('started_at')
+    floor = now + max(0.0, finished + trigger['min_interval_seconds'] - now_wall) if finished else now
+    return max(quiet, floor)
+
+
+def serve(root, stop=None, watch_factory=PathWatch):
+    """Run the scheduler resident, with watch triggers, until ``stop`` is set.
+
+    Watches are host observations only: a change marks its task pending; the
+    same `_run_cycle` used by the periodic tick starts it.
+    """
+    root = Path(root).resolve()
+    stop = stop or threading.Event()
+    changed = threading.Event()
+    guard = threading.Lock()
+    pending = {}     # task key -> (first, last) monotonic event times
+    watches = {}     # task key -> (paths, watcher or None, error)
+    triggers = {}
+    fallback_at = {}
+    mark = _code_mark()
+    started_at = time.time()
+
+    def changed_paths(key):
+        def mark_pending(_paths):
+            now = time.monotonic()
+            with guard:
+                first, _ = pending.get(key, (now, now))
+                pending[key] = (first, now)
+            changed.set()
+        return mark_pending
+
+    def take_wake():
+        now, now_wall = time.monotonic(), time.time()
+        jobs = read_state(root).get('jobs', {})
+        with guard:
+            for key, (_, watcher, _) in watches.items():
+                if watcher is None and key in triggers and now >= fallback_at.get(key, 0):
+                    pending.setdefault(key, (now, now))
+                    fallback_at[key] = now + WATCH_FALLBACK_SECONDS
+            ready = {key for key, times in pending.items() if key in triggers
+                     and _trigger_ready(triggers[key], times, jobs.get(key, {}), now_wall, now) <= now}
+            for key in ready:
+                del pending[key]
+        return ready
+
+    with profile_lock(root / 'state/background-host', busy_message='Background host is already running'):
+        try:
+            while not stop.is_set():
+                if _code_mark() != mark:
+                    print(stamped('background: core code changed; exiting for restart'), flush=True)
+                    return
+                try:
+                    active, leftover = _run_cycle(root, take_wake, early=RESIDENT_COALESCE_SECONDS)
+                except TapError as exc:
+                    # Busy profile: retry soon; pending triggers stay pending.
+                    print(stamped(str(exc)), file=sys.stderr, flush=True)
+                    stop.wait(2)
+                    continue
+                triggers = {task_key(command): schedule['trigger']
+                            for command, schedule in active if 'trigger' in schedule}
+                now = time.monotonic()
+                with guard:
+                    for key in [k for k in pending if k not in triggers]:
+                        del pending[key]
+                    for key in leftover & set(triggers):
+                        pending.setdefault(key, (now, now))  # e.g. its pack's lease was busy
+                for key in list(watches):
+                    paths, watcher, _ = watches[key]
+                    wanted = triggers.get(key)
+                    if wanted is None or tuple(expand(p, root) for p in wanted['watch']) != paths:
+                        if watcher is not None:
+                            watcher.close()
+                        del watches[key]
+                for key, trigger in triggers.items():
+                    if key in watches:
+                        continue
+                    paths = tuple(expand(p, root) for p in trigger['watch'])
+                    try:
+                        watches[key] = (paths, watch_factory(paths, changed_paths(key)).start(), None)
+                    except (WatchUnavailable, OSError) as error:
+                        watches[key] = (paths, None, str(error))
+                        print(stamped('background: watch unavailable for %s (%s); polling every %ds' % (
+                            key, error, WATCH_FALLBACK_SECONDS)), file=sys.stderr, flush=True)
+                atomic_json(_host_path(root), {
+                    'version': 1, 'mode': 'resident', 'pid': os.getpid(), 'started_at': started_at,
+                    'updated_at': time.time(),
+                    'watches': {key: {'paths': list(paths), 'state': 'watching' if watcher else 'polling',
+                                      'error': error}
+                                for key, (paths, watcher, error) in sorted(watches.items())}})
+
+                # Sleep until the earliest interval deadline, pending trigger or bound.
+                now, now_wall = time.monotonic(), time.time()
+                state = read_state(root)
+                jobs = state.get('jobs', {})
+                deadline = now + RESIDENT_MAX_SLEEP_SECONDS
+                for command, schedule in active:
+                    if freshness_adapter(command) is not None:
+                        continue
+                    next_at = jobs.get(task_key(command), {}).get('next_at', 0)
+                    deadline = min(deadline, now + max(0.0, next_at - now_wall))
+                if any(freshness_adapter(command) for command, _ in active):
+                    wake_at = state.get('usage_freshness', {}).get('next_wake_at', 0)
+                    deadline = min(deadline, now + max(0.0, wake_at - now_wall))
+                with guard:
+                    for key, times in pending.items():
+                        if key in triggers:
+                            deadline = min(deadline, _trigger_ready(
+                                triggers[key], times, jobs.get(key, {}), now_wall, now))
+                    for key, (_, watcher, _) in watches.items():
+                        if watcher is None:
+                            deadline = min(deadline, fallback_at.get(key, now))
+                # A floor keeps a busy lease or a past deadline from spinning.
+                deadline = max(deadline, time.monotonic() + (1.0 if leftover else 0.2))
+                # One-second slices only so an embedding caller's `stop` is seen;
+                # under launchd SIGTERM interrupts the wait directly.
+                while not stop.is_set() and not changed.wait(min(1.0, deadline - time.monotonic())):
+                    if time.monotonic() >= deadline:
+                        break
+                changed.clear()
+        finally:
+            for _, watcher, _ in watches.values():
+                if watcher is not None:
+                    watcher.close()
 
 
 def reconcile(root, adapter, remove=False):
@@ -605,11 +769,15 @@ def reconcile(root, adapter, remove=False):
         if result.returncode == 0:
             adapter.run(['/bin/launchctl', 'bootout', target])
         plist.unlink(missing_ok=True)
+        _host_path(root).unlink(missing_ok=True)  # no host: no stale watch report
         return
     log = root / 'logs/background-host.log'
     log.parent.mkdir(parents=True, exist_ok=True)
-    value = {'Label': label, 'ProgramArguments': [sys.executable, '-B', str(Path(__file__).resolve()), str(root)],
-             'WorkingDirectory': str(root), 'RunAtLoad': True, 'StartInterval': 10,
+    # Resident host: launchd keeps it alive (and restarts it after a code
+    # change exit, throttled), instead of starting an interpreter every 10 s.
+    value = {'Label': label, 'ProgramArguments': [sys.executable, '-B', str(Path(__file__).resolve()),
+                                                  str(root), '--resident'],
+             'WorkingDirectory': str(root), 'RunAtLoad': True, 'KeepAlive': True, 'ThrottleInterval': 10,
              'StandardOutPath': str(log), 'StandardErrorPath': str(log)}
     data = plistlib.dumps(value)
     if plist.exists() and plist.read_bytes() != data:
@@ -628,14 +796,26 @@ def status(root):
     state = read_state(root)
     quarantined = sorted(pid for pid, rec in state.get('verify_failures', {}).items()
                          if rec.get('quarantined'))
-    return {'registered': plist.exists(), 'label': label, 'quarantined': quarantined, **state}
+    result = {'registered': plist.exists(), 'label': label, 'quarantined': quarantined, **state}
+    try:
+        # Last observation written by the resident host; not proof it is alive.
+        result['host'] = json.loads(_host_path(root).read_text())
+    except (OSError, ValueError):
+        pass
+    return result
 
 
 if __name__ == '__main__':
     os.umask(0o077)
     signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
     try:
-        run_once(Path(sys.argv[1]))
+        if sys.argv[2:] == ['--resident']:
+            try:
+                serve(Path(sys.argv[1]))
+            except KeyboardInterrupt:
+                pass
+        else:
+            run_once(Path(sys.argv[1]))
     except TapError as exc:
         # Busy is expected: next tick retries discovery, never stale pack code.
         print(stamped(str(exc)), file=sys.stderr, flush=True)

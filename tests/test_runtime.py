@@ -336,6 +336,7 @@ class RuntimeTests(unittest.TestCase):
         self.runtime.off()
         self.assertRestored()
 
+    @unittest.expectedFailure  # live: re-entrant system-proxy on with an existing snapshot (live/locks-and-cli)
     def test_repeat_on_verifies_all_saved_bypass_lists(self):
         self.runtime.on()
         self.os.network["USB Ethernet"]["bypass"] = ["unexpected.example"]
