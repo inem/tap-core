@@ -87,6 +87,19 @@ try {
   assert.equal(result.value.args.exact,'stdin reaches handler');
   assert.equal(result.session,a.session); assert.equal(result.value.page,a.page);
   assert.notEqual(a.session,b.session); assert.equal(b.messages.length,0); checks++;
+  const pngPath = join(root, 'sample.png');
+  const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
+  writeFileSync(pngPath, pngBytes);
+  const imgResult = await a.request('tap.local-paths', {action:'read_image', path:pngPath}).result();
+  assert.equal(imgResult.ok, true);
+  assert.equal(imgResult.value.mime, 'image/png');
+  assert.equal(imgResult.value.size, pngBytes.length);
+  assert.equal(imgResult.value.data, pngBytes.toString('base64')); checks++;
+  a.send({version, kind:'Signal', session:a.session, name:'fixture.signal', payload:{k:1}});
+  await sleep(30);
+  const sigResp = await (await fetch(base+'/v1/signals', {headers:{authorization:'Bearer '+secret}})).json();
+  assert.equal(sigResp.signals.length, 1);
+  assert.equal(sigResp.signals[0].signal, 'fixture.signal'); checks++;
   const largeEcho = await a.request('echo', {material}).result();
   assert.equal(largeEcho.ok,true); assert.equal(largeEcho.value.args.material,material); checks++;
   for (const [name, code] of [['absent','handler_denied'],['__proto__','handler_denied'],['denied','handler_denied'],
