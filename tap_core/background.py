@@ -757,6 +757,21 @@ def serve(root, stop=None, watch_factory=PathWatch):
                     watcher.close()
 
 
+BOOTOUT_WAIT_SECONDS = 10
+
+
+def _wait_unloaded(adapter, target):
+    """launchd keeps reporting a booted-out job while it is still exiting (a
+    running tick gets SIGTERM first). Bootstrapping is only decided once the old
+    job is gone, or a replaced agent would be left unloaded."""
+    deadline = time.monotonic() + BOOTOUT_WAIT_SECONDS
+    while adapter.run(['/bin/launchctl', 'print', target], check=False).returncode == 0:
+        if time.monotonic() >= deadline:
+            raise TapError(f'Previous background agent did not unload within {BOOTOUT_WAIT_SECONDS}s; '
+                           'retry to finish registration')
+        time.sleep(0.2)
+
+
 def reconcile(root, adapter, remove=False):
     root = Path(root).resolve()
     label, plist = paths(root)
@@ -780,13 +795,17 @@ def reconcile(root, adapter, remove=False):
              'WorkingDirectory': str(root), 'RunAtLoad': True, 'KeepAlive': True, 'ThrottleInterval': 10,
              'StandardOutPath': str(log), 'StandardErrorPath': str(log)}
     data = plistlib.dumps(value)
+    replaced = False
     if plist.exists() and plist.read_bytes() != data:
         result = adapter.run(['/bin/launchctl', 'print', target], check=False)
         if result.returncode == 0:
             adapter.run(['/bin/launchctl', 'bootout', target])
+            replaced = True
     plist.parent.mkdir(parents=True, exist_ok=True)
     plist.write_bytes(data)
     plist.chmod(0o600)
+    if replaced:
+        _wait_unloaded(adapter, target)
     if adapter.run(['/bin/launchctl', 'print', target], check=False).returncode != 0:
         adapter.run(['/bin/launchctl', 'bootstrap', 'gui/' + str(os.getuid()), str(plist)])
 

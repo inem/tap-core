@@ -729,3 +729,34 @@ class BackgroundTests(unittest.TestCase):
         with patch('tap_core.pack_store._tree_hashes', side_effect=real) as rehash:
             background.tasks(self.profile, account={})
         self.assertTrue(rehash.called)  # changed bytes are always hashed again
+
+    def test_replacing_a_loaded_agent_waits_for_its_bootout_before_bootstrap(self):
+        self.install()
+        plist = self.root / 'job.plist'
+        plist.write_bytes(b'old StartInterval agent')
+        calls = []
+        # launchd still reports the old job twice after bootout, then it is gone.
+        print_results = iter([0, 0, 0, 113, 113])
+
+        def run(argv, check=True):
+            calls.append(argv[1])
+            return Mock(returncode=next(print_results) if argv[1] == 'print' else 0)
+
+        adapter = Mock(run=Mock(side_effect=run))
+        with patch.object(background, 'paths', return_value=('fixture.job', plist)), \
+                patch.object(background.time, 'sleep'):
+            background.reconcile(self.profile, adapter)
+        self.assertEqual(calls, ['print', 'bootout', 'print', 'print', 'print', 'print', 'bootstrap'])
+
+    def test_replaced_agent_that_never_unloads_is_reported_not_left_unloaded(self):
+        self.install()
+        plist = self.root / 'job.plist'
+        plist.write_bytes(b'old StartInterval agent')
+        adapter = Mock()
+        adapter.run.return_value.returncode = 0  # never unloads
+        with patch.object(background, 'paths', return_value=('fixture.job', plist)), \
+                patch.object(background, 'BOOTOUT_WAIT_SECONDS', 0.05), \
+                patch.object(background.time, 'sleep'):
+            with self.assertRaisesRegex(TapError, 'did not unload'):
+                background.reconcile(self.profile, adapter)
+        self.assertNotIn('bootstrap', [c.args[0][1] for c in adapter.run.call_args_list])
