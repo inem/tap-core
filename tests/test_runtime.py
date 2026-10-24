@@ -336,13 +336,14 @@ class RuntimeTests(unittest.TestCase):
         self.runtime.off()
         self.assertRestored()
 
-    def test_repeat_on_verifies_all_saved_bypass_lists(self):
+    def test_repeat_on_reapplies_settings_and_keeps_the_saved_snapshot(self):
         self.runtime.on()
+        saved = self.profile.snapshot.read_bytes()
         self.os.network["USB Ethernet"]["bypass"] = ["unexpected.example"]
-        with self.assertRaisesRegex(TapError, "needs recovery"):
-            self.runtime.on()
-        self.assertEqual(self.os.events.count("probe"), 1)
-        self.assertRestored()
+        self.runtime.on()  # re-entrant: no recovery demand, settings applied again
+        self.assertNotIn("unexpected.example", self.os.network["USB Ethernet"]["bypass"])
+        self.assertEqual(self.profile.snapshot.read_bytes(), saved)
+        self.assertEqual(self.os.events.count("probe"), 2)
 
     def test_repeat_on_adds_declared_passthrough_to_a_previously_cleared_bypass(self):
         # A Core that cleared the active bypass entirely (e7e67ec) left pinning

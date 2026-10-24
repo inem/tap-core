@@ -164,7 +164,7 @@ class Reader:
         """
         validate_definition(spec)
         self.prepare()
-        with profile_lock(self.state, busy_message=f"Reader '{self.name}' is busy"):
+        with profile_lock(self.state, busy_message=f"Reader '{self.name}' is busy", wait_seconds=5):
             previous = self.load()
             if previous is not None and previous['definition'] != fingerprint(spec):
                 raise ReaderError('Reader definition changed; progress was not rebound')
@@ -179,7 +179,7 @@ class Reader:
             raise ReaderError('Only a fresh lane can follow the tail')
         validate_definition(spec)
         self.prepare()
-        with profile_lock(self.state, busy_message=f"Reader '{self.name}' is busy"):
+        with profile_lock(self.state, busy_message=f"Reader '{self.name}' is busy", wait_seconds=5):
             previous = self.load()
             if previous is not None:
                 if previous['definition'] != fingerprint(spec):

@@ -165,20 +165,19 @@ class PackStoreTests(unittest.TestCase):
             {"id": PACK_ID, "version": "0.1.0", "origins": ORIGINS, "features": []},
         ])
 
-    def test_pack_request_body_paths_are_origin_scoped_and_startup_only(self):
+    def test_pack_request_body_paths_are_origin_scoped_and_apply_live(self):
         artifact = self.artifact(self.capture_source(), "capture.tap-pack")
         self.store.install(artifact)
         grants = {"origins": ORIGINS,
                   "capabilities": ["page.inject", "capture.read"]}
-        with self.assertRaisesRegex(PackError, "Stop this profile with off"):
-            self.store.enable(PACK_ID, "0.2.0", live=True, **grants)
-        result = self.store.enable(PACK_ID, "0.2.0", **grants)
-        self.assertIn("next profile on", result["applies"])
+        # A live change to the effective capture policy is saved; the CLI then
+        # hands the new policy to the running proxy (capture reload, #248).
+        self.store.enable(PACK_ID, "0.2.0", live=True, **grants)
         effective = self.store.effective_capture(None)
         self.assertEqual(effective["request_body_paths"],
                          ("https://fixture.example/v1/messages",))
-        with self.assertRaisesRegex(PackError, "Stop this profile with off"):
-            self.store.disable(PACK_ID, live=True)
+        self.store.disable(PACK_ID, live=True)
+        self.assertEqual(self.store.effective_capture(None)["request_body_paths"], ())
 
     def test_effective_bridge_rejects_bytecode_outside_pycache(self):
         artifact = self.artifact(SOURCE, "root-bytecode.tap-pack")
