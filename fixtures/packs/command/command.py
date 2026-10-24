@@ -33,9 +33,10 @@ if path == ("fixture", "wait"):
     if len(sys.argv) > 2:
         Path(sys.argv[2]).write_text(str(os.getpid()))
     print("ready", flush=True)
-    while not release.exists():
+    deadline = time.monotonic() + 15
+    while not release.exists() and time.monotonic() < deadline:
         time.sleep(0.02)
-    raise SystemExit(0)
+    raise SystemExit(0 if release.exists() else 1)
 
 print("unknown fixture command path", file=sys.stderr)
 raise SystemExit(2)

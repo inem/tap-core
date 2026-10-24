@@ -332,30 +332,32 @@ def run_freshness_once(root, commands):
     return receipts
 
 
+def _effective_interval(schedule):
+    floor = int(os.environ.get('TAP_MIN_SCHEDULE_SECONDS', 0) or 0)
+    return max(schedule['interval_seconds'], floor)
 # One host, existing provider subprocesses, no additional service or queue store.
-MAX_RUNNING_PACKS = 4
+MAX_RUNNING_PACKS = int(os.environ.get('TAP_MAX_RUNNING_PACKS', 4) or 4)
 DISCOVERY_SECONDS = 10
 POLL_SECONDS = 0.1
 
 
 def _scheduled_snapshot(root, *, account_failures=False):
-    with profile_lock(root):
-        state = read_state(root)
-        active = tasks(root, account=state if account_failures else None)
-        scheduled = [(c, s) for c, s in active if freshness_adapter(c) is None]
-        keys = {task_key(c) for c, _ in scheduled}
-        state['jobs'] = {k: v for k, v in state['jobs'].items() if k in keys}
-        due = []
-        for command, schedule in scheduled:
-            key = task_key(command)
-            previous = state['jobs'].get(key, {})
-            fingerprint = task_fingerprint(command, schedule)
-            same = previous.get('fingerprint') == fingerprint
-            next_at = previous.get('next_at', 0) if same else 0
-            if next_at <= time.time():
-                due.append((next_at, key, fingerprint, command.provider_id))
-        state['checked_at'] = time.time()
-        atomic_json(root / 'state/background.json', state)
+    state = read_state(root)
+    active = tasks(root, account=state if account_failures else None)
+    scheduled = [(c, s) for c, s in active if freshness_adapter(c) is None]
+    keys = {task_key(c) for c, _ in scheduled}
+    state['jobs'] = {k: v for k, v in state['jobs'].items() if k in keys}
+    due = []
+    for command, schedule in scheduled:
+        key = task_key(command)
+        previous = state['jobs'].get(key, {})
+        fingerprint = task_fingerprint(command, schedule)
+        same = previous.get('fingerprint') == fingerprint
+        next_at = previous.get('next_at', 0) if same else 0
+        if next_at <= time.time():
+            due.append((next_at, key, fingerprint, command.provider_id))
+    state['checked_at'] = time.time()
+    atomic_json(root / 'state/background.json', state)
     # Oldest due first: a fast recurring command cannot jump an overdue neighbour.
     return active, sorted(due, key=lambda item: item[0])
 
@@ -372,37 +374,36 @@ def _start_scheduled(root, key, expected_fingerprint, provider_id):
             busy_message=f"Scheduled command from '{provider_id}' is still running"))
         lease = resources.enter_context(command_execution_lock(root, key=provider_id, shared=True,
             busy_message=f"Pack '{provider_id}' is being changed"))
-        with profile_lock(root):
-            current = {task_key(c): (c, s) for c, s in tasks(root)}.get(key)
-            if current is None:
-                return None
-            command, schedule = current
-            fingerprint = task_fingerprint(command, schedule)
-            if fingerprint != expected_fingerprint:
-                return None
-            state = read_state(root)
-            previous = state['jobs'].get(key, {})
-            now = time.time()
-            if previous.get('fingerprint') == fingerprint and previous.get('next_at', 0) > now:
-                return None
-            run_id = hashlib.sha256(f'{key}\0{fingerprint}\0{time.time_ns()}'.encode()).hexdigest()
-            row = {'provider': command.provider_id, 'version': command.provider_version,
-                   'fingerprint': fingerprint, 'run': run_id,
-                   'started_at': now, 'phase': 'running',
-                   'next_at': now + schedule['interval_seconds']}
-            receipt_dir = root / 'state/background-runs' / run_id
-            receipt_dir.mkdir(mode=0o700, parents=True)
-            row['receipt_dir'] = str(receipt_dir)
-            atomic_json(receipt_dir / 'started.json', {
-                'schema': 'tap.background-run/v1', **row, 'command': list(command.path),
-                'trigger': {'kind': 'schedule', 'due_at': previous.get('next_at')
-                            if previous.get('fingerprint') == fingerprint else None,
-                            'schedule': schedule},
-                'implementation': {'path': str(command.root),
-                                   'manifest_sha256': hashlib.sha256((command.root / 'pack.json').read_bytes()).hexdigest()},
-            })
-            state['jobs'][key] = row
-            atomic_json(root / 'state/background.json', state)
+        current = {task_key(c): (c, s) for c, s in tasks(root)}.get(key)
+        if current is None:
+            return None
+        command, schedule = current
+        fingerprint = task_fingerprint(command, schedule)
+        if fingerprint != expected_fingerprint:
+            return None
+        state = read_state(root)
+        previous = state['jobs'].get(key, {})
+        now = time.time()
+        if previous.get('fingerprint') == fingerprint and previous.get('next_at', 0) > now:
+            return None
+        run_id = hashlib.sha256(f'{key}\0{fingerprint}\0{time.time_ns()}'.encode()).hexdigest()
+        row = {'provider': command.provider_id, 'version': command.provider_version,
+               'fingerprint': fingerprint, 'run': run_id,
+               'started_at': now, 'phase': 'running',
+               'next_at': now + _effective_interval(schedule)}
+        receipt_dir = root / 'state/background-runs' / run_id
+        receipt_dir.mkdir(mode=0o700, parents=True)
+        row['receipt_dir'] = str(receipt_dir)
+        atomic_json(receipt_dir / 'started.json', {
+            'schema': 'tap.background-run/v1', **row, 'command': list(command.path),
+            'trigger': {'kind': 'schedule', 'due_at': previous.get('next_at')
+                        if previous.get('fingerprint') == fingerprint else None,
+                        'schedule': schedule},
+            'implementation': {'path': str(command.root),
+                               'manifest_sha256': hashlib.sha256((command.root / 'pack.json').read_bytes()).hexdigest()},
+        })
+        state['jobs'][key] = row
+        atomic_json(root / 'state/background.json', state)
         job = dict(key=key, command=command, schedule=schedule, row=row,
                    process=None, resources=resources, code=None)
         try:
@@ -453,20 +454,19 @@ def _poll_scheduled(job):
 
 def _finish_scheduled(root, job, code):
     row = job['row']
-    with profile_lock(root):
-        state = read_state(root)
-        current = state['jobs'].get(job['key'])
-        if current is None or current.get('run') != row['run']:
-            raise RuntimeError(f"Background run state changed during execution: {job['key']}")
-        now = time.time()
-        row.update(finished_at=now, exit_code=code,
-                   phase='unknown' if code in (124, 130) else 'ok' if code == 0 else 'failed',
-                   next_at=now + job['schedule']['interval_seconds'])
-        atomic_json(Path(row['receipt_dir']) / 'finished.json', {
-            'schema': 'tap.background-run/v1', **row, 'command': list(job['command'].path),
-        })
-        state['jobs'][job['key']] = row
-        atomic_json(root / 'state/background.json', state)
+    state = read_state(root)
+    current = state['jobs'].get(job['key'])
+    if current is None or current.get('run') != row['run']:
+        raise RuntimeError(f"Background run state changed during execution: {job['key']}")
+    now = time.time()
+    row.update(finished_at=now, exit_code=code,
+               phase='unknown' if code in (124, 130) else 'ok' if code == 0 else 'failed',
+               next_at=now + _effective_interval(job['schedule']))
+    atomic_json(Path(row['receipt_dir']) / 'finished.json', {
+        'schema': 'tap.background-run/v1', **row, 'command': list(job['command'].path),
+    })
+    state['jobs'][job['key']] = row
+    atomic_json(root / 'state/background.json', state)
     command = job['command']
     print(stamped('ran %s:%s exit=%s %s' % (
         command.provider_id, '/'.join(command.path), code, row['phase'])), flush=True)

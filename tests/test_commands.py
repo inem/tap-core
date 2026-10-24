@@ -165,6 +165,23 @@ class CommandHostTests(unittest.TestCase):
         self.assertIsNone(call.kwargs["stdout"])
         self.assertIsNone(call.kwargs["stderr"])
 
+    def _cleanup_wait_process(self, process, release, pid_file=None):
+        release.touch()
+        if process.poll() is None:
+            try:
+                process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=3)
+        for stream in (process.stdout, process.stderr):
+            if stream is not None and not stream.closed:
+                stream.close()
+        if pid_file is not None and pid_file.exists():
+            try:
+                os.kill(int(pid_file.read_text()), signal.SIGKILL)
+            except (OSError, ValueError):
+                pass
+
     def test_real_sigint_stops_provider_and_returns_130(self):
         self.install_enable()
         release = self.root / "interrupt-release"
@@ -173,8 +190,7 @@ class CommandHostTests(unittest.TestCase):
              "fixture", "wait", str(release)], text=True,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
-        self.addCleanup(release.touch)
-        self.addCleanup(lambda: process.poll() is None and process.kill())
+        self.addCleanup(self._cleanup_wait_process, process, release)
         self.assertEqual(process.stdout.readline().strip(), "ready")
         process.send_signal(signal.SIGINT)
         _stdout, stderr = process.communicate(timeout=5)
@@ -188,8 +204,7 @@ class CommandHostTests(unittest.TestCase):
              "fixture", "wait", str(release)], text=True,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
-        self.addCleanup(release.touch)
-        self.addCleanup(lambda: process.poll() is None and process.kill())
+        self.addCleanup(self._cleanup_wait_process, process, release)
         self.assertEqual(process.stdout.readline().strip(), "ready")
         alongside = self.run_tap("fixture", "echo", "while-another-runs")
         self.assertEqual(alongside.returncode, 0, alongside.stderr)
@@ -206,8 +221,7 @@ class CommandHostTests(unittest.TestCase):
              "fixture", "wait", str(release)], text=True,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
-        self.addCleanup(release.touch)
-        self.addCleanup(lambda: process.poll() is None and process.kill())
+        self.addCleanup(self._cleanup_wait_process, process, release)
         self.assertEqual(process.stdout.readline().strip(), "ready")
         blocked = self.run_tap("pack", "disable", "fixture.command")
         self.assertEqual(blocked.returncode, 1)
@@ -228,8 +242,7 @@ class CommandHostTests(unittest.TestCase):
              "fixture", "wait", str(release), str(pid_file)], text=True,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
-        self.addCleanup(release.touch)
-        self.addCleanup(lambda: dispatcher.poll() is None and dispatcher.kill())
+        self.addCleanup(self._cleanup_wait_process, dispatcher, release, pid_file)
         self.assertEqual(dispatcher.stdout.readline().strip(), "ready")
         provider_pid = int(pid_file.read_text())
         dispatcher.terminate()
