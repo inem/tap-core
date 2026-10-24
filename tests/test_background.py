@@ -760,3 +760,56 @@ class BackgroundTests(unittest.TestCase):
             with self.assertRaisesRegex(TapError, 'did not unload'):
                 background.reconcile(self.profile, adapter)
         self.assertNotIn('bootstrap', [c.args[0][1] for c in adapter.run.call_args_list])
+
+    def with_capture_trigger(self, **capture):
+        declaration = self.manifest['entrypoints']['command']['commands'][0]
+        declaration['trigger'] = {'capture': {'origins': ['https://fixture.example'], **capture},
+                                  'debounce_ms': 0, 'min_interval_seconds': 1}
+        declaration['schedule'] = {'timeout_seconds': 5}
+
+    def test_capture_trigger_validation(self):
+        self.with_capture_trigger(path_prefixes={'https://fixture.example': ['/api/']})
+        validate_manifest(self.manifest, self.source)
+        from tap_core.packs import command_schedule
+        trigger = command_schedule(self.manifest['entrypoints']['command']['commands'][0])['trigger']
+        self.assertEqual(trigger['capture'], {'origins': ['https://fixture.example'],
+                                              'path_prefixes': {'https://fixture.example': ['/api/']}})
+        self.assertNotIn('watch', trigger)
+        for change in ({'origins': []}, {'origins': ['https://elsewhere.example']},
+                       {'origins': ['https://fixture.example/']},
+                       {'path_prefixes': {'https://other.example': ['/a']}},
+                       {'path_prefixes': {'https://fixture.example': ['api']}}, {'extra': 1}):
+            bad = copy.deepcopy(self.manifest)
+            bad['entrypoints']['command']['commands'][0]['trigger']['capture'].update(change)
+            with self.assertRaises(PackError, msg=change):
+                validate_manifest(bad, self.source)
+        empty = copy.deepcopy(self.manifest)
+        empty['entrypoints']['command']['commands'][0]['trigger'] = {'debounce_ms': 0}
+        with self.assertRaisesRegex(PackError, 'watch and/or capture'):
+            validate_manifest(empty, self.source)
+
+    def test_resident_host_runs_a_capture_triggered_command_only_for_matching_records(self):
+        from tap_core.routes import RouteTable
+        from test_records_journal import capture_record
+        self.with_capture_trigger(path_prefixes={'https://fixture.example': ['/api/']})
+        self.install()
+        self.serve(background.PathWatch)
+        self.assertTrue(self.wait_for(lambda: len(self.runs()) == 1))
+        self.assertTrue(self.wait_for(lambda: (self.profile / 'state/routes/background.json').exists()))
+        host = json.loads((self.profile / 'state/background-host.json').read_text())
+        self.assertEqual(list(host['captures'].values())[0]['state'], 'routed')
+        time.sleep(1.2)  # past min_interval_seconds
+        table = RouteTable(self.profile / 'state')
+        self.addCleanup(table.close)
+
+        def record(url):
+            value = capture_record()
+            value['url'] = url
+            return value
+
+        self.assertEqual(table.notify(record('https://fixture.example/telemetry')), 0)
+        self.assertEqual(table.notify(record('https://other.example/api/x')), 0)
+        time.sleep(0.5)
+        self.assertEqual(len(self.runs()), 1)
+        self.assertEqual(table.notify(record('https://fixture.example/api/usage')), 1)
+        self.assertTrue(self.wait_for(lambda: len(self.runs()) == 2))

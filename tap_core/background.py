@@ -17,6 +17,7 @@ from tap_core.runtime import TapError, atomic_json, command_execution_lock, prof
 from tap_core.pack_store import PackStore
 from tap_core.packs import PackError, command_schedule
 from tap_core.fs_watch import PathWatch, WatchUnavailable, expand
+from tap_core import routes
 from tap_core.commands import discover, _run_pack, _start_pack
 from tap_core import freshness_policy
 
@@ -637,11 +638,12 @@ def _trigger_ready(trigger, pending, previous, now_wall, now):
     return max(quiet, floor)
 
 
-def serve(root, stop=None, watch_factory=PathWatch):
-    """Run the scheduler resident, with watch triggers, until ``stop`` is set.
+def serve(root, stop=None, watch_factory=PathWatch, listener_factory=routes.WakeListener):
+    """Run the scheduler resident, with watch and capture triggers, until ``stop`` is set.
 
-    Watches are host observations only: a change marks its task pending; the
-    same `_run_cycle` used by the periodic tick starts it.
+    Watches and capture notifications are host observations only: a file change
+    or a captured record matching a task's trigger marks it pending; the same
+    `_run_cycle` used by the periodic tick starts it.
     """
     root = Path(root).resolve()
     stop = stop or threading.Event()
@@ -651,6 +653,7 @@ def serve(root, stop=None, watch_factory=PathWatch):
     watches = {}     # task key -> (paths, watcher or None, error)
     triggers = {}
     fallback_at = {}
+    capture = {'listener': None, 'error': None, 'published': None}
     mark = _code_mark()
     started_at = time.time()
 
@@ -663,12 +666,22 @@ def serve(root, stop=None, watch_factory=PathWatch):
             changed.set()
         return mark_pending
 
+    def on_targets(targets):
+        for target in targets:
+            if target.startswith('command:'):
+                changed_paths(target[len('command:'):])(None)
+
+    def capture_polling(key):
+        return 'capture' in triggers.get(key, {}) and capture['listener'] is None
+
     def take_wake():
         now, now_wall = time.monotonic(), time.time()
         jobs = read_state(root).get('jobs', {})
         with guard:
-            for key, (_, watcher, _) in watches.items():
-                if watcher is None and key in triggers and now >= fallback_at.get(key, 0):
+            polled = {key for key, (_, watcher, _) in watches.items() if watcher is None}
+            polled |= {key for key in triggers if capture_polling(key)}
+            for key in polled:
+                if key in triggers and now >= fallback_at.get(key, 0):
                     pending.setdefault(key, (now, now))
                     fallback_at[key] = now + WATCH_FALLBACK_SECONDS
             ready = {key for key, times in pending.items() if key in triggers
@@ -701,12 +714,13 @@ def serve(root, stop=None, watch_factory=PathWatch):
                 for key in list(watches):
                     paths, watcher, _ = watches[key]
                     wanted = triggers.get(key)
-                    if wanted is None or tuple(expand(p, root) for p in wanted['watch']) != paths:
+                    if wanted is None or 'watch' not in wanted \
+                            or tuple(expand(p, root) for p in wanted['watch']) != paths:
                         if watcher is not None:
                             watcher.close()
                         del watches[key]
                 for key, trigger in triggers.items():
-                    if key in watches:
+                    if 'watch' not in trigger or key in watches:
                         continue
                     paths = tuple(expand(p, root) for p in trigger['watch'])
                     try:
@@ -715,12 +729,31 @@ def serve(root, stop=None, watch_factory=PathWatch):
                         watches[key] = (paths, None, str(error))
                         print(stamped('background: watch unavailable for %s (%s); polling every %ds' % (
                             key, error, WATCH_FALLBACK_SECONDS)), file=sys.stderr, flush=True)
+                captured = {key: trigger['capture'] for key, trigger in triggers.items() if 'capture' in trigger}
+                if captured and capture['listener'] is None and capture['error'] is None:
+                    try:
+                        capture['listener'] = listener_factory(
+                            routes.socket_path(root / 'state', 'background'), on_targets).start()
+                    except OSError as error:
+                        capture['error'] = str(error)
+                        print(stamped('background: capture routing unavailable (%s); capture triggers '
+                                      'poll every %ds' % (error, WATCH_FALLBACK_SECONDS)),
+                              file=sys.stderr, flush=True)
+                if capture['listener'] is not None and captured != capture['published']:
+                    routes.publish(root / 'state', 'background', {
+                        'command:' + key: {'origins': spec['origins'], 'path_prefixes': spec['path_prefixes']}
+                        for key, spec in captured.items()}, capture['listener'].path)
+                    capture['published'] = captured
                 atomic_json(_host_path(root), {
                     'version': 1, 'mode': 'resident', 'pid': os.getpid(), 'started_at': started_at,
                     'updated_at': time.time(),
                     'watches': {key: {'paths': list(paths), 'state': 'watching' if watcher else 'polling',
                                       'error': error}
-                                for key, (paths, watcher, error) in sorted(watches.items())}})
+                                for key, (paths, watcher, error) in sorted(watches.items())},
+                    'captures': {key: {'origins': spec['origins'],
+                                       'state': 'routed' if capture['listener'] else 'polling',
+                                       'error': capture['error']}
+                                 for key, spec in sorted(captured.items())}})
 
                 # Sleep until the earliest interval deadline, pending trigger or bound.
                 now, now_wall = time.monotonic(), time.time()
@@ -743,6 +776,9 @@ def serve(root, stop=None, watch_factory=PathWatch):
                     for key, (_, watcher, _) in watches.items():
                         if watcher is None:
                             deadline = min(deadline, fallback_at.get(key, now))
+                    for key in triggers:
+                        if capture_polling(key):
+                            deadline = min(deadline, fallback_at.get(key, now))
                 # A floor keeps a busy lease or a past deadline from spinning.
                 deadline = max(deadline, time.monotonic() + (1.0 if leftover else 0.2))
                 # One-second slices only so an embedding caller's `stop` is seen;
@@ -755,6 +791,9 @@ def serve(root, stop=None, watch_factory=PathWatch):
             for _, watcher, _ in watches.values():
                 if watcher is not None:
                     watcher.close()
+            if capture['listener'] is not None:
+                routes.withdraw(root / 'state', 'background')
+                capture['listener'].close()
 
 
 BOOTOUT_WAIT_SECONDS = 10
