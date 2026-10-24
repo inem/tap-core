@@ -506,3 +506,16 @@ class BackgroundTests(unittest.TestCase):
             os.killpg(pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+
+    def test_each_scheduled_run_leaves_started_and_finished_receipts(self):
+        self.install()
+        background.run_once(self.profile)
+        row = next(iter(background.read_state(self.profile)['jobs'].values()))
+        receipt = Path(row['receipt_dir'])
+        self.assertEqual(receipt.parent, (self.profile / 'state/background-runs').resolve())
+        started = json.loads((receipt / 'started.json').read_text())
+        finished = json.loads((receipt / 'finished.json').read_text())
+        self.assertEqual(started['schema'], 'tap.background-run/v1')
+        self.assertEqual((started['trigger']['kind'], started['run']), ('schedule', row['run']))
+        self.assertEqual(len(started['implementation']['manifest_sha256']), 64)
+        self.assertEqual((finished['exit_code'], finished['phase']), (0, 'ok'))

@@ -18,6 +18,7 @@ CORE_PROVIDER_VERSION = "development"
 CORE_ROOTS = frozenset({
     "install", "on", "off", "status", "doctor", "where", "uninstall",
     "routing", "components", "bridge", "reader", "pack", "pages", "page", "dev",
+    "capture",
 })
 
 
@@ -239,7 +240,7 @@ def _private_runtime_directory(store, path):
     return path
 
 
-def _start_pack(command, profile_root, argv, lease_fd=None, timeout=None, log=None, extra_fds=()):
+def _start_pack(command, profile_root, argv, lease_fd=None, timeout=None, log=None, extra_fds=(), execution=None):
     """Start the existing command provider; the caller owns wait/timeout cleanup."""
     from .pack_store import PackStore
     profile_root = Path(profile_root).expanduser().resolve()
@@ -260,6 +261,8 @@ def _start_pack(command, profile_root, argv, lease_fd=None, timeout=None, log=No
         "config": command.config, "grants": command.grants,
         "runtime": command.runtime,
     }
+    if execution is not None:
+        context["execution"] = execution
     environment = dict(os.environ)
     environment.update({
         "TAP_COMMAND_CONTEXT": json.dumps(context, separators=(",", ":")),
