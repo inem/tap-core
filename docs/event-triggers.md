@@ -135,5 +135,31 @@ invocation per pass. Each admitted record is still one child process
 (`python-jsonl-v1`). Batching records per process is a protocol change and is
 not part of this change.
 
+## Connecting an existing operation (e.g. a launchd `WatchPaths` binding)
+
+The contract, on these branches only (not in an installed Core yet):
+
+| Step | What Core provides |
+|---|---|
+| Declaration | An installed **pack command** with `schedule.timeout_seconds` and `trigger`. `trigger.watch` takes 1–16 paths, each watched recursively. #276 adds `trigger.capture`. |
+| Relevant event | FSEvents on the watched paths, with debounce and `min_interval_seconds`. With #276, also captured records matching `trigger.capture`. |
+| Operation | The command runs as `process-argv-v1` under the pack's execution lease, with the normal command context. |
+| Result / error | Each run writes `state/background-runs/<run>/started.json` and `finished.json` (`tap.background-run/v1`: trigger kind, exit code, phase). It has a per-command log under `logs/background/`. Each watch's state (`watching` / `polling` + error) is in `state/background-host.json`, `tap status` and `tap doctor`. |
+
+Not covered, so these are holes rather than hidden behaviour:
+
+1. **Only pack commands.** A standalone script must be packaged as a command pack to use this.
+2. **Static watch sets.** `trigger.watch` is fixed per pack version. An operation whose sources come from its own catalog can't update the list without a new pack version, and nothing records when catalog and declaration diverge.
+3. **Own outputs.** Only the host's own state and log writes are ignored. A command whose outputs land inside its watched paths re-triggers itself, bounded by `min_interval_seconds`.
+
+Replacing an interim native binding (such as launchd `WatchPaths` with `RunAtLoad` and no resident process) is warranted only when all of these hold:
+
+- the installed Core accepts `trigger` and runs the resident host (`tap status` → `background.host.mode == "resident"`);
+- the operation is a pack command;
+- its whole watch set fits a static declaration, or Core supports derived watch sets;
+- its outputs are outside the watched paths.
+
+Until then the native binding is the honest choice, provided its drift from the derived watch set is checked.
+
 Stage-2 measurements are in [results/reactive-routing-2026-10-24.md](results/reactive-routing-2026-10-24.md). Measurements and the per-pack recommendations for stage 1 are in
 [results/event-triggers-2026-10-24.md](results/event-triggers-2026-10-24.md).
