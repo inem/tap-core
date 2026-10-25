@@ -2,11 +2,14 @@ import contextlib
 import copy
 import io
 import json
+import os
 from pathlib import Path
 import re
 import shutil
 import tempfile
+import sys
 import threading
+import time
 import unittest
 from unittest.mock import patch, Mock
 from tap_core import background
@@ -484,3 +487,296 @@ class BackgroundTests(unittest.TestCase):
         record = background.read_state(self.profile)['verify_failures']['fixture.command']
         self.assertEqual(record['count'], 1)
         self.assertEqual(record['error'], 'installed code unreadable')
+
+    # Watch triggers: a resident host runs a command when watched paths change.
+
+    def with_trigger(self, **trigger):
+        declaration = self.manifest['entrypoints']['command']['commands'][0]
+        declaration['trigger'] = {'watch': [str(self.root / 'watched')], 'debounce_ms': 0,
+                                  'min_interval_seconds': 1, **trigger}
+        declaration['schedule'] = {'timeout_seconds': 5}
+
+    def runs(self):
+        path = self.profile / 'data/packs/fixture.command/runs'
+        return path.read_text().splitlines() if path.exists() else []
+
+    def test_trigger_manifest_bounds_and_defaults(self):
+        from tap_core.packs import command_schedule, TRIGGER_BACKSTOP_SECONDS
+        declaration = self.manifest['entrypoints']['command']['commands'][0]
+        # Without a trigger the schedule is unchanged, so existing fingerprints hold.
+        self.assertIs(command_schedule(declaration), declaration['schedule'])
+        bad = copy.deepcopy(self.manifest)
+        del bad['entrypoints']['command']['commands'][0]['schedule']['interval_seconds']
+        with self.assertRaisesRegex(PackError, 'interval_seconds'):
+            validate_manifest(bad, self.source)
+        self.with_trigger()
+        validate_manifest(self.manifest, self.source)
+        effective = command_schedule(self.manifest['entrypoints']['command']['commands'][0])
+        self.assertEqual(effective['interval_seconds'], TRIGGER_BACKSTOP_SECONDS)
+        self.assertEqual(effective['trigger']['min_interval_seconds'], 1)
+        minimal = copy.deepcopy(self.manifest)
+        minimal['entrypoints']['command']['commands'][0]['trigger'] = {'watch': ['~/.claude/projects']}
+        validate_manifest(minimal, self.source)
+        self.assertEqual(command_schedule(minimal['entrypoints']['command']['commands'][0])['trigger'],
+                         {'watch': ['~/.claude/projects'], 'debounce_ms': 500, 'min_interval_seconds': 10})
+        for change in ({'watch': []}, {'watch': ['../escape']}, {'watch': ['data/../x']},
+                       {'watch': ['']}, {'watch': ['a\x00b']}, {'debounce_ms': -1},
+                       {'debounce_ms': 60001}, {'min_interval_seconds': 0}, {'unknown': 1}):
+            bad = copy.deepcopy(self.manifest)
+            bad['entrypoints']['command']['commands'][0]['trigger'].update(change)
+            with self.assertRaises(PackError, msg=change):
+                validate_manifest(bad, self.source)
+        orphan = copy.deepcopy(self.manifest)
+        del orphan['entrypoints']['command']['commands'][0]['schedule']
+        with self.assertRaisesRegex(PackError, 'requires command.schedule'):
+            validate_manifest(orphan, self.source)
+
+    def test_wake_runs_a_task_before_its_interval_and_only_that_task(self):
+        self.with_trigger()
+        self.install()
+        background.run_once(self.profile)
+        background.run_once(self.profile)
+        self.assertEqual(self.runs(), ['0.1.0'])
+        key = 'fixture.command:' + ' '.join(self.manifest['entrypoints']['command']['commands'][0]['path'])
+        background.run_once(self.profile, wake={'other:task'})
+        self.assertEqual(len(self.runs()), 1)
+        active = background.run_once(self.profile, wake={key})
+        self.assertEqual(len(self.runs()), 2)
+        self.assertEqual([background.task_key(command) for command, _ in active], [key])
+        row = background.read_state(self.profile)['jobs'][key]
+        self.assertGreater(row['next_at'] - row['finished_at'], 3000)  # backstop interval
+
+    def serve(self, factory):
+        stop = threading.Event()
+        thread = threading.Thread(target=background.serve, args=(self.profile, stop, factory), daemon=True)
+        thread.start()
+        def finish():
+            stop.set()
+            thread.join(10)
+            self.assertFalse(thread.is_alive())
+        self.addCleanup(finish)
+        return stop
+
+    def wait_for(self, predicate, timeout=10):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline and not predicate():
+            time.sleep(0.02)
+        return predicate()
+
+    def test_resident_host_runs_once_per_debounced_burst_with_a_floor(self):
+        self.with_trigger(debounce_ms=200, min_interval_seconds=1)
+        self.install()
+        callbacks, closed = [], []
+
+        class FakeWatch:
+            def __init__(self, paths, on_change):
+                self.paths = paths
+                callbacks.append(on_change)
+            def start(self):
+                return self
+            def close(self):
+                closed.append(self.paths)
+
+        bound = patch.object(background, 'RESIDENT_MAX_SLEEP_SECONDS', 1)
+        bound.start()
+        self.addCleanup(bound.stop)
+        stop = self.serve(FakeWatch)
+        self.assertTrue(self.wait_for(lambda: callbacks and len(self.runs()) == 1))
+        host = json.loads((self.profile / 'state/background-host.json').read_text())
+        self.assertEqual(list(host['watches'].values())[0]['state'], 'watching')
+        self.assertEqual(background.status(self.profile)['host']['mode'], 'resident')
+        started = time.monotonic()
+        for _ in range(5):  # one burst
+            callbacks[-1](['changed'])
+            time.sleep(0.02)
+        self.assertTrue(self.wait_for(lambda: len(self.runs()) == 2))
+        self.assertGreaterEqual(time.monotonic() - started, 0.2)  # debounced
+        time.sleep(1.0)
+        self.assertEqual(len(self.runs()), 2)  # one run per burst, no interval rerun
+        callbacks[-1](['changed'])  # right after a run: held to min_interval, then runs
+        self.assertTrue(self.wait_for(lambda: len(self.runs()) == 3))
+        self.store.disable('fixture.command')
+        self.assertTrue(self.wait_for(lambda: closed))  # pack changes picked up within the bound
+        stop.set()
+
+    def test_resident_host_polls_when_the_os_watch_is_unavailable(self):
+        self.with_trigger()
+        self.install()
+
+        class Unavailable:
+            def __init__(self, paths, on_change):
+                pass
+            def start(self):
+                raise background.WatchUnavailable('no FSEvents here')
+
+        with patch.object(background, 'WATCH_FALLBACK_SECONDS', 1), \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            self.serve(Unavailable)
+            self.assertTrue(self.wait_for(lambda: len(self.runs()) >= 2))
+        self.assertIn('watch unavailable', err.getvalue())
+        host = json.loads((self.profile / 'state/background-host.json').read_text())
+        watch = list(host['watches'].values())[0]
+        self.assertEqual((watch['state'], watch['error']), ('polling', 'no FSEvents here'))
+
+    def test_resident_host_runs_on_a_real_filesystem_change(self):
+        if sys.platform != 'darwin':
+            self.skipTest('FSEvents is a macOS boundary')
+        watched = self.root / 'watched'
+        watched.mkdir()
+        self.with_trigger(min_interval_seconds=1)
+        self.install()
+        self.serve(background.PathWatch)
+        self.assertTrue(self.wait_for(lambda: len(self.runs()) == 1))
+        time.sleep(1.2)
+        (watched / 'session.jsonl').write_text('{}\n')
+        self.assertTrue(self.wait_for(lambda: len(self.runs()) == 2))
+
+    def test_resident_host_exits_when_core_code_changes(self):
+        self.install()
+        marks = iter([('a',), ('b',)])
+        with patch.object(background, '_code_mark', side_effect=lambda: next(marks)), \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            background.serve(self.profile, threading.Event())
+        self.assertIn('core code changed', out.getvalue())
+
+    def test_registration_is_a_resident_keepalive_agent(self):
+        import plistlib
+        self.install()
+        adapter = Mock()
+        adapter.run.return_value.returncode = 1
+        plist = self.root / 'job.plist'
+        with patch.object(background, 'paths', return_value=('fixture.job', plist)):
+            background.reconcile(self.profile, adapter)
+        value = plistlib.loads(plist.read_bytes())
+        self.assertTrue(value['KeepAlive'])
+        self.assertNotIn('StartInterval', value)
+        self.assertEqual(value['ProgramArguments'][-1], '--resident')
+
+    def test_coalescing_runs_an_interval_job_slightly_early_only_when_asked(self):
+        self.install()
+        background.run_once(self.profile)
+        key = next(iter(background.read_state(self.profile)['jobs']))
+        state = background.read_state(self.profile)
+        state['jobs'][key]['next_at'] = time.time() + 1.5
+        background.atomic_json(self.profile / 'state/background.json', state)
+        background.run_once(self.profile)
+        self.assertEqual(len(self.runs()), 1)
+        background.run_once(self.profile, early=2)
+        self.assertEqual(len(self.runs()), 2)
+
+    def test_verify_memo_rehashes_after_any_content_change(self):
+        self.install()
+        background.tasks(self.profile)
+        with patch('tap_core.pack_store._tree_hashes', side_effect=AssertionError('rehashed')):
+            self.assertEqual(len(background.tasks(self.profile)), 1)  # unchanged tree: memo
+        time.sleep(0.01)
+        self.tamper('fixture.command', '0.1.0')
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(background.tasks(self.profile, account={}), [])  # drift is still caught
+
+    def test_replacing_a_loaded_agent_waits_for_its_bootout_before_bootstrap(self):
+        self.install()
+        plist = self.root / 'job.plist'
+        plist.write_bytes(b'old StartInterval agent')
+        calls = []
+        # launchd still reports the old job twice after bootout, then it is gone.
+        print_results = iter([0, 0, 0, 113, 113])
+
+        def run(argv, check=True):
+            calls.append(argv[1])
+            return Mock(returncode=next(print_results) if argv[1] == 'print' else 0)
+
+        adapter = Mock(run=Mock(side_effect=run))
+        with patch.object(background, 'paths', return_value=('fixture.job', plist)), \
+                patch.object(background.time, 'sleep'):
+            background.reconcile(self.profile, adapter)
+        self.assertEqual(calls, ['print', 'bootout', 'print', 'print', 'print', 'print', 'bootstrap'])
+
+    def test_replaced_agent_that_never_unloads_is_reported_not_left_unloaded(self):
+        self.install()
+        plist = self.root / 'job.plist'
+        plist.write_bytes(b'old StartInterval agent')
+        adapter = Mock()
+        adapter.run.return_value.returncode = 0  # never unloads
+        with patch.object(background, 'paths', return_value=('fixture.job', plist)), \
+                patch.object(background, 'BOOTOUT_WAIT_SECONDS', 0.05), \
+                patch.object(background.time, 'sleep'):
+            with self.assertRaisesRegex(TapError, 'did not unload'):
+                background.reconcile(self.profile, adapter)
+        self.assertNotIn('bootstrap', [c.args[0][1] for c in adapter.run.call_args_list])
+
+    def test_event_storm_during_debounce_does_not_run_a_pass_per_event(self):
+        self.with_trigger(debounce_ms=1000, min_interval_seconds=1)
+        self.install()
+        callbacks = []
+
+        class FakeWatch:
+            def __init__(self, paths, on_change):
+                callbacks.append(on_change)
+            def start(self):
+                return self
+            def close(self):
+                pass
+
+        passes = []
+        real_run_once = background.run_once
+
+        def counting_run_once(*args, **kwargs):
+            passes.append(time.monotonic())
+            return real_run_once(*args, **kwargs)
+
+        with patch.object(background, 'run_once', side_effect=counting_run_once):
+            self.serve(FakeWatch)
+            self.assertTrue(self.wait_for(lambda: callbacks and len(self.runs()) == 1))
+            time.sleep(1.2)
+            before = len(passes)
+            for _ in range(50):  # a burst inside one debounce window
+                callbacks[-1]([str(self.root / 'watched/file')])
+                time.sleep(0.01)
+            self.assertTrue(self.wait_for(lambda: len(self.runs()) == 2))
+            time.sleep(0.5)
+        self.assertLessEqual(len(passes) - before, 2)
+        self.assertEqual(len(self.runs()), 2)
+
+    def test_the_hosts_own_state_writes_never_trigger_a_run(self):
+        self.with_trigger(debounce_ms=0, min_interval_seconds=1)
+        self.install()
+        callbacks = []
+
+        class FakeWatch:
+            def __init__(self, paths, on_change):
+                callbacks.append(on_change)
+            def start(self):
+                return self
+            def close(self):
+                pass
+
+        self.serve(FakeWatch)
+        self.assertTrue(self.wait_for(lambda: callbacks and len(self.runs()) == 1))
+        time.sleep(1.2)
+        own = os.path.realpath(self.profile)
+        for _ in range(20):
+            callbacks[-1]([own + '/state/background.json', own + '/logs/background/abc.log'])
+        time.sleep(1.5)
+        self.assertEqual(len(self.runs()), 1)
+
+    def test_a_watch_on_a_path_created_later_is_moved_onto_it(self):
+        if sys.platform != 'darwin':
+            self.skipTest('FSEvents is a macOS boundary')
+        target = self.root / 'later' / 'sessions'
+        self.with_trigger(watch=[str(target)], min_interval_seconds=1)
+        self.install()
+        bound = patch.object(background, 'RESIDENT_MAX_SLEEP_SECONDS', 1)
+        bound.start()
+        self.addCleanup(bound.stop)
+        self.serve(background.PathWatch)
+        host = lambda: json.loads((self.profile / 'state/background-host.json').read_text())
+        self.assertTrue(self.wait_for(lambda: (self.profile / 'state/background-host.json').exists()))
+        self.assertEqual(list(host()['watches'].values())[0]['roots'], [os.path.realpath(self.root)])
+        target.mkdir(parents=True)
+        real = os.path.realpath(target)
+        self.assertTrue(self.wait_for(lambda: list(host()['watches'].values())[0]['roots'] == [real]))
+        runs = len(self.runs())
+        time.sleep(1.2)
+        (target / 'a.jsonl').write_text('{}\n')
+        self.assertTrue(self.wait_for(lambda: len(self.runs()) > runs))

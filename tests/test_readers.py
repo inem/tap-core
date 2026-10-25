@@ -125,6 +125,73 @@ class ReaderTests(unittest.TestCase):
         self.reader.run(self.spec, allowed_origins=allowed)
         self.assertEqual(self.outputs(self.reader), [18, 19])
 
+    def test_path_prefixes_filter_within_an_origin_without_running_child(self):
+        records = self.write('A', 'B', 'C', 'D')
+        records[0]['url'] = 'https://fixture.example/telemetry/ping'
+        records[1]['url'] = 'https://fixture.example/api/usage?x=1'
+        records[2]['url'] = 'https://other.example/anything'
+        records[3]['url'] = 'https://fixture.example/apiary'  # prefix match is plain startswith
+        self.stream.write_bytes(b''.join(encoded(record) for record in records))
+        origins = frozenset({'https://fixture.example', 'https://other.example'})
+        prefixes = {'https://fixture.example': ('/api/',)}  # other.example: all paths
+        result = self.reader.run(self.spec, allowed_origins=origins, path_prefixes=prefixes)
+        self.assertEqual(result['completed_this_run'], 4)
+        self.assertEqual(self.outputs(self.reader), ['B', 'C'])
+        self.assertEqual(self.reader.load()['processed'], 4)
+        self.assertTrue(readers.record_admitted({'url': 'https://fixture.example/api/x'}, None, prefixes))
+        self.assertFalse(readers.record_admitted({'url': 'https://fixture.example/x'}, None, prefixes))
+        self.assertTrue(readers.record_admitted({'url': 'https://elsewhere.example/x'}, None, prefixes))
+
+    def test_filtered_records_do_not_write_a_checkpoint_each(self):
+        records = self.write(*range(40))
+        for record in records[:39]:
+            record['url'] = 'https://unrelated.example/data'
+        self.stream.write_bytes(b''.join(encoded(record) for record in records))
+        allowed = frozenset({'https://fixture.example'})
+        writes = []
+        real_save = readers.save
+        with patch.object(readers, 'save', side_effect=lambda path, value: (writes.append(path), real_save(path, value))):
+            result = self.reader.run(self.spec, max_records=500, allowed_origins=allowed)
+        self.assertEqual(result['completed_this_run'], 40)
+        self.assertEqual(self.outputs(self.reader), [39])
+        checkpoint_writes = [path for path in writes if path == self.reader.checkpoint]
+        self.assertLessEqual(len(checkpoint_writes), 4)  # initial, running, acknowledged, idle
+        state = self.reader.load()
+        self.assertEqual((state['processed'], state['phase']), (40, 'idle'))
+        self.assertEqual(self.reader.run(self.spec, allowed_origins=allowed)['completed_this_run'], 0)
+
+    def test_filtered_progress_survives_a_stop_at_the_next_checkpoint(self):
+        records = self.write(*range(5))
+        for record in records:
+            record['url'] = 'https://unrelated.example/data'
+        self.stream.write_bytes(b''.join(encoded(record) for record in records))
+        allowed = frozenset({'https://fixture.example'})
+        calls = iter([False, False, True])
+        with self.assertRaises(ReaderError):
+            self.reader.run(self.spec, allowed_origins=allowed, cancelled=lambda: next(calls, True))
+        # Two filtered records were advanced and persisted with the failure.
+        self.assertEqual(self.reader.load()['processed'], 2)
+        self.assertEqual(self.reader.run(self.spec, allowed_origins=allowed)['completed_this_run'], 3)
+
+    def test_reader_input_manifest_requires_granted_origins_and_paths(self):
+        from tap_core.packs import PackError, validate_manifest
+        source = ROOT / 'fixtures/packs/reader'
+        manifest = json.loads((source / 'pack.json').read_text())
+        manifest['entrypoints']['reader']['input'] = {
+            'path_prefixes': {'https://fixture.example': ['/api/', '/v1/code/sessions/']}}
+        validate_manifest(manifest, source)
+        for prefixes in ({'https://elsewhere.example': ['/api/']}, {'https://fixture.example': []},
+                         {'https://fixture.example': ['api/']}, {'https://fixture.example': ['/a?b']},
+                         {'https://fixture.example/': ['/api/']}, {}):
+            bad = json.loads(json.dumps(manifest))
+            bad['entrypoints']['reader']['input'] = {'path_prefixes': prefixes}
+            with self.assertRaises(PackError, msg=prefixes):
+                validate_manifest(bad, source)
+        bad = json.loads(json.dumps(manifest))
+        bad['entrypoints']['reader']['input']['origins'] = []
+        with self.assertRaises(PackError):
+            validate_manifest(bad, source)
+
     def test_record_origin_normalizes_default_ports_and_rejects_bad_urls(self):
         self.assertEqual(record_origin({'url': 'https://FiXtUrE.Example:443/data'}),
                          'https://fixture.example')

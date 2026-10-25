@@ -97,7 +97,11 @@ class DoctorOutputTests(unittest.TestCase):
                                        "tap.intake": {"version": "0.7.8",
                                                       "quarantined": True,
                                                       "error": "__pycache__ changed file set"}
-                                   }})
+                                   },
+                                   "host": {"mode": "resident", "watches": {
+                                       "claude.sessions:claude refresh": {"state": "polling",
+                                                                          "error": "no FSEvents"},
+                                       "kimi.sessions:kimi refresh": {"state": "watching"}}}})
         code, output, error = self.invoke(value)
         self.assertEqual((code, error), (1, ""))
         self.assertIn("Reasons", output)
@@ -106,6 +110,7 @@ class DoctorOutputTests(unittest.TestCase):
         self.assertIn("CA trust: not verified", output)
         self.assertIn("bridge: Hub/control liveness was not checked", output)
         self.assertIn("background: quarantined packs: tap.intake", output)
+        self.assertIn("background: watch unavailable, polling instead: claude.sessions:claude refresh", output)
         self.assertIn("pack integrity: quarantined after verify failures: tap.intake@0.7.8", output)
 
     def test_dead_hub_and_router_are_explicit_actionable_reasons(self):
