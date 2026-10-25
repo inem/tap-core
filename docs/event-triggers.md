@@ -51,14 +51,63 @@ as `watching` or `polling` with its error. `tap status` shows it under
 `background.host`, and `tap doctor` names polling tasks. The file is the host's
 last observation, not proof that it is alive.
 
-## Readers wake on stream growth
+## Readers are woken by capture, only for their own records
 
-Component-controller readers no longer loop every 0.25 s. They block on a kqueue
-watch of `data/stream.jsonl` (write/extend/rename/delete) and its directory
-(rotation creates a new file), with a 30 s backstop. While records are pending,
-runs repeat without sleeping. Scans start at most every 0.25 s, the former
-cadence, so a busy stream costs no more than before. Without kqueue the former
-0.25 s loop is used, and the controller log says so.
+Capture routes notifications instead of every reader watching one shared
+stream.
+
+1. The component controller publishes `state/routes/components.json`. It
+   lists one target per reader, `reader:<name>`, with the reader's granted
+   origins and its `input.path_prefixes`, plus the path of a Unix datagram
+   socket the controller listens on.
+2. After the capture writer appends a record to `stream.jsonl`, it matches the
+   record against every published route. It sends each owner whose targets
+   match one datagram `{"v": 1, "targets": [...]}`. Matching is
+   `routes.record_matches`, the same function a reader's own filter uses.
+3. Each reader waits on its own wake event, which is cleared at the start of
+   every pass. An irrelevant record never wakes it. A relevant one starts a
+   pass at once; there is no idle floor.
+
+A notification is only a hint. Sending it never blocks or fails capture, and a
+reader always reads from its own cursor:
+
+- **Missed notification** (controller restarting, socket full): delays work
+  until the next notification for that reader or the backstop. No record is
+  lost.
+- **Startup and every reader attach:** catch up from the cursor first. Routes
+  are published before a reader starts. One extra pass 2.5 s after attaching
+  covers capture's 1 s route reload.
+- **Backstop:** 180 s.
+- **No bindable socket:** the controller falls back to the stream-growth wait
+  (kqueue) with its 1.5 s floor, and logs it.
+
+The socket path is `state/wake/<owner>.sock`. When that is longer than
+`sun_path` allows, a private per-profile directory under the system temp
+directory is used; the routes file records whichever applies.
+
+A scan is cheap. The journal identifies a segment by its first record, and
+caches that per file `(dev, inode)`. It revalidates the cache with two small
+reads, not by re-reading a first record that can be megabytes.
+
+## Command trigger: capture
+
+A scheduled command can also be started by captured traffic:
+
+```json
+"trigger": {"capture": {"origins": ["https://gemini.google.com"],
+                        "path_prefixes": {"https://gemini.google.com": ["/_/BardChatUi/"]}},
+            "debounce_ms": 3000, "min_interval_seconds": 60}
+```
+
+- `capture.origins`: 1–64 exact origins, each granted in `access.origins`.
+- `capture.path_prefixes`: optional, keyed by one of those origins.
+- A trigger needs `watch`, `capture` or both.
+- The resident background host publishes `state/routes/background.json` (targets
+  `command:<task key>`) and listens on its own socket.
+- A matching record marks the task pending, exactly like a file change. Debounce,
+  `min_interval_seconds` and the backstop interval apply.
+- Without a socket, capture-triggered tasks poll every 60 s. `status` lists
+  them under `background.host.captures`, and `doctor` names them.
 
 ## Reader input: path prefixes and batch
 
@@ -86,5 +135,31 @@ invocation per pass. Each admitted record is still one child process
 (`python-jsonl-v1`). Batching records per process is a protocol change and is
 not part of this change.
 
-Measurements and the per-pack recommendations are in
+## Connecting an existing operation (e.g. a launchd `WatchPaths` binding)
+
+The contract, on these branches only (not in an installed Core yet):
+
+| Step | What Core provides |
+|---|---|
+| Declaration | An installed **pack command** with `schedule.timeout_seconds` and `trigger`. `trigger.watch` takes 1–16 paths, each watched recursively. #276 adds `trigger.capture`. |
+| Relevant event | FSEvents on the watched paths, with debounce and `min_interval_seconds`. With #276, also captured records matching `trigger.capture`. |
+| Operation | The command runs as `process-argv-v1` under the pack's execution lease, with the normal command context. |
+| Result / error | Each run writes `state/background-runs/<run>/started.json` and `finished.json` (`tap.background-run/v1`: trigger kind, exit code, phase). It has a per-command log under `logs/background/`. Each watch's state (`watching` / `polling` + error) is in `state/background-host.json`, `tap status` and `tap doctor`. |
+
+Not covered, so these are holes rather than hidden behaviour:
+
+1. **Only pack commands.** A standalone script must be packaged as a command pack to use this.
+2. **Static watch sets.** `trigger.watch` is fixed per pack version. An operation whose sources come from its own catalog can't update the list without a new pack version, and nothing records when catalog and declaration diverge.
+3. **Own outputs.** Only the host's own state and log writes are ignored. A command whose outputs land inside its watched paths re-triggers itself, bounded by `min_interval_seconds`.
+
+Replacing an interim native binding (such as launchd `WatchPaths` with `RunAtLoad` and no resident process) is warranted only when all of these hold:
+
+- the installed Core accepts `trigger` and runs the resident host (`tap status` → `background.host.mode == "resident"`);
+- the operation is a pack command;
+- its whole watch set fits a static declaration, or Core supports derived watch sets;
+- its outputs are outside the watched paths.
+
+Until then the native binding is the honest choice, provided its drift from the derived watch set is checked.
+
+Stage-2 measurements are in [results/reactive-routing-2026-10-24.md](results/reactive-routing-2026-10-24.md). Measurements and the per-pack recommendations for stage 1 are in
 [results/event-triggers-2026-10-24.md](results/event-triggers-2026-10-24.md).

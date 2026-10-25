@@ -28,7 +28,7 @@ class PageResourceContractTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(json.loads(result.stdout)["valid"])
 
-    @unittest.expectedFailure  # live: behaviour of the 2026-10-14/16 checkout WIP (40e6b21/9444967), fails on its HEAD too
+    @unittest.expectedFailure  # live: PackStore.verify / resource checks heal hash drift instead of failing (40e6b21); decision in #275
     def test_changed_bytes_and_unsafe_file_fail(self):
         (self.root / "shared-ui.js").write_text("changed\n")
         with self.assertRaisesRegex(ResourceError, "do not match"):

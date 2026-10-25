@@ -19,11 +19,8 @@ import threading
 _segment_cache = OrderedDict()
 _segment_cache_lock = threading.Lock()
 _SEGMENT_CACHE_LIMIT = 128
+_IDENTITY_PREFIX_BYTES = 4096
 
-
-def file_revision(status):
-    return (status.st_dev, status.st_ino, status.st_size,
-            status.st_mtime_ns, status.st_ctime_ns)
 
 from .records import MAX_RECORD_BYTES, RecordError, decode_record
 
@@ -218,7 +215,7 @@ class Journal:
                     anchored_line = next(self.lines(path, handle, size - saved["offset"]), None)
                     if anchored_line is None or digest(anchored_line) != saved["anchor"]:
                         raise JournalGap("Saved capture record changed; refusing to advance")
-                    decode_record(anchored_line)
+                    # Same bytes as the record already consumed: no need to decode it again.
                     found = True
                     offset = handle.tell()
                     for index, line in enumerate(self.lines(path, handle, size - offset), 1):
@@ -244,23 +241,40 @@ class Journal:
                     raise JournalGap("Saved capture position was truncated; refusing to advance")
 
     def segment_identity(self, path, handle, status):
-        """Reuse a first-record hash only while its pinned file revision matches.
+        """First-record hash of a segment, cached per file (dev, inode).
 
-        ctime detects same-size edits even when mtime is restored. Anchor validation
-        and snapshot/rotation checks still run on every scan. A changing file is
-        not cached, so partial tails and concurrent writes are checked again.
+        Segments are append-only: the first record never changes, while size
+        and mtime change on every append, so they cannot key the cache (keyed on
+        them, the active segment missed on every scan and re-read its first
+        record, which can be megabytes). A hit is re-validated with two small
+        reads: the file still covers the first record, its first bytes hash as
+        before and the record still ends at the same offset. Anchor validation
+        and rotation checks still run on every scan.
         """
-        key = (self.scope, self.max_record_bytes, file_revision(status))
+        key = (self.scope, self.max_record_bytes, status.st_dev, status.st_ino)
         with _segment_cache_lock:
-            if key in _segment_cache:
+            cached = _segment_cache.get(key)
+            if cached is not None:
                 _segment_cache.move_to_end(key)
-                return _segment_cache[key]
+        if cached is not None:
+            first_length, prefix_digest, segment = cached
+            if status.st_size >= first_length:
+                try:
+                    handle.seek(0)
+                    prefix = handle.read(min(first_length, _IDENTITY_PREFIX_BYTES))
+                    handle.seek(first_length - 1)
+                    if digest(prefix) == prefix_digest and handle.read(1) == b"\n":
+                        return segment
+                except OSError as error:
+                    raise JournalError("Cannot read capture segment") from error
+        handle.seek(0)
         first = next(self.lines(path, handle, status.st_size), None)
-        segment = digest(first) if first is not None else None
-        if file_revision(os.fstat(handle.fileno())) == file_revision(status):
-            with _segment_cache_lock:
-                _segment_cache[key] = segment
-                _segment_cache.move_to_end(key)
-                while len(_segment_cache) > _SEGMENT_CACHE_LIMIT:
-                    _segment_cache.popitem(last=False)
+        if first is None:
+            return None
+        segment = digest(first)
+        with _segment_cache_lock:
+            _segment_cache[key] = (len(first), digest(first[:_IDENTITY_PREFIX_BYTES]), segment)
+            _segment_cache.move_to_end(key)
+            while len(_segment_cache) > _SEGMENT_CACHE_LIMIT:
+                _segment_cache.popitem(last=False)
         return segment

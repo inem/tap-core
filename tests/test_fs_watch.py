@@ -51,6 +51,14 @@ class WatchTests(unittest.TestCase):
         self.assertTrue(changed.wait(5))
         self.assertTrue(all(path.startswith(str(self.root / 'later/sub')) for path in events), events)
 
+    def test_watch_on_a_missing_path_reports_when_it_should_be_rerooted(self):
+        watch = PathWatch([str(self.root / 'later/sub')], lambda paths: None).start()
+        self.addCleanup(watch.close)
+        self.assertEqual(watch.roots, (str(self.root),))
+        self.assertFalse(watch.needs_reroot())
+        (self.root / 'later/sub').mkdir(parents=True)
+        self.assertTrue(watch.needs_reroot())
+
     def test_growth_signal_follows_appends_and_rotation_and_sleeps_when_idle(self):
         stream = self.root / 'stream.jsonl'
         stream.write_text('')
@@ -73,6 +81,34 @@ class WatchTests(unittest.TestCase):
         started = time.monotonic()
         self.assertEqual(growth.wait(seen, 0.5), seen)
         self.assertGreaterEqual(time.monotonic() - started, 0.45)
+
+    def test_growth_signal_creates_a_missing_data_directory(self):
+        growth = GrowthSignal(self.root / 'data/stream.jsonl').start()
+        self.addCleanup(growth.close)
+        self.assertTrue(growth.available)
+        seen = growth.generation
+        (self.root / 'data/stream.jsonl').write_text('1\n')
+        self.assertNotEqual(growth.wait(seen, 5), seen)
+
+    def test_growth_signal_setup_errors_are_unavailable_not_crashes(self):
+        from unittest.mock import patch
+        from tap_core.fs_watch import WatchUnavailable
+        growth = GrowthSignal(self.root / 'stream.jsonl')
+        with patch('select.kqueue', side_effect=PermissionError('denied')):
+            with self.assertRaises(WatchUnavailable):
+                growth.start()
+        self.assertFalse(growth.available)
+        unreadable = GrowthSignal(self.root / 'stream.jsonl')
+        real_open = os.open
+        def refuse_file(path, flags, *args):
+            if str(path).endswith('stream.jsonl'):
+                raise PermissionError('denied')
+            return real_open(path, flags, *args)
+        with patch('os.open', side_effect=refuse_file):
+            unreadable.start()
+        self.addCleanup(unreadable.close)
+        self.assertTrue(unreadable.available)
+        self.assertIn('denied', unreadable.error)
 
     def test_growth_wait_returns_when_cancelled(self):
         growth = GrowthSignal(self.root / 'stream.jsonl').start()

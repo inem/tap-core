@@ -13,6 +13,16 @@ from tap_core.pack_store import PackStore, build_artifact
 from tap_core.runtime import Profile
 from test_bridge import config as bridge_config
 from test_records_journal import capture_record, encoded
+from tap_core.routes import RouteTable
+
+
+def append(root, record):
+    """Append like the capture writer: the record first, then route notifications."""
+    with (root / 'data/stream.jsonl').open('ab') as handle:
+        handle.write(encoded(record))
+    table = RouteTable(root / 'state')
+    table.notify(record)
+    table.close()
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -78,8 +88,7 @@ class LiveReaderReconcileTests(unittest.TestCase):
                              capabilities=['capture.read'], live=True)
                 os.kill(process.pid, signal.SIGUSR1)
                 self.assertTrue(until(lambda: PACK in state().get('readers', {})))
-                with stream.open('ab') as handle:
-                    handle.write(encoded(capture_record(body='live-one')))
+                append(root, capture_record(body='live-one'))
                 output = root / 'data/readers' / PACK / 'events.jsonl'
                 self.assertTrue(until(lambda: output.exists() and len(output.read_text().splitlines()) == 1))
                 self.assertEqual(state()['pid'], original_pid)
@@ -87,8 +96,7 @@ class LiveReaderReconcileTests(unittest.TestCase):
                 os.kill(process.pid, signal.SIGUSR1)
                 self.assertTrue(until(lambda: PACK not in state().get('readers', {})))
                 count = len(output.read_text().splitlines())
-                with stream.open('ab') as handle:
-                    handle.write(encoded(capture_record(body='live-two')))
+                append(root, capture_record(body='live-two'))
                 time.sleep(0.7)
                 self.assertEqual(len(output.read_text().splitlines()), count)
                 # Reattaching the same reader must skip events seen while detached.
@@ -96,8 +104,7 @@ class LiveReaderReconcileTests(unittest.TestCase):
                              capabilities=['capture.read'], live=True)
                 os.kill(process.pid, signal.SIGUSR1)
                 self.assertTrue(until(lambda: PACK in state().get('readers', {})))
-                with stream.open('ab') as handle:
-                    handle.write(encoded(capture_record(body='live-three')))
+                append(root, capture_record(body='live-three'))
                 self.assertTrue(until(lambda: len(output.read_text().splitlines()) == 2))
                 events = [json.loads(line)['body'] for line in output.read_text().splitlines()]
                 self.assertEqual(events, ['live-one', 'live-three'])
@@ -106,7 +113,7 @@ class LiveReaderReconcileTests(unittest.TestCase):
                 process.terminate()
                 process.communicate(timeout=8)
 
-    @unittest.expectedFailure  # live: behaviour of the 2026-10-14/16 checkout WIP (40e6b21/9444967), fails on its HEAD too
+    @unittest.expectedFailure  # live: PackStore.verify / resource checks heal hash drift instead of failing (40e6b21); decision in #275
     def test_failed_refresh_retries_without_another_signal(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

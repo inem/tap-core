@@ -62,7 +62,7 @@ class PackAddTests(unittest.TestCase):
                        input_fn=lambda _prompt: self.fail("must not ask again"), output_fn=messages.append)
         self.assertTrue(repeated["already_configured"])
 
-    @unittest.expectedFailure  # live: PackStore.verify heals hash drift instead of failing (40e6b21; open question)
+    @unittest.expectedFailure  # live: PackStore.verify / resource checks heal hash drift instead of failing (40e6b21); decision in #275
     def test_reenable_preserves_config_and_noop_verifies_installed_files(self):
         profile = self.root / "profile"
         add(profile, "owner/repo", opener=self.opener, assume_yes=True,

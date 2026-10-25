@@ -114,8 +114,11 @@ def _limitations(result):
         items.append(("background", "quarantined packs: " + ", ".join(map(str, quarantined))))
     host = background.get("host") if isinstance(background.get("host"), dict) else {}
     watches = host.get("watches") if isinstance(host.get("watches"), dict) else {}
-    polling = sorted(str(name) for name, watch in watches.items()
-                     if isinstance(watch, dict) and watch.get("state") != "watching")
+    captures = host.get("captures") if isinstance(host.get("captures"), dict) else {}
+    polling = sorted({str(name) for name, watch in watches.items()
+                      if isinstance(watch, dict) and watch.get("state") != "watching"}
+                     | {str(name) for name, capture in captures.items()
+                        if isinstance(capture, dict) and capture.get("state") != "routed"})
     if polling:
         items.append(("background", "watch unavailable, polling instead: " + ", ".join(polling)))
     failures = background.get("verify_failures")

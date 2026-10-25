@@ -14,6 +14,7 @@ from tap_core.runtime import Profile, atomic_json, profile_lock, stamped
 from tap_core.components import ROOT, identity, hub_health, needs_hub
 from tap_core.readers import Reader
 from tap_core.fs_watch import GrowthSignal, WatchUnavailable
+from tap_core import routes
 
 # Readers sleep until the capture stream grows (kqueue on the file and its
 # rotation), with a long backstop. Scans keep the previous pacing as a floor,
@@ -27,6 +28,12 @@ READER_IDLE_BACKSTOP_SECONDS = 30.0
 # Records advanced per replay run. Filtered records are cheap (no child process,
 # no per-record checkpoint write); each admitted record is still one invocation.
 REPLAY_BATCH = 500
+# Routed readers are woken by capture only for records that match their filter
+# (tap_core/routes.py). The backstop bounds the delay after a lost notification.
+ROUTED_BACKSTOP_SECONDS = 180.0
+# Capture re-reads routes at most once a second, so a record written just after
+# a reader attaches may go unannounced: one extra pass shortly after attaching.
+ROUTE_SETTLE_SECONDS = 2.5
 
 
 def service_startup_seconds():
@@ -62,6 +69,26 @@ def main():
     health_path = profile.root / 'state/components.json'
     configuration = identity(profile)
     growth = GrowthSignal(profile.root / 'data/stream.jsonl')
+    wake = {}            # reader name -> Event set by capture notifications
+    attached_at = {}     # reader name -> monotonic attach time
+    routing = {'listener': None}
+
+    def on_targets(targets):
+        for target in targets:
+            if target.startswith('reader:'):
+                event = wake.get(target[len('reader:'):])
+                if event is not None:
+                    event.set()
+
+    def wait_for_work(name, seen, started, stop_reader, cancelled, floor=READER_IDLE_SCAN_SECONDS):
+        """Routed: sleep until capture reports a matching record (or the
+        backstop). Unrouted fallback: the stream-growth wait with its floor."""
+        if routing['listener'] is not None:
+            if not cancelled():
+                settle = attached_at.get(name, 0) + ROUTE_SETTLE_SECONDS - time.monotonic()
+                wake[name].wait(settle + 0.05 if settle > 0 else ROUTED_BACKSTOP_SECONDS)
+        else:
+            idle_wait(seen, started, stop_reader, cancelled, floor)
 
     def idle_wait(seen, started, stop_reader, cancelled, floor=READER_IDLE_SCAN_SECONDS):
         stop_reader.wait(max(0.0, started + floor - time.monotonic()))
@@ -87,6 +114,7 @@ def main():
             return fresh_reader_loop(name, spec, allowed_origins, path_prefixes, stop_reader, cancelled)
         while not cancelled():
             seen, started, busy, delivered = growth.generation, time.monotonic(), False, False
+            wake[name].clear()  # a notification during this pass triggers the next one
             try:
                 batch = 1 if first else REPLAY_BATCH
                 result = reader.run(spec, max_records=batch, timeout=45,
@@ -107,8 +135,8 @@ def main():
             if failures:
                 stop_reader.wait(min(4, 2 ** (failures - 1)))
             elif not busy:
-                idle_wait(seen, started, stop_reader, cancelled,
-                          READER_MIN_SCAN_SECONDS if delivered else READER_IDLE_SCAN_SECONDS)
+                wait_for_work(name, seen, started, stop_reader, cancelled,
+                              READER_MIN_SCAN_SECONDS if delivered else READER_IDLE_SCAN_SECONDS)
 
     def fresh_reader_loop(name, spec, allowed_origins, path_prefixes, stop_reader, cancelled):
         replay = Reader(profile, name)
@@ -118,6 +146,7 @@ def main():
         replay_error = fresh_error = None
         while not cancelled():
             seen, started, busy, delivered = growth.generation, time.monotonic(), False, False
+            wake[name].clear()  # a notification during this pass triggers the next one
             if not initialized:
                 try:
                     fresh.follow_tail(spec)
@@ -131,7 +160,7 @@ def main():
                     result = fresh.run(spec, max_records=500, max_invocations=5, timeout=45, guard_parent=True,
                                        cancelled=cancelled, allowed_origins=allowed_origins,
                                        path_prefixes=path_prefixes)
-                    busy = result['completed_this_run'] > 0
+                    busy = result['completed_this_run'] >= 500  # a full batch: backlog remains
                     delivered = result['invoked_this_run'] > 0
                     fresh_failures = 0
                     if not any(fresh.state.glob('fresh-failure-*.json')):
@@ -152,7 +181,7 @@ def main():
                     result = replay.run(spec, max_records=REPLAY_BATCH, max_invocations=1, timeout=45,
                                         guard_parent=True, cancelled=cancelled,
                                         allowed_origins=allowed_origins, path_prefixes=path_prefixes)
-                    busy = busy or result['completed_this_run'] > 0
+                    busy = busy or result['completed_this_run'] >= REPLAY_BATCH
                     delivered = delivered or result['invoked_this_run'] > 0
                     replay_failures = 0
                     replay_error = None
@@ -171,11 +200,13 @@ def main():
                 rows[name] = row
             if fresh_failures or not initialized:
                 stop_reader.wait(min(4, 2 ** (max(fresh_failures, 1) - 1)))
+            elif busy:
+                continue  # a lane ended on a full batch of filtered records: no pause
             elif delivered or 0 < replay_failures < 3:
                 stop_reader.wait(max(0.0, started + READER_MIN_SCAN_SECONDS - time.monotonic()))
             else:
-                # Filtered-only or empty passes: idle floor, then wait for growth.
-                idle_wait(seen, started, stop_reader, cancelled)
+                # Filtered-only or empty passes: wait for a matching record.
+                wait_for_work(name, seen, started, stop_reader, cancelled)
 
     def sync_readers(desired_components, reader_origins, fresh_readers, reader_prefixes, *, live_attach=False):
         """Change only reader workers; never restart the controller, Hub or proxy."""
@@ -189,13 +220,25 @@ def main():
             if name in desired:
                 replaced.add(name)
             stop_reader.set()
+            wake[name].set()  # interrupt a routed wait
             thread.join(timeout=4)
             if thread.is_alive():
                 raise RuntimeError(f'Reader {name} did not stop; replacement was not started')
             reader_jobs.pop(name)
+            wake.pop(name, None)
+            attached_at.pop(name, None)
             with mutex:
                 rows.pop(name, None)
             log(f'reader {name} detached')
+        # Events and routes exist before a reader starts: a record written after
+        # its first pass begins is either seen by that pass or announced.
+        for name in desired:
+            wake.setdefault(name, threading.Event())
+        if routing['listener'] is not None:
+            # Capture notifies a reader only for records inside its own filter.
+            routes.publish(profile.root / 'state', 'components', {
+                'reader:' + name: {'origins': origins, 'path_prefixes': dict(prefixes) if prefixes else {}}
+                for name, (_spec, origins, prefixes, _fresh) in desired.items()}, routing['listener'].path)
         for name, (spec, origins, prefixes, fresh) in desired.items():
             if name in reader_jobs:
                 continue
@@ -206,6 +249,7 @@ def main():
                 if fresh:
                     Reader(profile, name, lane='fresh').begin_now(spec)
             stop_reader = threading.Event()
+            attached_at[name] = time.monotonic()
             thread = threading.Thread(target=reader_loop,
                                       args=(name, spec, origins, prefixes, fresh, stop_reader),
                                       daemon=True)
@@ -272,10 +316,15 @@ def main():
                 services[name] = {'healthy': False, 'phase': 'starting', 'port': spec['port'], 'error': None}
                 log(f'service {name} starting pid={process.pid} port={spec["port"]}')
             try:
-                growth.start()
-            except WatchUnavailable as error:
-                log(f'stream growth watch unavailable ({error}); readers poll every '
-                    f'{READER_MIN_SCAN_SECONDS:g}s')
+                routing['listener'] = routes.WakeListener(
+                    routes.socket_path(profile.root / 'state', 'components'), on_targets).start()
+            except OSError as error:
+                log(f'capture routing unavailable ({error}); readers wait on stream growth')
+                try:
+                    growth.start()
+                except WatchUnavailable as error:
+                    log(f'stream growth watch unavailable ({error}); readers poll every '
+                        f'{READER_MIN_SCAN_SECONDS:g}s')
             sync_readers(components, reader_origins, fresh_readers, reader_prefixes)
             hub_failures = 0
             refresh_retry_at = 0.0
@@ -398,9 +447,14 @@ def main():
             stopping.set()
             for *_job, stop_reader, _thread in reader_jobs.values():
                 stop_reader.set()
+            for event in wake.values():
+                event.set()  # interrupt routed waits
             for *_job, thread in reader_jobs.values():
                 thread.join(timeout=4)
             growth.close()
+            if routing['listener'] is not None:
+                routes.withdraw(profile.root / 'state', 'components')
+                routing['listener'].close()
             if hub is not None:
                 try:
                     os.killpg(hub.pid, signal.SIGKILL)

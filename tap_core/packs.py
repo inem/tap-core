@@ -154,23 +154,55 @@ TRIGGER_BACKSTOP_SECONDS = 3600
 
 
 def validate_trigger(trigger):
-    """A command's watch trigger: host paths whose changes request a run."""
-    fields(trigger, ("watch",), optional=tuple(TRIGGER_DEFAULTS), label="command.trigger")
-    strings(trigger["watch"], "command.trigger.watch")
-    require(1 <= len(trigger["watch"]) <= 16, "command.trigger.watch: expected 1..16 paths")
-    for path in trigger["watch"]:
-        parts = PurePosixPath(path).parts
-        require(0 < len(path) <= 1024 and "\x00" not in path and ".." not in parts
-                and all(character.isprintable() for character in path)
-                and (path.startswith(("/", "~/")) or str(PurePosixPath(path)) == path),
-                "command.trigger.watch: expected '~/…', an absolute path, or a canonical "
-                "profile-relative path without '..'")
+    """A command trigger: host paths (watch) and/or captured records (capture)
+    whose arrival requests a run. Capture origins are checked against the
+    pack's grants in validate_capture_trigger, once access is validated."""
+    fields(trigger, (), optional=("watch", "capture", *TRIGGER_DEFAULTS), label="command.trigger")
+    require("watch" in trigger or "capture" in trigger, "command.trigger: expected watch and/or capture")
+    if "watch" in trigger:
+        strings(trigger["watch"], "command.trigger.watch")
+        require(1 <= len(trigger["watch"]) <= 16, "command.trigger.watch: expected 1..16 paths")
+        for path in trigger["watch"]:
+            parts = PurePosixPath(path).parts
+            require(0 < len(path) <= 1024 and "\x00" not in path and ".." not in parts
+                    and all(character.isprintable() for character in path)
+                    and (path.startswith(("/", "~/")) or str(PurePosixPath(path)) == path),
+                    "command.trigger.watch: expected '~/…', an absolute path, or a canonical "
+                    "profile-relative path without '..'")
+    if "capture" in trigger:
+        capture = trigger["capture"]
+        fields(capture, ("origins",), optional=("path_prefixes",), label="command.trigger.capture")
+        strings(capture["origins"], "command.trigger.capture.origins")
+        require(1 <= len(capture["origins"]) <= 64, "command.trigger.capture.origins: expected 1..64 origins")
+        for origin in capture["origins"]:
+            exact_origin(origin)
+        prefixes = capture.get("path_prefixes", {})
+        require(type(prefixes) is dict, "command.trigger.capture.path_prefixes: expected object keyed by origin")
+        for origin, paths in prefixes.items():
+            require(origin in capture["origins"],
+                    f"command.trigger.capture.path_prefixes: {origin} is not in capture.origins")
+            validate_path_prefixes(paths, f"command.trigger.capture.path_prefixes[{origin}]")
     require("debounce_ms" not in trigger
             or type(trigger["debounce_ms"]) is int and 0 <= trigger["debounce_ms"] <= 60000,
             "command.trigger.debounce_ms must be 0..60000")
     require("min_interval_seconds" not in trigger
             or type(trigger["min_interval_seconds"]) is int and 1 <= trigger["min_interval_seconds"] <= 86400,
             "command.trigger.min_interval_seconds must be 1..86400")
+
+
+def validate_capture_trigger(trigger, access):
+    for origin in trigger.get("capture", {}).get("origins", []):
+        require(origin_granted(origin, set(access["origins"])),
+                f"command.trigger.capture.origins: {origin} is not in access.origins")
+
+
+def validate_path_prefixes(paths, label):
+    strings(paths, label)
+    require(1 <= len(paths) <= 64, f"{label}: expected 1..64 prefixes")
+    for path in paths:
+        require(path.startswith("/") and len(path) <= 512 and "?" not in path and "#" not in path
+                and all(character.isprintable() for character in path),
+                f"{label}: expected printable URL path prefixes")
 
 
 def command_schedule(declaration):
@@ -184,7 +216,13 @@ def command_schedule(declaration):
         return schedule
     return {"interval_seconds": schedule.get("interval_seconds", TRIGGER_BACKSTOP_SECONDS),
             "timeout_seconds": schedule["timeout_seconds"],
-            "trigger": {"watch": list(declaration["trigger"]["watch"]),
+            "trigger": {**({"watch": list(declaration["trigger"]["watch"])}
+                           if "watch" in declaration["trigger"] else {}),
+                        **({"capture": {"origins": list(declaration["trigger"]["capture"]["origins"]),
+                                        "path_prefixes": {origin: list(paths) for origin, paths in
+                                                          declaration["trigger"]["capture"]
+                                                          .get("path_prefixes", {}).items()}}}
+                           if "capture" in declaration["trigger"] else {}),
                         **{name: declaration["trigger"].get(name, default)
                            for name, default in TRIGGER_DEFAULTS.items()}}}
 
@@ -199,13 +237,7 @@ def validate_reader_input(value, access):
         exact_origin(origin)
         require(origin_granted(origin, set(access["origins"])),
                 f"entrypoints.reader.input.path_prefixes: {origin} is not in access.origins")
-        strings(paths, f"entrypoints.reader.input.path_prefixes[{origin}]")
-        require(1 <= len(paths) <= 64,
-                f"entrypoints.reader.input.path_prefixes[{origin}]: expected 1..64 prefixes")
-        for path in paths:
-            require(path.startswith("/") and len(path) <= 512 and "?" not in path and "#" not in path
-                    and all(character.isprintable() for character in path),
-                    "entrypoints.reader.input.path_prefixes: expected printable URL path prefixes")
+        validate_path_prefixes(paths, f"entrypoints.reader.input.path_prefixes[{origin}]")
 
 
 def pack_file(root, name):
@@ -357,6 +389,9 @@ def validate_manifest(manifest, root, host_api=PACK_API):
     strings(access["capabilities"], "access.capabilities")
     if "input" in entries.get("reader", {}):
         validate_reader_input(entries["reader"]["input"], access)
+    for declaration in entries.get("command", {}).get("commands", []):
+        if "trigger" in declaration:
+            validate_capture_trigger(declaration["trigger"], access)
     capture = manifest.get("capture")
     if capture is not None:
         fields(capture, ("request_body_paths",), label="capture")

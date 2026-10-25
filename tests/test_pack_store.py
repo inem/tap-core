@@ -119,7 +119,7 @@ class PackStoreTests(unittest.TestCase):
         (source / "pack.json").write_text(json.dumps(manifest, indent=2) + "\n")
         return source
 
-    @unittest.expectedFailure  # live: behaviour of the 2026-10-14/16 checkout WIP (40e6b21/9444967), fails on its HEAD too
+    @unittest.expectedFailure  # live: PackStore.verify / resource checks heal hash drift instead of failing (40e6b21); decision in #275
     def test_artifact_is_reproducible_and_installed_binding_uses_snapshot(self):
         first = self.artifact(SOURCE, "first.tap-pack")
         second = self.artifact(SOURCE, "second.tap-pack")
@@ -139,7 +139,7 @@ class PackStoreTests(unittest.TestCase):
         self.assertEqual(effective_configuration(self.profile, bridge()), effective)
         self.assertEqual(effective["allow_origins"], ORIGINS)
         self.assertEqual(effective["page_pack_origins"], [
-            {"id": PACK_ID, "version": "0.1.0", "origins": ORIGINS, "features": []},
+            {"id": PACK_ID, "version": "0.1.0", "origins": ORIGINS, "features": [], "tools": []},
         ])
         self.assertEqual([Path(path).parent.parent.name for path in effective["page_scripts"]],
                          ["fixture.ui", "fixture.feature"])
@@ -151,7 +151,6 @@ class PackStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(PackError, "shared page resource"):
             self.store.effective_bridge(bridge())
 
-    @unittest.expectedFailure  # live: behaviour of the 2026-10-14/16 checkout WIP (40e6b21/9444967), fails on its HEAD too
     def test_effective_bridge_ignores_regenerated_python_bytecode(self):
         artifact = self.artifact(SOURCE, "bytecode.tap-pack")
         self.store.install(artifact)
@@ -164,26 +163,24 @@ class PackStoreTests(unittest.TestCase):
         effective = self.store.effective_bridge(bridge())
         self.assertEqual(effective_configuration(self.profile, bridge()), effective)
         self.assertEqual(effective["page_pack_origins"], [
-            {"id": PACK_ID, "version": "0.1.0", "origins": ORIGINS, "features": []},
+            {"id": PACK_ID, "version": "0.1.0", "origins": ORIGINS, "features": [], "tools": []},
         ])
 
-    @unittest.expectedFailure  # live: pack changes reload capture policy instead of requiring off (live/locks-and-cli)
-    def test_pack_request_body_paths_are_origin_scoped_and_startup_only(self):
+    def test_pack_request_body_paths_are_origin_scoped_and_apply_live(self):
         artifact = self.artifact(self.capture_source(), "capture.tap-pack")
         self.store.install(artifact)
         grants = {"origins": ORIGINS,
                   "capabilities": ["page.inject", "capture.read"]}
-        with self.assertRaisesRegex(PackError, "Stop this profile with off"):
-            self.store.enable(PACK_ID, "0.2.0", live=True, **grants)
-        result = self.store.enable(PACK_ID, "0.2.0", **grants)
-        self.assertIn("next profile on", result["applies"])
+        # A live change to the effective capture policy is saved; the CLI then
+        # hands the new policy to the running proxy (capture reload, #248).
+        self.store.enable(PACK_ID, "0.2.0", live=True, **grants)
         effective = self.store.effective_capture(None)
         self.assertEqual(effective["request_body_paths"],
                          ("https://fixture.example/v1/messages",))
-        with self.assertRaisesRegex(PackError, "Stop this profile with off"):
-            self.store.disable(PACK_ID, live=True)
+        self.store.disable(PACK_ID, live=True)
+        self.assertEqual(self.store.effective_capture(None)["request_body_paths"], ())
 
-    @unittest.expectedFailure  # live: PackStore.verify heals hash drift instead of failing (40e6b21; open question)
+    @unittest.expectedFailure  # live: PackStore.verify / resource checks heal hash drift instead of failing (40e6b21); decision in #275
     def test_effective_bridge_rejects_bytecode_outside_pycache(self):
         artifact = self.artifact(SOURCE, "root-bytecode.tap-pack")
         self.store.install(artifact)
@@ -194,7 +191,6 @@ class PackStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(PackError, "file set changed"):
             self.store.effective_bridge(bridge())
 
-    @unittest.expectedFailure  # live: behaviour of the 2026-10-14/16 checkout WIP (40e6b21/9444967), fails on its HEAD too
     def test_all_sites_pack_projects_wildcard_origin(self):
         source = self.sibling_source("fixture.all-sites-page", origins=["*"])
         artifact = self.artifact(source, "all-sites.tap-pack")
@@ -206,7 +202,7 @@ class PackStoreTests(unittest.TestCase):
         self.assertEqual(effective["allow_origins"], ["*"])
         self.assertTrue(all(origins == ["*"] for origins in effective["page_script_origins"]))
         self.assertEqual(effective["page_pack_origins"], [
-            {"id": "fixture.all-sites-page", "version": "0.1.0", "origins": ["*"], "features": []},
+            {"id": "fixture.all-sites-page", "version": "0.1.0", "origins": ["*"], "features": [], "tools": []},
         ])
         self.assertTrue(decision(effective, "https://arbitrary.example")["allowed"])
 
@@ -531,8 +527,7 @@ class PackStoreTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in visible], ["example.reader", PACK_ID])
         self.assertEqual(visible[0]["features"], reader_manifest["features"])
 
-    @unittest.expectedFailure  # live: changed reader definitions are adopted (live/readers-adopt-python)
-    def test_pack_update_refuses_incompatible_reader_checkpoint(self):
+    def test_pack_update_adopts_changed_reader_definition_keeping_progress(self):
         import sys
         from tap_core.readers import Reader, fingerprint
         linked = Path(__file__).resolve().parent.parent / "fixtures/packs/installed-linked"
@@ -562,23 +557,18 @@ class PackStoreTests(unittest.TestCase):
         (linked_v2 / "reader.py").write_text((linked_v2 / "reader.py").read_text() + "\n# bump\n")
         (linked_v2 / "pack.json").write_text(json.dumps(manifest, indent=2) + "\n")
         second = self.artifact(linked_v2, "linked-v2.tap-pack")
-        with self.assertRaisesRegex(PackError, "progress under another definition"):
-            self.store.update(second)
-        selected = self.store.load()["packs"]["fixture.installed-linked"]["selected"]
-        self.assertEqual(selected, "0.1.0")
-        self.assertIn("0.2.0", self.store.load()["packs"]["fixture.installed-linked"]["versions"])
-        new_spec = dict(old_spec, revision='fixture.installed-linked@0.2.0',
-                        command=[sys.executable, str(self.store.version_root(
-                            'fixture.installed-linked', '0.2.0') / 'reader.py')])
         reader = Reader(Profile(self.profile, '/fixture/mitmdump', 19001, 'explicit',
                                 'http://example.test', []), 'fixture.installed-linked')
         previous = reader.load()
-        reader.rebind(new_spec, fingerprint(old_spec))
-        self.store.enable('fixture.installed-linked', '0.2.0',
-                          origins=['https://fixture.example'],
-                          capabilities=['page.inject', 'capture.read', 'bridge.handle'])
-        self.assertEqual(reader.load()['cursor'], previous['cursor'])
-        self.assertEqual(reader.load()['processed'], previous['processed'])
+        # The changed reader definition is adopted in place: same cursor and
+        # progress, next generation; no stop-and-rebind step.
+        self.store.update(second)
+        self.assertEqual(self.store.load()["packs"]["fixture.installed-linked"]["selected"], "0.2.0")
+        new_spec = self.store.effective_components(components)["readers"]["fixture.installed-linked"]
+        adopted = reader.load()
+        self.assertEqual(adopted['definition'], fingerprint(new_spec))
+        self.assertEqual(adopted['generation'], previous['generation'] + 1)
+        self.assertEqual((adopted['cursor'], adopted['processed']), (previous['cursor'], previous['processed']))
         self.assertEqual(self.store.fresh_readers(), {'fixture.installed-linked'})
 
     def test_prepare_refreshes_effective_runtime_after_enable_disable(self):
@@ -646,7 +636,7 @@ class IntegrityBytecodeTests(unittest.TestCase):
         hashes = _tree_hashes(root, manifest)  # must not raise "file set changed"
         self.assertEqual(set(hashes), {"pack.json", "handler.py", "core/__init__.py"})
 
-    @unittest.expectedFailure  # live: PackStore.verify heals hash drift instead of failing (40e6b21; open question)
+    @unittest.expectedFailure  # live: PackStore.verify / resource checks heal hash drift instead of failing (40e6b21); decision in #275
     def test_integrity_still_catches_an_extra_source_file(self):
         from tap_core.pack_store import _tree_hashes
         root = self._root()
@@ -655,7 +645,7 @@ class IntegrityBytecodeTests(unittest.TestCase):
         with self.assertRaisesRegex(PackError, "file set changed"):
             _tree_hashes(root, manifest)
 
-    @unittest.expectedFailure  # live: PackStore.verify heals hash drift instead of failing (40e6b21; open question)
+    @unittest.expectedFailure  # live: PackStore.verify / resource checks heal hash drift instead of failing (40e6b21); decision in #275
     def test_integrity_still_catches_bytecode_outside_pycache(self):
         from tap_core.pack_store import _tree_hashes
         root = self._root()

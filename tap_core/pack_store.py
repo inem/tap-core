@@ -365,8 +365,13 @@ class PackStore:
                 self.save(registry)
             except Exception:
                 pass
-        _VERIFIED[key] = ((_tree_signature(root), json.dumps(metadata["hashes"], sort_keys=True)),
-                          copy.deepcopy(manifest))
+        # Cache only what was hashed: the tree identity must be the same before
+        # and after hashing (and any self-healing rewrite), or an edit made while
+        # hashing would be remembered as verified. A changed tree is simply
+        # verified again on the next call.
+        after = (_tree_signature(root), json.dumps(metadata["hashes"], sort_keys=True))
+        if after == signature:
+            _VERIFIED[key] = (signature, copy.deepcopy(manifest))
         return root, manifest
 
     def _profile_bridge(self):

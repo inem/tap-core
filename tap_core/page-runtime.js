@@ -340,8 +340,9 @@
   });
   addEventListener('pagehide', () => { closed = true; clearTimeout(planTimer); indicatorObserver?.disconnect(); stop(); state = websocketEnabled ? (paused ? 'paused' : 'suspended') : 'disabled'; updateIndicator(); });
   addEventListener('pageshow', event => { if (event.persisted) { closed = false; attempt = 0; schedulePlan(0); if (!paused) connect(); } });
-  document.addEventListener('visibilitychange', () => { if (!document.hidden && (!socket || socket.readyState >= 2)) { attempt = 0; connect(); } });
-  window.addEventListener('focus', () => { if (!socket || socket.readyState >= 2) { attempt = 0; connect(); } });
+  // Reconnect when the page comes back; skipped where the host has no DOM events.
+  document.addEventListener?.('visibilitychange', () => { if (!document.hidden && (!socket || socket.readyState >= 2)) { attempt = 0; connect(); } });
+  globalThis.window?.addEventListener?.('focus', () => { if (!socket || socket.readyState >= 2) { attempt = 0; connect(); } });
   renderIndicator();
   log('page runtime ' + version + ' attached · ' + location.origin + (websocketEnabled ? '' : ' · bridge disabled'));
   schedulePlan(0);

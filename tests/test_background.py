@@ -2,6 +2,7 @@ import contextlib
 import copy
 import io
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -342,17 +343,17 @@ class BackgroundTests(unittest.TestCase):
             background.run_once(self.profile)
         run.assert_not_called()
 
-    @unittest.expectedFailure  # live: scheduler passes no longer take the profile lock (live/locks-and-cli)
     def test_running_job_holds_execution_but_not_lifecycle_lease(self):
         self.install()
         started = threading.Event()
         release = threading.Event()
         errors = []
 
-        def run_pack(*_args, **_kwargs):
+        def start_pack(*_args, **_kwargs):
+            process = Mock()
+            process.poll.side_effect = lambda: 0 if release.is_set() else None
             started.set()
-            release.wait(2)
-            return 0
+            return process
 
         def run_background():
             try:
@@ -360,7 +361,7 @@ class BackgroundTests(unittest.TestCase):
             except Exception as error:
                 errors.append(error)
 
-        with patch.object(background, '_run_pack', side_effect=run_pack):
+        with patch.object(background, '_start_pack', side_effect=start_pack):
             worker = threading.Thread(target=run_background)
             worker.start()
             self.assertTrue(started.wait(1))
@@ -453,7 +454,7 @@ class BackgroundTests(unittest.TestCase):
         victim = self.store.version_root(pack_id, version) / name
         victim.write_bytes(victim.read_bytes() + b'\n# tampered\n')
 
-    @unittest.expectedFailure  # live: PackStore.verify heals hash drift instead of failing (40e6b21; open question)
+    @unittest.expectedFailure  # live: PackStore.verify / resource checks heal hash drift instead of failing (40e6b21); decision in #275
     def test_pack_integrity_failure_is_isolated_not_crashing(self):
         # A single installed pack whose on-disk content drifted from its
         # registry hashes must not take down the whole scheduler. (#137)
@@ -484,7 +485,7 @@ class BackgroundTests(unittest.TestCase):
         self.assertEqual(len(outcome), 1, out.getvalue())
         self.assertRegex(outcome[0], STAMP)
         self.assertIn("exit=0 ok", outcome[0])
-    @unittest.expectedFailure  # live: PackStore.verify heals hash drift instead of failing (40e6b21; open question)
+    @unittest.expectedFailure  # live: PackStore.verify / resource checks heal hash drift instead of failing (40e6b21); decision in #275
     def test_verify_failure_quarantines_after_threshold_and_neighbor_runs(self):
         # #139: a persistently broken pack is quarantined after N failures — it
         # stops being retried and log-spammed — while a healthy neighbour keeps
@@ -760,3 +761,154 @@ class BackgroundTests(unittest.TestCase):
             with self.assertRaisesRegex(TapError, 'did not unload'):
                 background.reconcile(self.profile, adapter)
         self.assertNotIn('bootstrap', [c.args[0][1] for c in adapter.run.call_args_list])
+
+    def with_capture_trigger(self, **capture):
+        declaration = self.manifest['entrypoints']['command']['commands'][0]
+        declaration['trigger'] = {'capture': {'origins': ['https://fixture.example'], **capture},
+                                  'debounce_ms': 0, 'min_interval_seconds': 1}
+        declaration['schedule'] = {'timeout_seconds': 5}
+
+    def test_capture_trigger_validation(self):
+        self.with_capture_trigger(path_prefixes={'https://fixture.example': ['/api/']})
+        validate_manifest(self.manifest, self.source)
+        from tap_core.packs import command_schedule
+        trigger = command_schedule(self.manifest['entrypoints']['command']['commands'][0])['trigger']
+        self.assertEqual(trigger['capture'], {'origins': ['https://fixture.example'],
+                                              'path_prefixes': {'https://fixture.example': ['/api/']}})
+        self.assertNotIn('watch', trigger)
+        for change in ({'origins': []}, {'origins': ['https://elsewhere.example']},
+                       {'origins': ['https://fixture.example/']},
+                       {'path_prefixes': {'https://other.example': ['/a']}},
+                       {'path_prefixes': {'https://fixture.example': ['api']}}, {'extra': 1}):
+            bad = copy.deepcopy(self.manifest)
+            bad['entrypoints']['command']['commands'][0]['trigger']['capture'].update(change)
+            with self.assertRaises(PackError, msg=change):
+                validate_manifest(bad, self.source)
+        empty = copy.deepcopy(self.manifest)
+        empty['entrypoints']['command']['commands'][0]['trigger'] = {'debounce_ms': 0}
+        with self.assertRaisesRegex(PackError, 'watch and/or capture'):
+            validate_manifest(empty, self.source)
+
+    def test_resident_host_runs_a_capture_triggered_command_only_for_matching_records(self):
+        from tap_core.routes import RouteTable
+        from test_records_journal import capture_record
+        self.with_capture_trigger(path_prefixes={'https://fixture.example': ['/api/']})
+        self.install()
+        self.serve(background.PathWatch)
+        self.assertTrue(self.wait_for(lambda: len(self.runs()) == 1))
+        self.assertTrue(self.wait_for(lambda: (self.profile / 'state/routes/background.json').exists()))
+        host = json.loads((self.profile / 'state/background-host.json').read_text())
+        self.assertEqual(list(host['captures'].values())[0]['state'], 'routed')
+        time.sleep(1.2)  # past min_interval_seconds
+        table = RouteTable(self.profile / 'state')
+        self.addCleanup(table.close)
+
+        def record(url):
+            value = capture_record()
+            value['url'] = url
+            return value
+
+        self.assertEqual(table.notify(record('https://fixture.example/telemetry')), 0)
+        self.assertEqual(table.notify(record('https://other.example/api/x')), 0)
+        time.sleep(0.5)
+        self.assertEqual(len(self.runs()), 1)
+        self.assertEqual(table.notify(record('https://fixture.example/api/usage')), 1)
+        self.assertTrue(self.wait_for(lambda: len(self.runs()) == 2))
+
+    def test_event_storm_during_debounce_does_not_run_a_cycle_per_event(self):
+        self.with_trigger(debounce_ms=1000, min_interval_seconds=1)
+        self.install()
+        callbacks = []
+
+        class FakeWatch:
+            def __init__(self, paths, on_change):
+                callbacks.append(on_change)
+            def start(self):
+                return self
+            def close(self):
+                pass
+
+        cycles = []
+        real_cycle = background._run_cycle
+
+        def counting_cycle(*args, **kwargs):
+            cycles.append(time.monotonic())
+            return real_cycle(*args, **kwargs)
+
+        with patch.object(background, '_run_cycle', side_effect=counting_cycle):
+            self.serve(FakeWatch)
+            self.assertTrue(self.wait_for(lambda: callbacks and len(self.runs()) == 1))
+            time.sleep(1.2)
+            before = len(cycles)
+            for _ in range(50):  # a burst inside one debounce window
+                callbacks[-1]([str(self.root / 'watched/file')])
+                time.sleep(0.01)
+            self.assertTrue(self.wait_for(lambda: len(self.runs()) == 2))
+            time.sleep(0.5)
+        self.assertLessEqual(len(cycles) - before, 2)  # the triggered cycle (+ at most one bound wake)
+        self.assertEqual(len(self.runs()), 2)
+
+    def test_the_hosts_own_state_writes_never_trigger_a_run(self):
+        self.with_trigger(debounce_ms=0, min_interval_seconds=1)
+        self.install()
+        callbacks = []
+
+        class FakeWatch:
+            def __init__(self, paths, on_change):
+                callbacks.append(on_change)
+            def start(self):
+                return self
+            def close(self):
+                pass
+
+        self.serve(FakeWatch)
+        self.assertTrue(self.wait_for(lambda: callbacks and len(self.runs()) == 1))
+        time.sleep(1.2)
+        own = os.path.realpath(self.profile)
+        for _ in range(20):
+            callbacks[-1]([own + '/state/background.json', own + '/state/background-runs/x/finished.json',
+                           own + '/logs/background/abc.log'])
+        time.sleep(1.5)
+        self.assertEqual(len(self.runs()), 1)
+
+    def test_a_watch_on_a_path_created_later_is_moved_onto_it(self):
+        if sys.platform != 'darwin':
+            self.skipTest('FSEvents is a macOS boundary')
+        target = self.root / 'later' / 'sessions'
+        self.with_trigger(watch=[str(target)], min_interval_seconds=1)
+        self.install()
+        bound = patch.object(background, 'RESIDENT_MAX_SLEEP_SECONDS', 1)
+        bound.start()
+        self.addCleanup(bound.stop)
+        self.serve(background.PathWatch)
+        host = lambda: json.loads((self.profile / 'state/background-host.json').read_text())
+        self.assertTrue(self.wait_for(lambda: (self.profile / 'state/background-host.json').exists()))
+        self.assertEqual(list(host()['watches'].values())[0]['roots'], [os.path.realpath(self.root)])
+        target.mkdir(parents=True)
+        real = os.path.realpath(target)
+        self.assertTrue(self.wait_for(lambda: list(host()['watches'].values())[0]['roots'] == [real]))
+        runs = len(self.runs())
+        time.sleep(1.2)
+        (target / 'a.jsonl').write_text('{}\n')
+        self.assertTrue(self.wait_for(lambda: len(self.runs()) > runs))
+
+    def test_an_edit_made_while_hashing_is_not_cached_as_verified(self):
+        from tap_core import pack_store
+        self.install()
+        pack_store._VERIFIED.clear()
+        real = pack_store._tree_hashes
+        victim = {}
+
+        def hash_then_edit(root, manifest):
+            hashes = real(root, manifest)
+            if not victim:  # the file changes after its bytes were read
+                victim['path'] = Path(root) / next(n for n in hashes if n != 'pack.json')
+                victim['path'].write_bytes(victim['path'].read_bytes() + b'\n# edited\n')
+            return hashes
+
+        with patch('tap_core.pack_store._tree_hashes', side_effect=hash_then_edit):
+            background.tasks(self.profile, account={})
+        self.assertEqual(pack_store._VERIFIED, {})  # nothing remembered for a moving tree
+        with patch('tap_core.pack_store._tree_hashes', side_effect=real) as rehash:
+            background.tasks(self.profile, account={})
+        self.assertTrue(rehash.called)  # the edited bytes are hashed, not taken from cache

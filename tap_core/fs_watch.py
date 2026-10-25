@@ -109,6 +109,7 @@ class PathWatch:
         self.on_change = on_change
         self.latency = latency
         self._stream = self._queue = None
+        self.roots = ()
         self._callback = _CALLBACK(self._deliver)  # kept alive with the stream
 
     def _deliver(self, _stream, _info, count, event_paths, _flags, _ids):
@@ -128,6 +129,7 @@ class PathWatch:
     def start(self):
         cf, cs, system, callbacks = _fsevents()
         roots = sorted({_existing_ancestor(path) for path in self.paths})
+        self.roots = tuple(roots)
         strings = [cf.CFStringCreateWithCString(None, os.fsencode(root), _UTF8) for root in roots]
         values = (ctypes.c_void_p * len(strings))(*strings)
         array = cf.CFArrayCreate(None, values, len(strings), callbacks)
@@ -149,6 +151,11 @@ class PathWatch:
             raise WatchUnavailable('FSEventStreamStart failed')
         self._stream, self._queue = stream, queue
         return self
+
+    def needs_reroot(self):
+        """True once a watched path that did not exist now does: the stream still
+        watches its ancestor (possibly a busy directory) and should be rebuilt."""
+        return tuple(sorted({_existing_ancestor(path) for path in self.paths})) != self.roots
 
     def close(self):
         if self._stream is None:
@@ -186,14 +193,19 @@ class GrowthSignal:
             self.error = 'kqueue is not available on this platform'
             raise WatchUnavailable(self.error)
         try:
+            # The profile's own data directory: create it rather than degrade to
+            # polling forever when the controller starts before capture.
+            self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             self._kq = select.kqueue()
             self._dir = os.open(self.path.parent, _EVTONLY)
+            self._file = None
+            self._register(self._dir, select.KQ_NOTE_WRITE | select.KQ_NOTE_DELETE | select.KQ_NOTE_RENAME)
+            self._reopen()
         except OSError as error:
+            # Any setup failure is "unavailable" to the caller, never a crash.
             self.error = str(error)
+            self.close()
             raise WatchUnavailable(self.error) from error
-        self._file = None
-        self._register(self._dir, select.KQ_NOTE_WRITE | select.KQ_NOTE_DELETE | select.KQ_NOTE_RENAME)
-        self._reopen()
         self.available = True
         self._thread = threading.Thread(target=self._run, name='growth-signal', daemon=True)
         self._thread.start()
@@ -209,8 +221,12 @@ class GrowthSignal:
             self._file = None
         try:
             self._file = os.open(self.path, _EVTONLY)
-        except FileNotFoundError:
-            return  # the directory event announces its creation
+        except OSError as error:
+            # Missing: the directory event announces its creation. Unreadable:
+            # keep the directory watch (rotations) and report the error.
+            if not isinstance(error, FileNotFoundError):
+                self.error = str(error)
+            return
         self._register(self._file, select.KQ_NOTE_WRITE | select.KQ_NOTE_EXTEND
                        | select.KQ_NOTE_DELETE | select.KQ_NOTE_RENAME)
 

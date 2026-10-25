@@ -21,6 +21,7 @@ import uuid
 import runpy
 MAX_RECORD_BYTES = runpy.run_path(str(Path(__file__).with_name("records.py")))["MAX_RECORD_BYTES"]
 _live = runpy.run_path(str(Path(__file__).with_name("live_capture.py")))
+_routes = runpy.run_path(str(Path(__file__).with_name("routes.py")))
 
 # Defaults match previously hardcoded writer/backend bounds.
 # Distinct owners: backend stream cutoff ≠ retained body ≠ queue ≠ disk rolls.
@@ -343,6 +344,8 @@ class Writer:
         self.abandon = threading.Event()
         # A failed append must be rolled back before another record can follow it.
         self.rollback_offset = None
+        # Notifies readers/commands whose routes match, after each durable append.
+        self.routes = None
         self.thread = threading.Thread(target=self.run, daemon=True, name="tap-writer")
         self.thread.start()
 
@@ -526,6 +529,8 @@ class Writer:
                         self.roll()
                         handle = self.open_stream()
                     self.write(handle, line)
+                    if self.routes is not None:
+                        self.routes.notify(record)  # never raises; consumers catch up anyway
                 except Exception as error:
                     self.error(f"capture write failed: {error}", dropped=1)
                     self.close_handle(handle)
@@ -661,6 +666,7 @@ class Capture:
         if self.writer is None:
             self.writer = Writer(os.environ["TAP_CORE_DATA"], os.environ["TAP_CORE_STATE"],
                                  limits=self.limits)
+            self.writer.routes = _routes["RouteTable"](os.environ["TAP_CORE_STATE"])
         if self.limits.get('live_routes'):
             root = Path(os.environ['TAP_CORE_PROFILE'])
             profile = json.loads((root / 'profile.json').read_text())
