@@ -41,15 +41,19 @@ class PassthroughTests(unittest.TestCase):
             saved = json.loads((root / "profile.json").read_text())
             self.assertEqual(saved["passthrough"], DEFAULT_PASSTHROUGH)
             args = select_routing(Profile.load(root), None).backend_args()
-            self.assertEqual(args.count("--ignore-hosts"), len(DEFAULT_PASSTHROUGH) - 1)
+            from tap_core.passthrough import LOOPBACK_TLS_PATTERNS
+            self.assertEqual(args.count("--ignore-hosts"), len(DEFAULT_PASSTHROUGH) - 1 + len(LOOPBACK_TLS_PATTERNS))
             self.assertIn(r"^(.+\.)?icloud\.com:\d+$", args)
-            # Older profile.json without the key gets the default; an explicit empty list captures everything.
+            # Older profile.json without the key gets the default; an explicit empty list captures
+            # everything except loopback TLS, which is always tunnelled untouched.
             del saved["passthrough"]
             (root / "profile.json").write_text(json.dumps(saved))
             self.assertEqual(Profile.load(root).passthrough, DEFAULT_PASSTHROUGH)
             saved["passthrough"] = []
             (root / "profile.json").write_text(json.dumps(saved))
-            self.assertNotIn("--ignore-hosts", select_routing(Profile.load(root), None).backend_args())
+            empty = select_routing(Profile.load(root), None).backend_args()
+            self.assertEqual([empty[i + 1] for i, a in enumerate(empty) if a == "--ignore-hosts"],
+                             LOOPBACK_TLS_PATTERNS)
             saved["passthrough"] = ["bad entry"]
             (root / "profile.json").write_text(json.dumps(saved))
             with self.assertRaises(TapError):

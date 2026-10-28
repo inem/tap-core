@@ -20,11 +20,12 @@ class ExplicitProxyRouting:
         self.profile, self.os = profile, os_adapter
 
     def backend_args(self):
-        from .passthrough import ignore_host_patterns
+        from .passthrough import LOOPBACK_TLS_PATTERNS, ignore_host_patterns
         args = ["--listen-host", "127.0.0.1", "-p", str(self.profile.port)]
         # Pinning clients are tunnelled untouched under both routings; the same
         # declared list becomes the system proxy bypass in SystemProxyRouting.
-        for pattern in ignore_host_patterns(self.profile.passthrough):
+        # Loopback TLS is always tunnelled untouched (see passthrough.py).
+        for pattern in [*ignore_host_patterns(self.profile.passthrough), *LOOPBACK_TLS_PATTERNS]:
             args.extend(["--ignore-hosts", pattern])
         return args
 

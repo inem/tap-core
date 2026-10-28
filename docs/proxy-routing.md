@@ -59,10 +59,26 @@ it), and both routings pass each host entry to mitmproxy as an `--ignore-hosts`
 pattern (`*.icloud.com` → `^(.+\.)?icloud\.com:\d+$`), so explicit clients
 are tunnelled untouched too. CIDR entries are bypass-only. Entries are host
 names, `*.suffix` patterns or CIDR ranges, at most 64; set `"passthrough": []`
-to capture everything. Changing the list requires `off` → `on` (the mitmproxy
+to capture everything else. Changing the list requires `off` → `on` (the mitmproxy
 arguments live in the launchd job). Historical bypasses in the recovery
 snapshot are still not reused: a passthrough is a declared decision, not an
 inherited one.
+
+### Loopback TLS
+
+Loopback is routed through the proxy so local development servers stay
+capturable. Desktop apps also speak HTTPS to their own local helpers with
+self-signed certificates, for example Antigravity's `language_server` on
+`127.0.0.1:<random port>`. Intercepting that TLS made mitmproxy verify the
+helper's certificate, fail, and answer `502 Bad Gateway: Certificate verify
+failed: self-signed certificate`.
+
+Loopback TLS is therefore always tunnelled untouched, under both routings and
+regardless of the `passthrough` list. That covers `localhost`, `*.localhost`,
+`127.0.0.0/8` and `::1` (`passthrough.LOOPBACK_TLS_PATTERNS`). The client
+verifies its own peer end to end, exactly as without TAP. Plain-HTTP loopback
+is still intercepted and captured. The cost is that local HTTPS servers are no
+longer decrypted into capture.
 
 ## Diagnostics
 
