@@ -41,6 +41,23 @@ def configuration(value):
     return result
 
 
+# Loopback TLS is tunnelled untouched (never intercepted). Routing sends
+# loopback through the proxy so local development servers stay capturable
+# (<-loopback> in the system bypass list), but desktop apps also speak HTTPS to
+# their own local helpers with self-signed certificates (e.g. Antigravity's
+# language_server on 127.0.0.1:<random port>). Intercepting those made the
+# proxy verify that certificate, fail, and answer 502. Passing the TLS through
+# keeps verification end-to-end with the client, as without TAP. In regular
+# proxy mode mitmproxy applies ignore_hosts to TLS only, so plain-HTTP local
+# servers are still captured; decrypted capture of local HTTPS is the cost.
+LOOPBACK_TLS_PATTERNS = [
+    r"^localhost:\d+$",
+    r"^.+\.localhost:\d+$",
+    r"^127\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d+$",
+    r"^\[?::1\]?:\d+$",
+]
+
+
 def ignore_host_patterns(entries):
     """mitmproxy ``ignore_hosts`` regexes (matched against ``host:port``) for the host entries.
 
