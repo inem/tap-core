@@ -136,3 +136,13 @@ It does not establish browser proxy discovery, trusted HTTPS, clean-Mac delivery
 or managed-component switching coverage. Disabled endpoint preferences may stay
 cached; the check verifies effective routing and bypass restoration. The report
 contains no captured traffic or the owner's network-service/bypass configuration.
+
+## Chromium loopback routing
+
+System routing prepends `<-loopback>` to declared passthrough entries. Chromium
+reads this subtraction rule from macOS proxy exceptions and stops implicitly
+bypassing localhost. It is routing policy, not a TLS passthrough hostname.
+Repeating `on` reconciles an older passthrough-only list without changing the
+original recovery snapshot; `off` restores that snapshot's bypass lists.
+Arc and Codex's in-app browser were verified live without browser restarts.
+Other browser engines require separate acceptance.

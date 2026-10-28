@@ -98,7 +98,7 @@ class RuntimeTests(unittest.TestCase):
 
     def assertActiveBypass(self):
         for service in self.os.services():
-            self.assertEqual(self.os.network[service]["bypass"], list(self.profile.passthrough))
+            self.assertEqual(self.os.network[service]["bypass"], ["<-loopback>", *self.profile.passthrough])
 
     def test_disable_does_not_reenable_a_previous_endpoint(self):
         adapter = MacOS()
