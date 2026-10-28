@@ -133,7 +133,10 @@ class SystemProxyRouting(ExplicitProxyRouting):
         # Only the declared passthrough list is exempt while TAP is on. Saved
         # domain bypasses stay recovery state and local development hosts stay
         # capturable (see docs/proxy-routing.md).
-        return list(self.profile.passthrough)
+        # Chromium implicitly bypasses loopback unless this system routing
+        # subtraction rule is present. Keep passthrough entries after it so
+        # explicit exclusions retain precedence; never send it to ignore-hosts.
+        return ["<-loopback>", *self.profile.passthrough]
 
     def legacy_active_bypass(self, state):
         return list(dict.fromkeys([*state["bypass"], *self.legacy_local_bypass]))
